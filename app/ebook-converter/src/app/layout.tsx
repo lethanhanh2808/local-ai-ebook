@@ -1,0 +1,34 @@
+// src/app/layout.tsx
+import type { Metadata } from 'next';
+import './globals.css';
+import { AppNav } from '@/components/nav/AppNav';
+
+export const metadata: Metadata = {
+  title: 'Ebook Manager – Convert, Organize & Read your EPUB library',
+  description:
+    'Manage your ebook library: convert and repair files with local AI (OMLX), organize with shelves, listen with VieNeu-TTS voice synthesis. Optimized for Vietnamese content.',
+};
+
+// Inline script: sets dark class before hydration to prevent flash
+const THEME_SCRIPT = `
+try {
+  const t = localStorage.getItem('theme');
+  const dark = t === 'dark' || (!t && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  if (dark) document.documentElement.classList.add('dark');
+} catch (e) {}
+`;
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        {/* eslint-disable-next-line @next/next/no-before-interactive-script-outside-document */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+      </head>
+      <body className="min-h-screen bg-background font-sans antialiased">
+        <AppNav />
+        <main>{children}</main>
+      </body>
+    </html>
+  );
+}

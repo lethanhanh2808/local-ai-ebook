@@ -1,0 +1,145 @@
+// src/app/api/upload/route.ts
+// POST /api/upload – accept file, create DB record, enqueue job
+import { NextRequest, NextResponse } from 'next/server';
+import { v4 as uuid } from 'uuid';
+import fs from 'fs';
+import path from 'path';
+import { createJob } from '@/lib/db/jobs';
+import { getQueue } from '@/lib/queue';
+import { ensureDirs, uploadPath, UPLOAD_DIR, jobLogPath } from '@/lib/storage';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+const ALLOWED_EXTENSIONS = new Set(['epub', 'html', 'htm', 'txt']);
+const MAX_BYTES = parseInt(process.env.MAX_FILE_SIZE_MB ?? '100', 10) * 1024 * 1024;
+
+/**
+ * Converts a filename with Unicode/diacritics to a safe ASCII filename.
+ * "Việt Nam Ebook.epub" → "Viet Nam Ebook.epub"
+ */
+function toSafeFilename(name: string): string {
+  // Explicit replacements not covered by NFD decomposition
+  const explicit: Record<string, string> = {
+    đ: 'd', Đ: 'D',
+    ø: 'o', Ø: 'O',
+    ł: 'l', Ł: 'L',
+    ß: 'ss',
+    æ: 'ae', Æ: 'AE',
+    œ: 'oe', Œ: 'OE',
+  };
+  let s = name.replace(/[đĐøØłŁßæÆœŒ]/g, (c) => explicit[c] ?? c);
+  // NFD decompose → strip all combining diacritic marks
+  s = s.normalize('NFD').replace(/\p{Diacritic}/gu, '');
+  // Collapse whitespace to hyphens, then strip any remaining non-safe chars
+  s = s.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9.\-_]/g, '').replace(/-{2,}/g, '-');
+  return s || 'upload';
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    ensureDirs();
+
+    const formData = await req.formData();
+    const file = formData.get('file') as File | null;
+
+    if (!file) {
+      return NextResponse.json({ error: 'No file provided' }, { status: 400 });
+    }
+
+    if (file.size > MAX_BYTES) {
+      return NextResponse.json(
+        { error: `File exceeds maximum size of ${process.env.MAX_FILE_SIZE_MB ?? 100} MB` },
+        { status: 413 },
+      );
+    }
+
+    const originalName = toSafeFilename(path.basename(file.name));
+    const ext = originalName.split('.').pop()?.toLowerCase() ?? '';
+    if (!ALLOWED_EXTENSIONS.has(ext)) {
+      return NextResponse.json({ error: `Unsupported file type: .${ext}` }, { status: 415 });
+    }
+
+    const jobId = uuid();
+    const savePath = uploadPath(jobId, originalName);
+    // Per-job log path (consumed by Debug Console). Pre-create the empty
+    // .jsonl so the Debug Console button is enabled immediately and shows
+    // a "queued" entry the moment upload completes — no longer waits for
+    // the worker to start the job.
+    const logPath = jobLogPath(jobId);
+    try {
+      fs.mkdirSync(path.dirname(logPath), { recursive: true });
+      fs.writeFileSync(
+        logPath,
+        JSON.stringify({
+          ts: Date.now(),
+          level: 'info',
+          stage: 'upload',
+          message: `Uploaded ${originalName} (${(file.size / 1024).toFixed(1)} KB) — waiting for worker`,
+        }) + '\n',
+      );
+    } catch (err) {
+      console.warn('[api/upload] Failed to seed job log:', err);
+    }
+
+    // Stream to disk
+    const buf = Buffer.from(await file.arrayBuffer());
+    fs.writeFileSync(savePath, buf);
+
+    // DB record (start as 'pending' if user wants manual control, 'queued' otherwise)
+    const startImmediately = formData.get('startImmediately') !== 'false'; // default true
+    await createJob({
+      id: jobId,
+      filename: originalName,
+      originalExt: ext,
+      inputPath: savePath,
+      status: startImmediately ? 'queued' : 'pending',
+      logPath,
+    });
+
+    // Enqueue only if startImmediately is true
+    if (startImmediately) {
+      const queue = getQueue();
+
+      // Read AI flags. If the form doesn't include them, fall back to the
+      // defaults from the Settings row (defaultAiEnhance, defaultAiWatermarkClean,
+      // defaultDeepFormat). This ensures changes in /settings take effect
+      // immediately, even for users who haven't refreshed the upload zone.
+      const { getSettings } = await import('@/lib/db/settings');
+      const settings = await getSettings();
+      const formEnhance = formData.get('aiEnhance');
+      const formWatermark = formData.get('aiWatermarkClean');
+      const formDeep = formData.get('deepFormat');
+      const aiEnhance = formEnhance !== null ? formEnhance === 'true' : settings.defaultAiEnhance;
+      const aiWatermarkClean = formWatermark !== null ? formWatermark === 'true' : settings.defaultAiWatermarkClean;
+      const deepFormat = formDeep !== null ? formDeep === 'true' : settings.defaultDeepFormat;
+      const aiPrompt = (formData.get('aiPrompt') as string | null)?.trim() || undefined;
+
+      // Persist the user's actual choices back to settings (so next upload uses
+      // them as default) — but only if the form explicitly sent them.
+      const { updateSettings } = await import('@/lib/db/settings');
+      const persist: Record<string, unknown> = {};
+      if (formEnhance !== null) persist.defaultAiEnhance = aiEnhance;
+      if (formWatermark !== null) persist.defaultAiWatermarkClean = aiWatermarkClean;
+      if (formDeep !== null) persist.defaultDeepFormat = deepFormat;
+      if (Object.keys(persist).length > 0) {
+        await updateSettings(persist).catch(() => { /* best-effort */ });
+      }
+
+      await queue.add(
+        'convert',
+        { jobId, inputPath: savePath, originalExt: ext, filename: originalName, aiEnhance, aiWatermarkClean, deepFormat, aiPrompt },
+        { jobId },
+      );
+    }
+
+    return NextResponse.json({
+      jobId,
+      filename: originalName,
+      status: startImmediately ? 'queued' : 'pending',
+    }, { status: 201 });
+  } catch (err) {
+    console.error('[api/upload]', err);
+    return NextResponse.json({ error: 'Upload failed' }, { status: 500 });
+  }
+}

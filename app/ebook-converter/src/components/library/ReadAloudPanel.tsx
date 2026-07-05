@@ -1,0 +1,535 @@
+// src/components/library/ReadAloudPanel.tsx
+//
+// Right-side slide-in panel for read-aloud (TTS) controls.
+// Replaces the cramped top-of-page dropdown with a proper organized panel.
+// Sections:
+//   1. Default voice picker   — 10 VieNeu voices + cloned voices, with preview
+//   2. Character voices       — auto-switching per character
+//   3. Reading settings       — speed, expressiveness, emotion
+//   4. Action footer          — Start / Stop / Pause
+'use client';
+
+import { useEffect, useState, useCallback, useRef } from 'react';
+import {
+  Volume2, X, Play, Pause, Square, Loader2, ChevronRight,
+  User, Mic, Sparkles, Gauge, Wind, Plus, Upload, Headphones,
+  Clock, FastForward,
+} from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { cn, formatDuration } from '@/lib/utils';
+
+interface CharacterVoice { name: string; voiceName?: string; }
+
+export interface CustomVoice {
+  id: string;
+  name: string;
+  isCloned?: boolean;
+}
+
+interface ReadAloudPanelProps {
+  open: boolean;
+  onClose: () => void;
+  // State
+  defaultVoice: string;
+  setDefaultVoice: (v: string) => void;
+  customVoices: CustomVoice[];
+  setCustomVoices: (vs: CustomVoice[]) => void;
+  characterList: CharacterVoice[];
+  useCharacterVoice: boolean;
+  setUseCharacterVoice: (v: boolean) => void;
+  speed: number;
+  setSpeed: (v: number) => void;
+  expressiveness: number;  // 0.2-1.0 (VieNeu noise_w / noise_scale)
+  setExpressiveness: (v: number) => void;
+  /** Extra silence inserted between paragraphs (ms). 0 = snappiest (uses only
+   * the natural trailing silence from the TTS model, ~200ms). Increase if
+   * you want more breathing room between sentences. */
+  paragraphGap: number;
+  setParagraphGap: (v: number) => void;
+  /** When ON, finishing the current chapter auto-advances to the next and
+   * pre-generates the next chapter's audio in the background. Default OFF
+   * so users get the current behaviour (manual chapter navigation) until
+   * they explicitly opt in. */
+  continuousPlay: boolean;
+  setContinuousPlay: (v: boolean) => void;
+  /** Background pre-gen progress — shown as a small inline badge in the
+   * settings tab so the user knows the next chapter is being prepared. */
+  pregenStatus: { chapterId: string; done: number; total: number } | null;
+  useAIEmotion: boolean;
+  setUseAIEmotion: (v: boolean) => void;
+  // TTS state
+  ttsState: 'idle' | 'loading' | 'playing' | 'paused';
+  ttsParagraphs: string[];
+  ttsIndex: number;
+  ttsCurrentSpeaker: string | null;
+  ttsEmotionLabel: string;
+  // Actions
+  onStart: () => void;
+  onStop: () => void;
+  onTogglePause: () => void;
+  onPreviewDefaultVoice: (voiceName: string) => void;
+  onStopPreview: () => void;
+  previewingVoice: string | null;
+  // Book / character context
+  bookId: string;
+  onOpenVoiceLibrary: () => void;
+  accentColor: string;
+  // Theme
+  themeCls: string;
+  mutedCls: string;
+  borderCls: string;
+  hoverCls: string;
+  activeCls: string;
+}
+
+// ── VieNeu built-in voices ────────────────────────────────────────────
+// 10 Vietnamese-native voices with gender/age/demeanor metadata so the
+// panel can show a richer card (icon + tagline) instead of just a name.
+const VIENEU_VOICES: Array<{
+  id: string;
+  label: string;
+  shortLabel: string;
+  gender: 'female' | 'male';
+  age: 'young' | 'mature';
+  desc: string;
+}> = [
+  { id: 'Ngọc Linh', shortLabel: 'Ngọc Linh', label: 'Ngọc Linh', gender: 'female', age: 'young',   desc: 'Nữ — trẻ, trong trẻo' },
+  { id: 'Ngọc Lan',  shortLabel: 'Ngọc Lan',  label: 'Ngọc Lan',  gender: 'female', age: 'mature',  desc: 'Nữ — trưởng thành, ấm áp' },
+  { id: 'Mỹ Duyên',  shortLabel: 'Mỹ Duyên',  label: 'Mỹ Duyên',  gender: 'female', age: 'mature',  desc: 'Nữ — chín chắn, truyền cảm' },
+  { id: 'Trúc Ly',   shortLabel: 'Trúc Ly',   label: 'Trúc Ly',   gender: 'female', age: 'young',   desc: 'Nữ — nhẹ nhàng, thủ thỉ' },
+  { id: 'Bình An',   shortLabel: 'Bình An',   label: 'Bình An',   gender: 'male',   age: 'mature',  desc: 'Nam — trung niên, bình tĩnh' },
+  { id: 'Thái Sơn',  shortLabel: 'Thái Sơn',  label: 'Thái Sơn',  gender: 'male',   age: 'young',   desc: 'Nam — trẻ, khí thế' },
+  { id: 'Đức Trí',   shortLabel: 'Đức Trí',   label: 'Đức Trí',   gender: 'male',   age: 'mature',  desc: 'Nam — chín chắn, quyền lực' },
+  { id: 'Xuân Vĩnh', shortLabel: 'Xuân Vĩnh', label: 'Xuân Vĩnh', gender: 'male',   age: 'mature',  desc: 'Nam — trầm, trưởng thành' },
+  { id: 'Trọng Hữu', shortLabel: 'Trọng Hữu', label: 'Trọng Hữu', gender: 'male',   age: 'mature',  desc: 'Nam — trầm ấm, thủ thỉ' },
+  { id: 'Gia Bảo',   shortLabel: 'Gia Bảo',   label: 'Gia Bảo',   gender: 'male',   age: 'young',   desc: 'Nam — trẻ, năng động' },
+];
+
+function VoiceAvatar({ voice, selected }: { voice: typeof VIENEU_VOICES[number]; selected: boolean }) {
+  const color = voice.gender === 'female' ? 'bg-pink-500/15 text-pink-700 dark:text-pink-300' : 'bg-blue-500/15 text-blue-700 dark:text-blue-300';
+  const age = voice.age === 'young' ? 'Trẻ' : 'Trưởng thành';
+  return (
+    <div className={cn(
+      'flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-bold',
+      selected ? 'bg-primary text-primary-foreground' : color,
+    )}>
+      <User className="h-4 w-4" />
+    </div>
+  );
+}
+
+export function ReadAloudPanel({
+  open, onClose,
+  defaultVoice, setDefaultVoice,
+  customVoices, setCustomVoices,
+  characterList,
+  useCharacterVoice, setUseCharacterVoice,
+  speed, setSpeed,
+  expressiveness, setExpressiveness,
+  paragraphGap, setParagraphGap,
+  continuousPlay, setContinuousPlay,
+  pregenStatus,
+  useAIEmotion, setUseAIEmotion,
+  ttsState, ttsParagraphs, ttsIndex, ttsCurrentSpeaker, ttsEmotionLabel,
+  onStart, onStop, onTogglePause,
+  onPreviewDefaultVoice, onStopPreview, previewingVoice,
+  bookId, onOpenVoiceLibrary,
+  accentColor,
+  themeCls, mutedCls, borderCls, hoverCls, activeCls,
+}: ReadAloudPanelProps) {
+  const [activeTab, setActiveTab] = useState<'voices' | 'settings'>('voices');
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Combined list of available voices (10 built-in + any custom)
+  const allVoices = [
+    ...VIENEU_VOICES,
+    ...customVoices.map((v) => ({
+      id: v.id, label: v.name, shortLabel: v.name, gender: 'male' as const, age: 'mature' as const,
+      desc: v.isCloned ? '🎭 Giọng clone của bạn' : 'Giọng tùy chỉnh',
+    })),
+  ];
+
+  const handleFileUpload = useCallback(async (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('name', file.name.replace(/\.[^.]+$/, ''));
+    form.append('language', 'vi');
+    form.append('description', 'Cloned via read-aloud panel');
+    try {
+      const r = await fetch(`/api/library/${bookId}/voices`, { method: 'POST', body: form });
+      if (!r.ok) {
+        const detail = await r.json().catch(() => ({}));
+        throw new Error(detail.error ?? `HTTP ${r.status}`);
+      }
+      const data = await r.json();
+      setCustomVoices([...customVoices, { id: data.voice.id, name: data.voice.name, isCloned: true }]);
+    } catch (e) {
+      console.error('[voice upload]', e);
+    }
+  }, [bookId, customVoices, setCustomVoices]);
+
+  // Don't render until mounted (so SSR doesn't get a half-state)
+  if (!open) return null;
+
+  const isPlaying = ttsState === 'playing' || ttsState === 'loading' || ttsState === 'paused';
+
+  return (
+    <>
+      {/* Slide-in panel from right — must render BEFORE backdrop so the
+          backdrop's z-index doesn't matter (panel is later in DOM). */}
+      <aside
+        className={cn(
+          'fixed top-0 right-0 bottom-0 z-[60] w-full sm:w-[380px] shadow-2xl',
+          'flex flex-col border-l transition-transform',
+          themeCls, borderCls,
+        )}
+      >
+        {/* Header */}
+        <header className={cn('flex items-center justify-between px-4 py-3 border-b shrink-0', borderCls)}>
+          <div className="flex items-center gap-2">
+            <Headphones className="h-4 w-4 text-primary" />
+            <h2 className="font-semibold text-sm">Đọc to <span className={cn('text-[10px] font-normal', mutedCls)}>· VieNeu-TTS</span></h2>
+          </div>
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} title="Đóng">
+            <X className="h-4 w-4" />
+          </Button>
+        </header>
+
+        {/* Tabs */}
+        <div className={cn('flex border-b shrink-0', borderCls)}>
+          <button
+            onClick={() => setActiveTab('voices')}
+            className={cn('flex-1 py-2 text-xs font-medium transition-colors',
+              activeTab === 'voices' ? activeCls : mutedCls)}>
+            🎙️ Giọng đọc
+          </button>
+          <button
+            onClick={() => setActiveTab('settings')}
+            className={cn('flex-1 py-2 text-xs font-medium transition-colors',
+              activeTab === 'settings' ? activeCls : mutedCls)}>
+            ⚙️ Cài đặt
+          </button>
+        </div>
+
+        {/* Scrollable body */}
+        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4 text-xs">
+
+          {activeTab === 'voices' && (
+            <>
+              {/* Section: Default voice */}
+              <section>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
+                    <Mic className="h-3 w-3" /> Giọng mặc định
+                  </h3>
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className={cn('text-[10px] px-2 py-0.5 rounded border font-medium flex items-center gap-0.5', hoverCls)}
+                    title="Upload audio mẫu (3-5s) để tạo giọng mới">
+                    <Plus className="h-3 w-3" /> Clone
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="audio/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) void handleFileUpload(f);
+                      e.target.value = '';
+                    }}
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 gap-1.5">
+                  {allVoices.map((v) => {
+                    const isSelected = defaultVoice === v.id;
+                    const isPlayingThis = previewingVoice === v.id;
+                    const isOtherPlaying = previewingVoice !== null && !isPlayingThis;
+                    return (
+                      <div
+                        key={v.id}
+                        className={cn(
+                          'flex items-center gap-2 rounded-lg border p-2 transition-all',
+                          isSelected ? 'border-primary bg-primary/5' : `${borderCls} ${hoverCls}`,
+                        )}>
+                        <button
+                          onClick={() => setDefaultVoice(v.id)}
+                          className="flex items-center gap-2 flex-1 min-w-0 text-left">
+                          <VoiceAvatar voice={v} selected={isSelected} />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <p className="text-sm font-semibold truncate">{v.shortLabel}</p>
+                              {isSelected && <span className="text-[9px] px-1 py-0.5 rounded bg-primary text-primary-foreground">ĐANG DÙNG</span>}
+                            </div>
+                            <p className={cn('text-[10px] truncate', mutedCls)}>{v.desc}</p>
+                          </div>
+                        </button>
+                        <button
+                          onClick={() => isPlayingThis ? onStopPreview() : onPreviewDefaultVoice(v.id)}
+                          disabled={isOtherPlaying}
+                          title={isPlayingThis ? 'Dừng nghe thử' : `Nghe thử ${v.label}`}
+                          className={cn(
+                            'shrink-0 h-8 w-8 rounded-full flex items-center justify-center transition-all',
+                            isPlayingThis
+                              ? 'bg-primary text-primary-foreground'
+                              : isOtherPlaying
+                                ? 'opacity-30 cursor-not-allowed border'
+                                : `border ${hoverCls}`,
+                          )}>
+                          {isPlayingThis ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5 ml-0.5" />}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <p className={cn('text-[10px] mt-2', mutedCls)}>
+                  {customVoices.length > 0
+                    ? `${VIENEU_VOICES.length} giọng VieNeu + ${customVoices.length} giọng clone`
+                    : `${VIENEU_VOICES.length} giọng có sẵn. Nhấn "Clone" để tạo giọng từ audio mẫu.`}
+                </p>
+              </section>
+
+              {/* Section: Character voices */}
+              <section className={cn('pt-3 border-t', borderCls)}>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
+                    <User className="h-3 w-3" /> Tự động theo nhân vật
+                  </h3>
+                  <button
+                    onClick={() => setUseCharacterVoice(!useCharacterVoice)}
+                    className={cn(
+                      'text-[10px] px-2 py-0.5 rounded font-medium',
+                      useCharacterVoice ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground',
+                    )}>
+                    {useCharacterVoice ? 'BẬT' : 'TẮT'}
+                  </button>
+                </div>
+
+                {characterList.length === 0 ? (
+                  <p className={cn('text-[10px] py-2', mutedCls)}>
+                    Chưa phát hiện nhân vật nào.{' '}
+                    <button onClick={onOpenVoiceLibrary} className="text-primary hover:underline">
+                      Mở tab Giọng & nhân vật
+                    </button>
+                  </p>
+                ) : (
+                  <div className="space-y-1">
+                    {characterList.map((c) => (
+                      <div key={c.name} className={cn('flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/30', borderCls)}>
+                        <User className={cn('h-3.5 w-3.5 shrink-0', mutedCls)} />
+                        <span className="flex-1 truncate text-[11px]">{c.name}</span>
+                        <ChevronRight className={cn('h-3 w-3', mutedCls)} />
+                        <span className={cn('text-[11px] font-medium', c.voiceName ? 'text-primary' : mutedCls)}>
+                          {c.voiceName ?? 'chưa gán'}
+                        </span>
+                      </div>
+                    ))}
+                    {characterList.length > 8 && (
+                      <button onClick={onOpenVoiceLibrary} className="text-[10px] text-primary hover:underline mt-1">
+                        + {characterList.length - 8} nhân vật khác… Xem tất cả
+                      </button>
+                    )}
+                  </div>
+                )}
+              </section>
+            </>
+          )}
+
+          {activeTab === 'settings' && (
+            <>
+              {/* Speed */}
+              <section>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
+                    <Gauge className="h-3 w-3" /> Tốc độ
+                  </h3>
+                  <span className="text-xs font-mono font-semibold">{speed.toFixed(2)}×</span>
+                </div>
+                <div className="flex gap-1.5">
+                  {[0.75, 1.0, 1.25, 1.5, 2.0].map((s) => (
+                    <button key={s} onClick={() => setSpeed(s)}
+                      className={cn('flex-1 rounded-lg border py-1.5 text-xs font-medium transition-all bg-transparent',
+                        Math.abs(speed - s) < 0.01 ? activeCls : `${hoverCls} opacity-70`)}>
+                      {s}×
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              {/* Paragraph gap — silence inserted between paragraphs */}
+              <section>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
+                    <Clock className="h-3 w-3" /> Khoảng nghỉ giữa đoạn
+                  </h3>
+                  <span className="text-xs font-mono font-semibold">
+                    {paragraphGap === 0 ? '0 (mượt)' : `${paragraphGap} ms`}
+                  </span>
+                </div>
+                <input type="range" min={0} max={2000} step={50}
+                  value={paragraphGap}
+                  onChange={(e) => setParagraphGap(parseInt(e.target.value, 10))}
+                  className="w-full" style={{ accentColor }} />
+                <div className={cn('flex justify-between text-[10px] mt-0.5', mutedCls)}>
+                  <span>Mượt · liền mạch</span><span>Chậm · dễ nghe</span>
+                </div>
+                <p className={cn('text-[10px] mt-1 leading-relaxed', mutedCls)}>
+                  Thêm khoảng lặng giữa các đoạn văn. Mặc định 0 = nối tiếp liền mạch
+                  (model TTS đã có ~200ms lặng tự nhiên ở cuối mỗi câu).
+                </p>
+              </section>
+
+              {/* Continuous-play — auto-advance + background pre-gen */}
+              <section>
+                <h3 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-2 flex items-center gap-1.5">
+                  <FastForward className="h-3 w-3" /> Đọc liền chương
+                </h3>
+                <button
+                  onClick={() => setContinuousPlay(!continuousPlay)}
+                  className={cn(
+                    'w-full flex items-center justify-between rounded-lg border px-3 py-2.5 transition-all bg-transparent',
+                    continuousPlay ? activeCls : `${hoverCls} opacity-80`,
+                  )}>
+                  <span className="text-xs font-medium">
+                    {continuousPlay ? '⏭ Tự động sang chương kế tiếp' : '⏸ Dừng khi hết chương hiện tại'}
+                  </span>
+                  <span className={cn('text-[10px] px-1.5 py-0.5 rounded font-semibold',
+                    continuousPlay ? 'bg-white/20' : 'bg-black/10')}>
+                    {continuousPlay ? 'BẬT' : 'TẮT'}
+                  </span>
+                </button>
+                <p className={cn('text-[10px] mt-1.5 leading-relaxed', mutedCls)}>
+                  Khi bật: hết chương sẽ tự sang chương kế. Chương tiếp theo
+                  được chuẩn bị ở chế độ nền (pre-generate) nên không có độ trễ
+                  giữa các chương. Vị trí đọc cũng tự cập nhật.
+                </p>
+                {pregenStatus && (
+                  <div className={cn('mt-2 rounded-md border bg-muted/30 px-2 py-1.5 text-[10px] flex items-center gap-1.5', mutedCls)}>
+                    <Loader2 className="h-3 w-3 animate-spin text-primary" />
+                    <span>
+                      Đang chuẩn bị chương kế ({pregenStatus.done}/{pregenStatus.total} đoạn)
+                    </span>
+                  </div>
+                )}
+              </section>
+
+              {/* Expressiveness */}
+              <section>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
+                    <Wind className="h-3 w-3" /> Biểu cảm
+                  </h3>
+                  <span className="text-xs font-mono font-semibold">{expressiveness.toFixed(2)}</span>
+                </div>
+                <input type="range" min={0.2} max={1.0} step={0.05} value={expressiveness}
+                  onChange={(e) => setExpressiveness(parseFloat(e.target.value))}
+                  className="w-full" style={{ accentColor }} />
+                <div className={cn('flex justify-between text-[10px] mt-0.5', mutedCls)}>
+                  <span>Phẳng</span><span>Tự nhiên</span>
+                </div>
+              </section>
+
+              {/* AI Emotion */}
+              <section>
+                <h3 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-2 flex items-center gap-1.5">
+                  <Sparkles className="h-3 w-3" /> Cảm xúc tự động
+                </h3>
+                <button
+                  onClick={() => setUseAIEmotion(!useAIEmotion)}
+                  className={cn(
+                    'w-full flex items-center justify-between rounded-lg border px-3 py-2.5 transition-all bg-transparent',
+                    useAIEmotion ? activeCls : `${hoverCls} opacity-80`,
+                  )}>
+                  <span className="text-xs font-medium">
+                    {useAIEmotion ? '✨ Tự động theo nội dung' : '➖ Giọng đều'}
+                  </span>
+                  <span className={cn('text-[10px] px-1.5 py-0.5 rounded font-semibold',
+                    useAIEmotion ? 'bg-white/20' : 'bg-black/10')}>
+                    {useAIEmotion ? 'BẬT' : 'TẮT'}
+                  </span>
+                </button>
+                {useAIEmotion && (
+                  <p className={cn('text-[10px] mt-1.5 leading-relaxed', mutedCls)}>
+                    ⚡ hành động · 😤 tức giận · 💧 buồn · 💕 lãng mạn · 😰 căng thẳng · 🍃 bình yên
+                  </p>
+                )}
+              </section>
+
+              {/* Voice library link */}
+              <section className={cn('pt-3 border-t', borderCls)}>
+                <button
+                  onClick={onOpenVoiceLibrary}
+                  className={cn('w-full flex items-center justify-between rounded-lg border px-3 py-2.5 transition-all bg-transparent', hoverCls)}>
+                  <span className="text-xs font-medium flex items-center gap-1.5">
+                    <Upload className="h-3.5 w-3.5" /> Thư viện giọng đọc
+                  </span>
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+                <p className={cn('text-[10px] mt-1.5', mutedCls)}>
+                  Quản lý giọng clone, gán giọng cho nhân vật
+                </p>
+              </section>
+            </>
+          )}
+        </div>
+
+        {/* Footer — action bar */}
+        <footer className={cn('border-t shrink-0 px-4 py-3 space-y-2', borderCls)}>
+          {/* TTS status line */}
+          {isPlaying && ttsParagraphs.length > 0 && (
+            <div className="flex items-center gap-2 text-[11px]">
+              <Volume2 className="h-3.5 w-3.5 shrink-0 opacity-70" />
+              <div className="flex-1 min-w-0">
+                <p className="truncate">
+                  Đoạn {ttsIndex + 1} / {ttsParagraphs.length}
+                  {ttsCurrentSpeaker && (
+                    <span className="ml-1 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-primary/15 text-primary text-[10px] font-medium">
+                      🗣 {ttsCurrentSpeaker}
+                    </span>
+                  )}
+                </p>
+                {ttsEmotionLabel && <p className={cn('text-[10px] truncate', mutedCls)}>{ttsEmotionLabel}</p>}
+              </div>
+            </div>
+          )}
+
+          {/* Action buttons */}
+          {ttsState === 'idle' ? (
+            <Button
+              onClick={onStart}
+              className="w-full"
+              style={{ background: accentColor, color: '#fff' }}>
+              <Play className="h-4 w-4 mr-1.5 fill-current" /> Bắt đầu đọc
+            </Button>
+          ) : (
+            <div className="flex gap-2">
+              <Button
+                onClick={onTogglePause}
+                variant="outline"
+                className="flex-1">
+                {ttsState === 'paused' ? <><Play className="h-4 w-4 mr-1.5" /> Tiếp tục</> : <><Pause className="h-4 w-4 mr-1.5" /> Tạm dừng</>}
+              </Button>
+              <Button
+                onClick={onStop}
+                variant="destructive"
+                className="flex-1">
+                <Square className="h-4 w-4 mr-1.5 fill-current" /> Dừng
+              </Button>
+            </div>
+          )}
+        </footer>
+      </aside>
+
+      {/* Backdrop — sits below the panel but above the book content */}
+      <div
+        className="fixed inset-0 z-[55] bg-black/30 backdrop-blur-[2px] transition-opacity"
+        onClick={onClose}
+      />
+    </>
+  );
+}
+
+// Re-export the VIENEU_VOICES list so the parent can use it for naming.
+export { VIENEU_VOICES };

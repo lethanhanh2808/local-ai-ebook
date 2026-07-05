@@ -1,0 +1,54 @@
+# ── Dependencies & build cache (rebuilt inside the builder stage) ───────────
+node_modules
+.pnp
+.pnp.js
+.yarn/cache
+.yarn/install-state.gz
+.next/cache
+
+# ── Local runtime data — bind-mounted at compose time, never baked in ───────
+data
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# ── Sibling workspace directories; never ship them into the image ────────────
+../models
+../omlx-home
+../opencode-home
+../opencode-runtime
+../backups
+../exmple-books
+
+# ── Editor / OS noise ────────────────────────────────────────────────────────
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# ── Tests, fixtures, and coverage ────────────────────────────────────────────
+e2e
+coverage
+.nyc_output
+playwright-report
+test-results
+
+# ── Secrets and local config (we re-read at runtime via env_file) ────────────
+.env
+.env.local
+.env.*.local
+
+# ── Build outputs the runner stage re-copies from the builder ───────────────
+.next/standalone
+.next/static
+
+# ── Misc ─────────────────────────────────────────────────────────────────────
+*.log
+.git
+.gitignore
+.gitattributes
+README.md
+Dockerfile
+docker-compose.yml
+.dockerignore

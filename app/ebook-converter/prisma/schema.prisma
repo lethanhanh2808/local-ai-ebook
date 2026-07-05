@@ -1,0 +1,304 @@
+// Prisma schema – SQLite for local-first deployment
+// Run: npx prisma db push
+
+generator client {
+  provider      = "prisma-client-js"
+  // Pin targets so the Docker image (Debian Bookworm-slim, libssl 3) builds deterministically.
+  // "native" keeps macOS dev working; "debian-openssl-3.0.x" matches the runtime base image.
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Job {
+  id                          String   @id @default(uuid())
+  filename                    String
+  originalExt                 String
+  status                      String   @default("queued")
+  // queued | processing | completed | failed | cancelled
+  progress                    Int      @default(0)
+  stage                       String   @default("upload")
+  // upload | validate | repair | convert | embed | done
+  inputPath                   String
+  // AI metadata for traceability — which provider/model processed this job?
+  aiProvider                  String?
+  aiModel                     String?
+  // AI performance tracking (updated as the job runs)
+  aiTotalTokens               Int? // cumulative tokens used across all AI calls
+  aiTotalDurationMs           Int? // cumulative AI call wall time
+  aiCallCount                 Int? // number of AI calls made
+  aiGenerationTokensPerSecond Float? // server-reported generation rate (OMLX)
+  aiPromptTokensPerSecond     Float? // server-reported prompt-evaluation rate (OMLX)
+  // Path to a per-job log file (newline-delimited JSON entries)
+  logPath                     String?
+  outputPath                  String?
+  errorMsg                    String?
+  metadata                    String? // JSON blob
+  report                      String? // JSON blob – validation / repair report
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+}
+
+// Ebook library – stores managed books after conversion
+model Book {
+  id                   String               @id @default(uuid())
+  title                String
+  author               String
+  language             String               @default("vi")
+  description          String?
+  publisher            String?
+  publishDate          String?
+  identifier           String? // ISBN or other identifier
+  series               String? // Series name
+  seriesIndex          Float? // Position within series (e.g. 1, 2, 2.5)
+  rating               Int? // 1-10 (Calibre-style, displayed as 1-5 stars)
+  coverPath            String? // path to extracted cover image
+  filePath             String // absolute path to EPUB file in library dir
+  fileSize             Int // bytes
+  originalFilename     String
+  tags                 String? // JSON: string[]
+  notes                String?
+  readProgress         Int                  @default(0) // 0-100
+  readStatus           String               @default("unread") // unread | reading | read | archived
+  isFavorite           Boolean              @default(false)
+  lastRead             DateTime?
+  watermarks           String? // JSON: string[] – phrases to strip when serving chapters
+  // Pre-generated audiobook support
+  ttsBackend           String               @default("vieneu") // vieneu | piper | moss-nano
+  audiobookStatus      String               @default("none") // none | generating | ready | partial | failed
+  audiobookGeneratedAt DateTime?
+  audiobookDurationMs  Int? // total duration across all generated chapters
+  addedAt              DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  // Shelf memberships
+  shelfBooks           ShelfBook[]
+  // Pre-generation data
+  voices               Voice[]
+  characters           Character[]
+  audiobookChapters    AudiobookChapter[]
+  illustrations        Illustration[]
+  chapterAttributions  ChapterAttribution[]
+}
+
+// ── TTS Voice & Character ───────────────────────────────────────────────────
+// Per-book voice definitions (each voice = a reference audio sample).
+// Voices are used to clone a specific speaker (e.g. "Narrator", "Linh", "Phong").
+model Voice {
+  id             String   @id @default(uuid())
+  bookId         String // per-book voices (so different books can have different narrator voices)
+  name           String // "Narrator", "Linh", "Phong", "Default Male", ...
+  description    String? // optional human description
+  refAudioPath   String // absolute path to reference WAV (10-30 sec clip)
+  language       String   @default("vi")
+  isDefault      Boolean  @default(false) // exactly one per book used for narration
+  // Optional emotion/pace hints injected into the MOSS-TTS prompt
+  defaultSpeed   Float? // 0.5 - 2.0
+  defaultEmotion String? // calm | sad | tense | romantic | angry | excited | neutral
+  // ── Voice category (kind) ─────────────────────────────────────────────
+  // narrator : the book's main narrator voice (one per book; isDefault=true)
+  // character: a distinct voice assigned to a specific named character
+  // common   : part of the shared "minor character / crowd" pool — minor
+  //            characters (role=minor/crowd) get randomly assigned to one
+  //            of these so the audiobook doesn't reuse the same voice for
+  //            every passer-by
+  kind           String   @default("character") // narrator | character | common
+  // Underlying built-in VieNeu name (e.g. "Bình An", "Ngọc Lan") used by
+  // the TTS server. For cloned voices (refAudioPath != ""), this is null.
+  // For common-pool voices, this is the rotation base — we pick a different
+  // pool entry per character so they're perceptually distinct.
+  builtinName    String? // "Bình An" | "Ngọc Lan" | null=cloned
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  book       Book        @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  characters Character[]
+
+  @@index([bookId])
+  @@index([bookId, kind])
+}
+
+// Character → Voice mapping. Lets the pre-generation engine pick the right
+// voice for each line of dialogue.
+model Character {
+  id        String   @id @default(uuid())
+  bookId    String
+  name      String // character name as it appears in the text (e.g. "Linh")
+  aliases   String? // JSON: string[] – alternative names / honorifics the same character uses
+  voiceId   String? // null = use book's default voice
+  notes     String?
+  // ── Character role (for common-voice routing) ──────────────────────────
+  // main      : protagonist / major character — gets dedicated voice
+  // supporting: recurring but not main — gets dedicated voice
+  // minor     : appears briefly, low lines — uses common voice pool
+  // crowd     : anonymous background (e.g. "tiếng la", "người qua đường") —
+  //             random common voice + slight variation per occurrence
+  role      String   @default("supporting") // main | supporting | minor | crowd
+  // Detected age (estimated from speech patterns) — used to fine-tune
+  // voice selection: "young" prefers Ngọc Linh/Trúc Ly/Xuân Vĩnh,
+  // "mature" prefers Ngọc Lan/Mỹ Duyên/Bình An/Gia Bảo/Đức Trí/Trọng Hữu.
+  age       String? // young | mature | old | null=unknown
+  // Detected gender — drives the strongest voice-selection signal:
+  // wrong-gender voice is jarring, so we penalize gender mismatch by -20 in
+  // scoreVoice(). Without this column stored, the picker falls back to age-
+  // only and frequently gives a male a female voice (or vice versa).
+  gender    String? // male | female | null=unknown
+  // Detected tone (one short word: calm/cheerful/cold/mysterious/serious/…)
+  // — additional signal for the picker. Persisted so voice re-selection on
+  // the same character stays consistent across sessions.
+  tone      String? // calm | cheerful | cold | mysterious | serious | warm | angry | sad | …
+  createdAt DateTime @default(now())
+
+  book  Book   @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  voice Voice? @relation(fields: [voiceId], references: [id], onDelete: SetNull)
+
+  @@unique([bookId, name])
+  @@index([bookId])
+  @@index([bookId, role])
+}
+
+// One row per chapter of a book. Tracks pre-generated audio for fast playback.
+model AudiobookChapter {
+  id           String    @id @default(uuid())
+  bookId       String
+  chapterFile  String // e.g. "chapter001.xhtml" or "EPUB/chapter001.xhtml" — matches parseEpub htmlFiles
+  chapterTitle String? // pre-extracted for UI display
+  audioPath    String? // absolute path to concatenated WAV (data/audiobooks/<bookId>/<chapterFile>.wav)
+  durationMs   Int? // total audio length
+  sizeBytes    Int? // WAV file size on disk
+  status       String    @default("pending") // pending | generating | ready | failed | skipped
+  progress     Int       @default(0) // 0-100 within this chapter
+  errorMsg     String?
+  generatedAt  DateTime?
+  // Config used for generation (so regeneration is deterministic)
+  configHash   String? // hash of (voices + characters + backend) used to generate this chapter
+
+  book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@unique([bookId, chapterFile])
+  @@index([bookId, status])
+}
+
+// Shelves – user-defined reading lists / collections
+model Shelf {
+  id          String      @id @default(uuid())
+  name        String
+  description String?
+  isPublic    Boolean     @default(false)
+  sortOrder   Int         @default(0)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  books       ShelfBook[]
+}
+
+model ShelfBook {
+  shelfId  String
+  bookId   String
+  position Int      @default(0)
+  addedAt  DateTime @default(now())
+
+  shelf Shelf @relation(fields: [shelfId], references: [id], onDelete: Cascade)
+  book  Book  @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@id([shelfId, bookId])
+}
+
+// ── App settings (singleton row) ────────────────────────────────────────────
+// One row, id="singleton". Stores user-configured preferences for AI providers,
+// TTS providers, and default conversion options. Read by all AI endpoints
+// to route to the selected backend (OMLX local, MiniMax cloud, etc.).
+model Settings {
+  id String @id @default("singleton")
+
+  // ── AI provider for text tasks (EPUB repair, character detection, etc.) ──
+  aiProvider    String  @default("omlx-local")
+  // omlx-local | minimax-cloud | openai | custom
+  aiApiKey      String? // encrypted-at-rest API key (MiniMax, OpenAI, ...)
+  aiBaseUrl     String? // optional override for OpenAI-compatible endpoints
+  aiModel       String  @default("default") // model identifier
+  aiMaxTokens   Int     @default(8192)
+  aiTemperature Float   @default(0.2)
+
+  // ── TTS provider ──────────────────────────────────────────────────────────
+  ttsProvider String @default("vieneu")
+  // vieneu | piper | moss-nano
+
+  // ── Conversion defaults ────────────────────────────────────────────────────
+  defaultAiEnhance        Boolean @default(true)
+  defaultAiWatermarkClean Boolean @default(true)
+  // Deep chapter formatting (paragraphs, dialogue, scene breaks).
+  // Slower than defaultAiEnhance but produces much nicer-looking novels.
+  defaultDeepFormat       Boolean @default(false)
+  defaultLanguage         String  @default("vi")
+
+  // ── Image generation (chapter illustrations + AI covers) ────────────────
+  imageProvider   String  @default("none") // none | openai | minimax | custom
+  imageApiKey     String? // separate from text API key
+  imageBaseUrl    String? // for custom image endpoints
+  imageModel      String  @default("dall-e-3") // model id
+  imageStyle      String  @default("ink") // ink | sketch | watercolor | manga | none
+  // Maximum chapters to auto-illustrate per book. Set to 0 to disable.
+  imageMaxPerBook Int     @default(6)
+
+  // ── UI preferences ────────────────────────────────────────────────────────
+  theme String @default("system") // system | light | dark
+
+  // ── Worker performance tuning ──────────────────────────────────────────────
+  // Max number of conversions processed simultaneously by the worker.
+  // Each conversion is independent, so concurrency > 1 gives near-linear
+  // speedup IF your AI provider can handle the parallel load.
+  workerConcurrency        Int @default(2) // 1=sequential, 2-4=parallel recommended
+  // Within a single conversion, max chapters to deep-format in parallel.
+  // 1=sequential (safe for slow providers), 2-4=parallel (faster but more API load).
+  workerChapterConcurrency Int @default(1)
+
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}
+
+// ── AI-generated chapter illustrations ─────────────────────────────────────
+// One row per illustrated chapter. AI scores each chapter and only generates
+// images for "highlight" chapters (visually rich scenes).
+model Illustration {
+  id           String   @id @default(uuid())
+  bookId       String
+  chapterIndex Int // 0-based index into parseEpub().htmlFiles
+  chapterTitle String // cached for UI display
+  prompt       String // the prompt used for image generation
+  imagePath    String // absolute path to the PNG file on disk
+  imageModel   String? // model that generated it (e.g. "dall-e-3")
+  generatedAt  DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@unique([bookId, chapterIndex])
+  @@index([bookId])
+}
+
+// ── Cached chapter-level speaker attribution ─────────────────────────────
+// One row per chapter. The payload is a JSON map of paragraph index →
+// { speaker, confidence, source, evidence?, state? } where source is one of
+// "parser" (VnCoreNLP dependency parse), "regex" (existing regex evidence),
+// "conversation" (stateful scene/turn fusion), "llm" (oMLX fallback for
+// zero-anaphora), or "default" (no attribution found). The
+// mtime of the source chapter file is cached so we re-attribute only when
+// the user re-uploads or edits the chapter — otherwise we serve the cached
+// version straight from SQLite in O(1).
+model ChapterAttribution {
+  id            String   @id @default(uuid())
+  bookId        String
+  chapterIndex  Int // 0-based index into parseEpub().htmlFiles
+  payload       String // JSON: Record<number, { speaker?: string, confidence: number, source: string, evidence?: [], state?: {} }>
+  sourceMtime   BigInt // mtime of the chapter HTML file when attribution ran
+  parserVersion String   @default("vncorenlp-1.2") // which model produced the result
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@unique([bookId, chapterIndex])
+  @@index([bookId])
+}

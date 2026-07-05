@@ -1,0 +1,116 @@
+# Container stack for the ebook converter. Runs alongside the host stack on
+# side-channel ports so both can coexist for real end-to-end testing.
+#
+# Usage:
+#   docker compose up -d --build           # build + start in background
+#   docker compose logs -f app worker      # tail logs
+#   docker compose down                    # stop + remove containers (keep volumes)
+#   docker compose down -v                 # also wipe redis-data volume
+#
+# Ports chosen to avoid colliding with the host stack:
+#   13100 -> app :3100     (host dev server stays on :3100)
+#   16379 -> redis :6379   (host redis stays on :6379)
+#
+# The container reaches the host's oMLX (:8080) and Unified TTS (:5010) via
+# host.docker.internal (works out-of-the-box on Docker Desktop for Mac/Windows).
+# The host-side env vars UNIFIED_TTS_URL / OMLX_BASE_URL in .env.local are
+# intentionally overridden here so the same env file works in both contexts.
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - '16379:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - '13100:3100'
+    env_file: .env.local
+    environment:
+      - REDIS_HOST=redis
+      - DATABASE_URL=file:/app/data/ebook-converter.db
+      # Override local URLs so the container can reach host-local services.
+      - UNIFIED_TTS_URL=http://host.docker.internal:5010
+      - OMLX_BASE_URL=http://host.docker.internal:8080/v1
+      - NODE_ENV=production
+      # Next.js standalone server.js binds to process.env.HOSTNAME if set,
+      # which Docker defaults to the container's hostname / bridge IP, causing
+      # the loopback healthcheck (127.0.0.1:3100) to ECONNREFUSED. Pin both
+      # HOSTNAME and HOST=0.0.0.0 so the server listens on all interfaces.
+      - HOSTNAME=0.0.0.0
+      - HOST=0.0.0.0
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    volumes:
+      - ./data:/app/data
+      - ./public/assets/fonts:/app/public/assets/fonts:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - 'CMD-SHELL'
+        - "node -e \"require('http').get('http://127.0.0.1:3100/api/tts/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  worker:
+    # NOTE: worker is a BullMQ consumer, not an HTTP client. It depends on
+    # Redis only — never on `app`. Sharing ./data means app + worker see the
+    # same SQLite database.
+    build: .
+    restart: unless-stopped
+    command: node worker.js
+    env_file: .env.local
+    environment:
+      - REDIS_HOST=redis
+      - DATABASE_URL=file:/app/data/ebook-converter.db
+      - UNIFIED_TTS_URL=http://host.docker.internal:5010
+      - OMLX_BASE_URL=http://host.docker.internal:8080/v1
+      - NODE_ENV=production
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    volumes:
+      - ./data:/app/data
+      - ./public/assets/fonts:/app/public/assets/fonts:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # VnCoreNLP Vietnamese dependency parser. Sidecar consumed by both `app`
+  # (live read-aloud attribution via /api/.../attribute) and `worker`
+  # (BullMQ pre-generation as Tier 3b). Started lazily so docker compose up
+  # works on machines that don't need it. To enable: `docker compose up -d
+  # vncorenlp` and set USE_VNCORENLP=1 in .env.local.
+  vncorenlp:
+    build:
+      context: ../tts-service/vncorenlp
+    image: local/vncorenlp:1.2
+    restart: unless-stopped
+    ports:
+      - '15030:5030'
+    environment:
+      - JAVA_OPTS=-Xmx2g
+      - VNCORENLP_ANNOTATORS=wseg,pos,ner,parse
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://127.0.0.1:5030/healthz']
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+
+volumes:
+  redis-data:
