@@ -40,8 +40,14 @@ dump.rdb
 backups/
 exmple-books/
 
-# Tooling and local state
+# Local tool state and secrets
 .claude/
+hg_token.md
+omlx-home/
+opencode-home/
+opencode-runtime/
+app/tts-service/MOSS-TTS-Nano/
+app/tts-service/VieNeu-TTS/
 
 # Python / Node / app caches
 .venv/
