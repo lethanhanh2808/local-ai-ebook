@@ -45,7 +45,9 @@ exmple-books/
 
 # Python / Node / app caches
 .venv/
+.venv*/
 venv/
+venv*/
 __pycache__/
 *.py[cod]
 .pytest_cache/
