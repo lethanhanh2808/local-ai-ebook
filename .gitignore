@@ -31,6 +31,17 @@ models/
 *.db
 *.sqlite3
 dump.rdb
+*.mp3
+*.wav
+*.m4a
+*.epub
+
+# Local backups and sample content
+backups/
+exmple-books/
+
+# Tooling and local state
+.claude/
 
 # Python / Node / app caches
 .venv/
