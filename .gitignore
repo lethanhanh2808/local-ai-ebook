@@ -1,0 +1,65 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.token
+*.tok
+*.secret
+*.secrets
+credentials.json
+auth.json
+secrets/
+
+# Local AI / runtime artifacts
+models/
+*.gguf
+*.safetensors
+*.bin
+*.onnx
+*.mlmodel
+*.pt
+*.pth
+*.ckpt
+*.rdb
+*.sqlite
+*.db
+*.sqlite3
+dump.rdb
+
+# Python / Node / app caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+pip-wheel-metadata/
+node_modules/
+.next/
+out/
+dist/
+build/
+coverage/
+
+# Logs and local data
+*.log
+logs/
+tmp/
+data/
+cache/
+playwright-report/
+test-results/
+
+# OS/editor noise
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
