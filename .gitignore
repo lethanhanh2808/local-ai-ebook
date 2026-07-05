@@ -82,3 +82,5 @@ test-results/
 .idea/
 *.swp
 *.swo
+app/tts-service/.venv-moss-nano/lib/python3.11/site-packages/torch/lib/libtorch_cpu.dylib
+opencode-runtime/bin/opencode
