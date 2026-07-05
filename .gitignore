@@ -82,5 +82,17 @@ test-results/
 .idea/
 *.swp
 *.swo
+
+# Local backup / temporary files
+*.bak
+*.orig
+*.rej
+*.ipynb_checkpoints/
+
+# Local tool state and generated content
 app/tts-service/.venv-moss-nano/lib/python3.11/site-packages/torch/lib/libtorch_cpu.dylib
 opencode-runtime/bin/opencode
+reference/
+hg_token.md
+app/tts-service/MOSS-TTS-Nano
+app/tts-service/VieNeu-TTS
