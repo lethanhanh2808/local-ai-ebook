@@ -1,15 +1,18 @@
 'use client';
 // src/components/library/ShelvesView.tsx – Shelves/Reading lists manager
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Plus, Trash2, BookMarked, ChevronRight, Loader2, X,
   Pencil, Check, BookOpen, GripVertical, ArrowDownAZ,
   Clock, Hash, BookCopy, SortAsc,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { useToast } from '@/components/ui/toast';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import { EmptyState } from '@/components/layout/EmptyState';
+import { ErrorState } from '@/components/layout/ErrorState';
 
 interface PreviewBook { id: string; hasCover: boolean; readStatus: string; }
 interface ShelfSummary {
@@ -87,7 +90,7 @@ function ShelfCard({ shelf, onDelete, onRename }: {
   const initials = shelfInitials(shelf.name);
 
   return (
-    <div className="group relative flex flex-col rounded-2xl border bg-card overflow-hidden hover:shadow-lg transition-all duration-200">
+    <Card className="group relative flex flex-col rounded-2xl border border-border overflow-hidden hover:shadow-lg transition-all duration-200">
       {/* Auto-generated gradient cover */}
       <div className="flex h-24 items-center justify-center relative overflow-hidden"
         style={{ background: gradient }}>
@@ -108,10 +111,10 @@ function ShelfCard({ shelf, onDelete, onRename }: {
           <div className="space-y-2">
             <input ref={inputRef} value={editName} onChange={(e) => setEditName(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit(); }}
-              className="w-full rounded-lg border bg-background px-3 py-1.5 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+              className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring" />
             <input value={editDesc} onChange={(e) => setEditDesc(e.target.value)}
               placeholder="Description…"
-              className="w-full rounded-lg border bg-background px-3 py-1.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+              className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring" />
             <div className="flex gap-2">
               <button onClick={commitEdit} disabled={saving || !editName.trim()}
                 className="flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
@@ -168,11 +171,12 @@ function ShelfCard({ shelf, onDelete, onRename }: {
           </div>
         )}
       </div>
-    </div>
+    </Card>
   );
 }
 
 export function ShelvesView() {
+  const toast = useToast();
   const [shelves, setShelves] = useState<ShelfSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -180,14 +184,22 @@ export function ShelvesView() {
   const [newDesc, setNewDesc] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>('name');
+  const [error, setError] = useState<string | null>(null);
 
-  const fetchShelves = async () => {
-    const res = await fetch('/api/shelves');
-    if (res.ok) setShelves(await res.json());
-    setLoading(false);
-  };
+  const fetchShelves = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/shelves');
+      if (res.ok) setShelves(await res.json());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  useEffect(() => { void fetchShelves(); }, []);
+  useEffect(() => { void fetchShelves(); }, [fetchShelves]);
 
   const handleCreate = async () => {
     if (!newName.trim()) return;
@@ -204,10 +216,17 @@ export function ShelvesView() {
     setCreating(false);
   };
 
-  const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Delete shelf "${name}"? Books inside won't be deleted.`)) return;
-    await fetch(`/api/shelves/${id}`, { method: 'DELETE' });
-    setShelves((prev) => prev.filter((s) => s.id !== id));
+  const handleDelete = (id: string, name: string) => {
+    toast.confirm({
+      title: `Delete shelf "${name}"?`,
+      description: "Books inside won't be deleted.",
+      confirmLabel: 'Delete',
+      destructive: true,
+      onConfirm: async () => {
+        await fetch(`/api/shelves/${id}`, { method: 'DELETE' });
+        setShelves((prev) => prev.filter((s) => s.id !== id));
+      },
+    });
   };
 
   const handleRename = (id: string, name: string, desc: string | null) => {
@@ -233,6 +252,17 @@ export function ShelvesView() {
     );
   }
 
+  if (error) {
+    return (
+      <ErrorState
+        onRetry={() => void fetchShelves()}
+        message={error}
+        details={String(error)}
+        retrying={loading}
+      />
+    );
+  }
+
   return (
     <div className="space-y-5">
       {/* Toolbar */}
@@ -240,14 +270,14 @@ export function ShelvesView() {
         {/* Stats chips */}
         {shelves.length > 0 && (
           <div className="flex items-center gap-2 mr-auto text-xs text-muted-foreground">
-            <span className="flex items-center gap-1 rounded-full border px-2.5 py-1">
+            <span className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1">
               <BookMarked className="h-3 w-3" />{shelves.length} shelf{shelves.length !== 1 ? 'ves' : ''}
             </span>
-            <span className="flex items-center gap-1 rounded-full border px-2.5 py-1">
+            <span className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1">
               <BookCopy className="h-3 w-3" />{totalBooks} books
             </span>
             {totalReading > 0 && (
-              <span className="flex items-center gap-1 rounded-full border border-blue-300 bg-blue-50 dark:bg-blue-950/30 px-2.5 py-1 text-blue-600 dark:text-blue-400">
+              <span className="flex items-center gap-1 rounded-full border border-border border-blue-300 bg-blue-50 dark:bg-blue-950/30 px-2.5 py-1 text-blue-600 dark:text-blue-400">
                 <BookOpen className="h-3 w-3" />{totalReading} reading
               </span>
             )}
@@ -255,7 +285,7 @@ export function ShelvesView() {
         )}
 
         {/* Sort */}
-        <div className="flex items-center rounded-lg border overflow-hidden text-xs">
+        <div className="flex items-center rounded-lg border border-border overflow-hidden text-xs">
           {([['name', 'A–Z', ArrowDownAZ], ['count', 'Most books', Hash], ['recent', 'Recent', Clock]] as [SortKey, string, React.FC<{className?:string}>][]).map(([key, label, Icon]) => (
             <button key={key} onClick={() => setSortKey(key)}
               className={cn('flex items-center gap-1 px-2.5 py-1.5 transition-colors',
@@ -273,22 +303,22 @@ export function ShelvesView() {
 
       {/* Create form */}
       {showForm && (
-        <div className="rounded-xl border bg-card p-4 space-y-3">
+        <Card className="rounded-xl border border-border p-4 space-y-3">
           <h3 className="text-sm font-semibold">Create Reading List</h3>
           <div className="grid sm:grid-cols-2 gap-3">
             <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)}
               placeholder="Shelf name…"
-              className="rounded-lg border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
               onKeyDown={(e) => e.key === 'Enter' && handleCreate()} />
             <input type="text" value={newDesc} onChange={(e) => setNewDesc(e.target.value)}
               placeholder="Description (optional)…"
-              className="rounded-lg border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+              className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
           </div>
           <Button size="sm" onClick={handleCreate} disabled={creating || !newName.trim()}>
             {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Plus className="h-3.5 w-3.5 mr-1" />}
             Create
           </Button>
-        </div>
+        </Card>
       )}
 
       {/* Empty state */}

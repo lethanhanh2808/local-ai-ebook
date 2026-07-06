@@ -8,6 +8,8 @@ import {
   Play, Square, Volume2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 
 interface DetectedCharacter {
@@ -192,7 +194,7 @@ export function CharacterDetection({ bookId, existingCharacters, onApplied }: Pr
 
   return (
     <div className="space-y-4">
-      <div className="rounded-xl border bg-card p-4">
+      <Card className="rounded-xl border border-border p-4">
         <div className="flex items-center justify-between mb-2">
           <div>
             <h3 className="text-sm font-semibold flex items-center gap-1.5">
@@ -220,11 +222,11 @@ export function CharacterDetection({ bookId, existingCharacters, onApplied }: Pr
             Click "Phân tích nhân vật" để AI quét vài chương đầu của sách. Mất khoảng 60-90 giây.
           </p>
         )}
-      </div>
+      </Card>
 
       {result && (
         <>
-          <div className="rounded-xl border bg-card p-4">
+          <Card className="rounded-xl border border-border p-4">
             <div className="flex items-center justify-between mb-2">
               <div className="text-xs text-muted-foreground">
                 <strong className="text-foreground">{result.characters.length}</strong> nhân vật được phát hiện
@@ -246,59 +248,87 @@ export function CharacterDetection({ bookId, existingCharacters, onApplied }: Pr
                 const voice = picks[c.name] ?? c.suggested_voice;
                 const sample = c.sample_lines[0] ?? '';
                 const GenderIcon = c.gender === 'female' ? Heart : c.gender === 'male' ? User : User;
+                const genderVariant =
+                  c.gender === 'female' ? 'badge-gender-female' :
+                  c.gender === 'male'   ? 'badge-gender-male'   :
+                                          'tone-neutral';
+                const ageLabel =
+                  c.age === 'young'  ? 'trẻ' :
+                  c.age === 'old'    ? 'lớn tuổi' :
+                                       'trưởng thành';
+                const roleMeta =
+                  c.role === 'main'       ? { variant: 'badge-role-main'       as const, label: '⭐ chính' } :
+                  c.role === 'supporting' ? { variant: 'badge-role-supporting' as const, label: 'phụ' } :
+                  c.role === 'minor'      ? { variant: 'badge-role-minor'      as const, label: 'vãng lai' } :
+                  c.role === 'crowd'      ? { variant: 'badge-role-crowd'      as const, label: 'đám đông' } :
+                                            null;
                 return (
                   <div key={c.name}
-                    className={cn('rounded-lg border p-3 transition-colors',
+                    className={cn('rounded-lg border border-border p-3 transition-colors',
                       isPicked ? 'border-primary/50 bg-primary/5' : 'border-border bg-card')}>
                     <div className="flex items-start gap-3">
                       <input type="checkbox" checked={isPicked} onChange={() => togglePicked(c.name)}
                         disabled={isExisting}
                         className="mt-1 shrink-0" />
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        {/* Name + status pill — only the actionable bits stay on the title row. */}
+                        <div className="flex items-center gap-2 mb-2 flex-wrap">
                           <span className="font-semibold text-sm">{c.name}</span>
                           {isExisting && (
-                            <span className="rounded-full bg-green-500/15 text-green-700 text-[10px] px-1.5 py-0.5 font-medium">
-                              đã có
-                            </span>
-                          )}
-                          <span className={cn('rounded-full px-1.5 py-0.5 text-[10px] font-medium',
-                            c.gender === 'female' ? 'bg-pink-500/15 text-pink-700 dark:text-pink-400'
-                            : c.gender === 'male' ? 'bg-blue-500/15 text-blue-700 dark:text-blue-400'
-                            : 'bg-muted text-muted-foreground')}>
-                            <GenderIcon className="h-2.5 w-2.5 inline mr-0.5" />
-                            {c.gender}
-                          </span>
-                          {c.age && (
-                            <span className="rounded-full bg-slate-500/15 text-slate-700 dark:text-slate-400 text-[10px] px-1.5 py-0.5">
-                              {c.age === 'young' ? 'trẻ' : c.age === 'old' ? 'lớn tuổi' : 'trưởng thành'}
-                            </span>
-                          )}
-                          {c.tone !== 'unknown' && (
-                            <span className="rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-400 text-[10px] px-1.5 py-0.5">
-                              {c.tone}
-                            </span>
-                          )}
-                          {c.role && (
-                            <span className={cn('rounded-full text-[10px] px-1.5 py-0.5 font-medium',
-                              c.role === 'main'        ? 'bg-violet-500/15 text-violet-700 dark:text-violet-400' :
-                              c.role === 'supporting'  ? 'bg-cyan-500/15 text-cyan-700 dark:text-cyan-400' :
-                              c.role === 'minor'       ? 'bg-stone-500/15 text-stone-700 dark:text-stone-400' :
-                                                          'bg-stone-400/10 text-stone-600 dark:text-stone-400'
-                            )}>
-                              {c.role === 'main'       ? '⭐ chính' :
-                               c.role === 'supporting' ? 'phụ'      :
-                               c.role === 'minor'      ? 'vãng lai' :
-                                                           'đám đông'}
-                            </span>
-                          )}
-                          {c.lines_estimate > 0 && (
-                            <span className="text-[10px] text-muted-foreground">~{c.lines_estimate} lời</span>
+                            <Badge variant="badge-exists" className="text-[10px]">đã có</Badge>
                           )}
                         </div>
+
+                        {/* 2-column key/value list — replaces 5 stacked badges. */}
+                        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px] mb-2">
+                          <dt className="text-muted-foreground">Giới tính</dt>
+                          <dd>
+                            <Badge variant={genderVariant} className="text-[10px]">
+                              <GenderIcon className="h-2.5 w-2.5 mr-0.5" />
+                              {c.gender}
+                            </Badge>
+                          </dd>
+
+                          {c.age && (
+                            <>
+                              <dt className="text-muted-foreground">Tuổi</dt>
+                              <dd>
+                                <Badge variant="badge-age" className="text-[10px]">{ageLabel}</Badge>
+                              </dd>
+                            </>
+                          )}
+
+                          {c.tone !== 'unknown' && (
+                            <>
+                              <dt className="text-muted-foreground">Tính cách</dt>
+                              <dd>
+                                <Badge variant="badge-tone" className="text-[10px]">{c.tone}</Badge>
+                              </dd>
+                            </>
+                          )}
+
+                          {roleMeta && (
+                            <>
+                              <dt className="text-muted-foreground">Vai trò</dt>
+                              <dd>
+                                <Badge variant={roleMeta.variant} className="text-[10px]">{roleMeta.label}</Badge>
+                              </dd>
+                            </>
+                          )}
+
+                          {c.lines_estimate > 0 && (
+                            <>
+                              <dt className="text-muted-foreground">Số lời</dt>
+                              <dd className="text-muted-foreground tabular-nums self-center">
+                                ~{c.lines_estimate.toLocaleString('vi-VN')}
+                              </dd>
+                            </>
+                          )}
+                        </dl>
+
                         {c.aliases.length > 0 && (
                           <p className="text-[10px] text-muted-foreground">
-                            Bí danh: {c.aliases.join(', ')}
+                            <span className="text-foreground/70">Bí danh:</span> {c.aliases.join(', ')}
                           </p>
                         )}
                         {sample && (
@@ -310,14 +340,14 @@ export function CharacterDetection({ bookId, existingCharacters, onApplied }: Pr
                           <div className="mt-2 flex items-center gap-2">
                             <label className="text-[10px] text-muted-foreground">Giọng:</label>
                             <select value={voice} onChange={(e) => setVoice(c.name, e.target.value)}
-                              className="rounded border bg-background px-2 py-0.5 text-xs">
+                              className="rounded border border-border bg-background px-2 py-0.5 text-xs">
                               {availableVoices.map((v) => (
                                 <option key={v.id} value={v.id}>{v.id}</option>
                               ))}
                             </select>
                             <button
                               onClick={() => previewing === voice ? stopPreview() : previewVoice(voice)}
-                              className={cn('flex items-center gap-1 rounded border px-2 py-0.5 text-[10px] transition-colors',
+                              className={cn('flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[10px] transition-colors',
                                 previewing === voice ? 'bg-primary text-primary-foreground border-primary' : 'border-border hover:bg-muted')}
                               title="Nghe thử giọng này"
                             >
@@ -333,10 +363,10 @@ export function CharacterDetection({ bookId, existingCharacters, onApplied }: Pr
                 );
               })}
             </div>
-          </div>
+          </Card>
 
           {/* Custom preview text — used by the ▶ buttons */}
-          <details className="rounded-xl border bg-card p-3">
+          <details className="p-3">
             <summary className="text-xs font-medium cursor-pointer text-muted-foreground">
               <Volume2 className="h-3 w-3 inline mr-1" />Văn bản thử giọng (tùy chỉnh)
             </summary>
@@ -345,7 +375,7 @@ export function CharacterDetection({ bookId, existingCharacters, onApplied }: Pr
               onChange={(e) => setPreviewText(e.target.value)}
               placeholder="Mặc định: 'Xin chào bạn đọc, đây là giọng của tôi.'"
               rows={2}
-              className="w-full mt-2 rounded-lg border bg-background px-3 py-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring resize-none"
+              className="w-full mt-2 rounded-lg border border-border bg-background px-3 py-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring resize-none"
             />
             <p className="text-[10px] text-muted-foreground mt-1">
               Để trống để dùng câu mặc định. Bạn có thể copy 1 câu thoại của nhân vật vào đây để nghe đúng giọng đó.

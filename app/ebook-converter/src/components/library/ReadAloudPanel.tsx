@@ -16,6 +16,7 @@ import {
   Clock, FastForward,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Progress } from '@/components/ui/progress';
 import { cn, formatDuration } from '@/lib/utils';
 
 interface CharacterVoice { name: string; voiceName?: string; }
@@ -29,6 +30,7 @@ export interface CustomVoice {
 interface ReadAloudPanelProps {
   open: boolean;
   onClose: () => void;
+  embedded?: boolean;
   // State
   defaultVoice: string;
   setDefaultVoice: (v: string) => void;
@@ -67,6 +69,7 @@ interface ReadAloudPanelProps {
   onStart: () => void;
   onStop: () => void;
   onTogglePause: () => void;
+  onSeekParagraph?: (index: number) => void;
   onPreviewDefaultVoice: (voiceName: string) => void;
   onStopPreview: () => void;
   previewingVoice: string | null;
@@ -119,7 +122,7 @@ function VoiceAvatar({ voice, selected }: { voice: typeof VIENEU_VOICES[number];
 }
 
 export function ReadAloudPanel({
-  open, onClose,
+  open, onClose, embedded = false,
   defaultVoice, setDefaultVoice,
   customVoices, setCustomVoices,
   characterList,
@@ -131,7 +134,7 @@ export function ReadAloudPanel({
   pregenStatus,
   useAIEmotion, setUseAIEmotion,
   ttsState, ttsParagraphs, ttsIndex, ttsCurrentSpeaker, ttsEmotionLabel,
-  onStart, onStop, onTogglePause,
+  onStart, onStop, onTogglePause, onSeekParagraph,
   onPreviewDefaultVoice, onStopPreview, previewingVoice,
   bookId, onOpenVoiceLibrary,
   accentColor,
@@ -169,34 +172,29 @@ export function ReadAloudPanel({
   }, [bookId, customVoices, setCustomVoices]);
 
   // Don't render until mounted (so SSR doesn't get a half-state)
-  if (!open) return null;
+  if (!open && !embedded) return null;
 
   const isPlaying = ttsState === 'playing' || ttsState === 'loading' || ttsState === 'paused';
+  const seekMax = Math.max(0, ttsParagraphs.length - 1);
+  const progressPct = ttsParagraphs.length > 0
+    ? Math.round(((ttsIndex + 1) / ttsParagraphs.length) * 100)
+    : 0;
 
-  return (
+  const content = (
     <>
-      {/* Slide-in panel from right — must render BEFORE backdrop so the
-          backdrop's z-index doesn't matter (panel is later in DOM). */}
-      <aside
-        className={cn(
-          'fixed top-0 right-0 bottom-0 z-[60] w-full sm:w-[380px] shadow-2xl',
-          'flex flex-col border-l transition-transform',
-          themeCls, borderCls,
-        )}
-      >
         {/* Header */}
-        <header className={cn('flex items-center justify-between px-4 py-3 border-b shrink-0', borderCls)}>
+        {!embedded && <header className={cn('flex items-center justify-between px-4 py-3 border-b border-border shrink-0', borderCls)}>
           <div className="flex items-center gap-2">
             <Headphones className="h-4 w-4 text-primary" />
-            <h2 className="font-semibold text-sm">Đọc to <span className={cn('text-[10px] font-normal', mutedCls)}>· VieNeu-TTS</span></h2>
+            <h2 className="font-semibold text-sm">Đọc to <span className={cn('text-[10px] font-normal', mutedCls)}>· Vietnamese Voice</span></h2>
           </div>
           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} title="Đóng">
             <X className="h-4 w-4" />
           </Button>
-        </header>
+        </header>}
 
         {/* Tabs */}
-        <div className={cn('flex border-b shrink-0', borderCls)}>
+        <div className={cn('flex border-b border-border shrink-0', borderCls)}>
           <button
             onClick={() => setActiveTab('voices')}
             className={cn('flex-1 py-2 text-xs font-medium transition-colors',
@@ -224,7 +222,7 @@ export function ReadAloudPanel({
                   </h3>
                   <button
                     onClick={() => fileInputRef.current?.click()}
-                    className={cn('text-[10px] px-2 py-0.5 rounded border font-medium flex items-center gap-0.5', hoverCls)}
+                    className={cn('text-[10px] px-2 py-0.5 rounded border border-border font-medium flex items-center gap-0.5', hoverCls)}
                     title="Upload audio mẫu (3-5s) để tạo giọng mới">
                     <Plus className="h-3 w-3" /> Clone
                   </button>
@@ -247,38 +245,50 @@ export function ReadAloudPanel({
                     const isPlayingThis = previewingVoice === v.id;
                     const isOtherPlaying = previewingVoice !== null && !isPlayingThis;
                     return (
-                      <div
-                        key={v.id}
-                        className={cn(
-                          'flex items-center gap-2 rounded-lg border p-2 transition-all',
-                          isSelected ? 'border-primary bg-primary/5' : `${borderCls} ${hoverCls}`,
-                        )}>
-                        <button
-                          onClick={() => setDefaultVoice(v.id)}
-                          className="flex items-center gap-2 flex-1 min-w-0 text-left">
-                          <VoiceAvatar voice={v} selected={isSelected} />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-1.5">
-                              <p className="text-sm font-semibold truncate">{v.shortLabel}</p>
-                              {isSelected && <span className="text-[9px] px-1 py-0.5 rounded bg-primary text-primary-foreground">ĐANG DÙNG</span>}
-                            </div>
-                            <p className={cn('text-[10px] truncate', mutedCls)}>{v.desc}</p>
-                          </div>
-                        </button>
-                        <button
-                          onClick={() => isPlayingThis ? onStopPreview() : onPreviewDefaultVoice(v.id)}
-                          disabled={isOtherPlaying}
-                          title={isPlayingThis ? 'Dừng nghe thử' : `Nghe thử ${v.label}`}
+                      <div key={v.id} className="space-y-1">
+                        <div
                           className={cn(
-                            'shrink-0 h-8 w-8 rounded-full flex items-center justify-center transition-all',
-                            isPlayingThis
-                              ? 'bg-primary text-primary-foreground'
-                              : isOtherPlaying
-                                ? 'opacity-30 cursor-not-allowed border'
-                                : `border ${hoverCls}`,
+                            'flex items-center gap-2 rounded-lg border border-border p-2 transition-all',
+                            isSelected ? 'border-primary bg-primary/5' : `${borderCls} ${hoverCls}`,
                           )}>
-                          {isPlayingThis ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5 ml-0.5" />}
-                        </button>
+                          <button
+                            onClick={() => setDefaultVoice(v.id)}
+                            className="flex items-center gap-2 flex-1 min-w-0 text-left">
+                            <VoiceAvatar voice={v} selected={isSelected} />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5">
+                                <p className="text-sm font-semibold truncate">{v.shortLabel}</p>
+                                {isSelected && <span className="text-[9px] px-1 py-0.5 rounded bg-primary text-primary-foreground">ĐANG DÙNG</span>}
+                              </div>
+                              <p className={cn('text-[10px] truncate', mutedCls)}>{v.desc}</p>
+                            </div>
+                          </button>
+                          <button
+                            onClick={() => isPlayingThis ? onStopPreview() : onPreviewDefaultVoice(v.id)}
+                            disabled={isOtherPlaying}
+                            title={isPlayingThis ? 'Dừng nghe thử' : `Nghe thử ${v.label}`}
+                            aria-label={isPlayingThis ? `Dừng nghe thử ${v.label}` : `Nghe thử ${v.label}`}
+                            aria-pressed={isPlayingThis}
+                            className={cn(
+                              'shrink-0 h-8 w-8 rounded-full flex items-center justify-center transition-all',
+                              isPlayingThis
+                                ? 'bg-primary text-primary-foreground'
+                                : isOtherPlaying
+                                  ? 'opacity-30 cursor-not-allowed border border-border'
+                                  : `border border-border ${hoverCls}`,
+                            )}>
+                            {isPlayingThis ? <Square className="h-3 w-3 fill-current" /> : <Play className="h-3.5 w-3.5 ml-0.5" />}
+                          </button>
+                        </div>
+                        {/* Thin indeterminate progress while this voice is previewing —
+                            visually signals "audio is playing" without needing real
+                            progress data from the audio element. */}
+                        {isPlayingThis && (
+                          <Progress
+                            label={`Đang nghe thử ${v.label}`}
+                            className="h-1 mx-1"
+                          />
+                        )}
                       </div>
                     );
                   })}
@@ -286,13 +296,13 @@ export function ReadAloudPanel({
 
                 <p className={cn('text-[10px] mt-2', mutedCls)}>
                   {customVoices.length > 0
-                    ? `${VIENEU_VOICES.length} giọng VieNeu + ${customVoices.length} giọng clone`
+                    ? `${VIENEU_VOICES.length} giọng Vietnamese Voice + ${customVoices.length} giọng clone`
                     : `${VIENEU_VOICES.length} giọng có sẵn. Nhấn "Clone" để tạo giọng từ audio mẫu.`}
                 </p>
               </section>
 
               {/* Section: Character voices */}
-              <section className={cn('pt-3 border-t', borderCls)}>
+              <section className={cn('pt-3 border-t border-border', borderCls)}>
                 <div className="flex items-center justify-between mb-2">
                   <h3 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
                     <User className="h-3 w-3" /> Tự động theo nhân vật
@@ -350,7 +360,7 @@ export function ReadAloudPanel({
                 <div className="flex gap-1.5">
                   {[0.75, 1.0, 1.25, 1.5, 2.0].map((s) => (
                     <button key={s} onClick={() => setSpeed(s)}
-                      className={cn('flex-1 rounded-lg border py-1.5 text-xs font-medium transition-all bg-transparent',
+                      className={cn('flex-1 rounded-lg border border-border py-1.5 text-xs font-medium transition-all bg-transparent',
                         Math.abs(speed - s) < 0.01 ? activeCls : `${hoverCls} opacity-70`)}>
                       {s}×
                     </button>
@@ -389,14 +399,14 @@ export function ReadAloudPanel({
                 <button
                   onClick={() => setContinuousPlay(!continuousPlay)}
                   className={cn(
-                    'w-full flex items-center justify-between rounded-lg border px-3 py-2.5 transition-all bg-transparent',
+                    'w-full flex items-center justify-between rounded-lg border border-border px-3 py-2.5 transition-all bg-transparent',
                     continuousPlay ? activeCls : `${hoverCls} opacity-80`,
                   )}>
                   <span className="text-xs font-medium">
                     {continuousPlay ? '⏭ Tự động sang chương kế tiếp' : '⏸ Dừng khi hết chương hiện tại'}
                   </span>
                   <span className={cn('text-[10px] px-1.5 py-0.5 rounded font-semibold',
-                    continuousPlay ? 'bg-white/20' : 'bg-black/10')}>
+                    continuousPlay ? 'bg-primary-foreground/25' : 'bg-foreground/10')}>
                     {continuousPlay ? 'BẬT' : 'TẮT'}
                   </span>
                 </button>
@@ -406,7 +416,7 @@ export function ReadAloudPanel({
                   giữa các chương. Vị trí đọc cũng tự cập nhật.
                 </p>
                 {pregenStatus && (
-                  <div className={cn('mt-2 rounded-md border bg-muted/30 px-2 py-1.5 text-[10px] flex items-center gap-1.5', mutedCls)}>
+                  <div className={cn('mt-2 rounded-md border border-border bg-muted/30 px-2 py-1.5 text-[10px] flex items-center gap-1.5', mutedCls)}>
                     <Loader2 className="h-3 w-3 animate-spin text-primary" />
                     <span>
                       Đang chuẩn bị chương kế ({pregenStatus.done}/{pregenStatus.total} đoạn)
@@ -439,14 +449,14 @@ export function ReadAloudPanel({
                 <button
                   onClick={() => setUseAIEmotion(!useAIEmotion)}
                   className={cn(
-                    'w-full flex items-center justify-between rounded-lg border px-3 py-2.5 transition-all bg-transparent',
+                    'w-full flex items-center justify-between rounded-lg border border-border px-3 py-2.5 transition-all bg-transparent',
                     useAIEmotion ? activeCls : `${hoverCls} opacity-80`,
                   )}>
                   <span className="text-xs font-medium">
                     {useAIEmotion ? '✨ Tự động theo nội dung' : '➖ Giọng đều'}
                   </span>
                   <span className={cn('text-[10px] px-1.5 py-0.5 rounded font-semibold',
-                    useAIEmotion ? 'bg-white/20' : 'bg-black/10')}>
+                    useAIEmotion ? 'bg-primary-foreground/25' : 'bg-foreground/10')}>
                     {useAIEmotion ? 'BẬT' : 'TẮT'}
                   </span>
                 </button>
@@ -458,10 +468,10 @@ export function ReadAloudPanel({
               </section>
 
               {/* Voice library link */}
-              <section className={cn('pt-3 border-t', borderCls)}>
+              <section className={cn('pt-3 border-t border-border', borderCls)}>
                 <button
                   onClick={onOpenVoiceLibrary}
-                  className={cn('w-full flex items-center justify-between rounded-lg border px-3 py-2.5 transition-all bg-transparent', hoverCls)}>
+                  className={cn('w-full flex items-center justify-between rounded-lg border border-border px-3 py-2.5 transition-all bg-transparent', hoverCls)}>
                   <span className="text-xs font-medium flex items-center gap-1.5">
                     <Upload className="h-3.5 w-3.5" /> Thư viện giọng đọc
                   </span>
@@ -476,22 +486,36 @@ export function ReadAloudPanel({
         </div>
 
         {/* Footer — action bar */}
-        <footer className={cn('border-t shrink-0 px-4 py-3 space-y-2', borderCls)}>
+        <footer className={cn('border-t border-border shrink-0 px-4 py-3 space-y-2', borderCls)}>
           {/* TTS status line */}
           {isPlaying && ttsParagraphs.length > 0 && (
-            <div className="flex items-center gap-2 text-[11px]">
-              <Volume2 className="h-3.5 w-3.5 shrink-0 opacity-70" />
-              <div className="flex-1 min-w-0">
-                <p className="truncate">
-                  Đoạn {ttsIndex + 1} / {ttsParagraphs.length}
-                  {ttsCurrentSpeaker && (
-                    <span className="ml-1 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-primary/15 text-primary text-[10px] font-medium">
-                      🗣 {ttsCurrentSpeaker}
-                    </span>
-                  )}
-                </p>
-                {ttsEmotionLabel && <p className={cn('text-[10px] truncate', mutedCls)}>{ttsEmotionLabel}</p>}
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2 text-[11px]">
+                <Volume2 className="h-3.5 w-3.5 shrink-0 opacity-70" />
+                <div className="flex-1 min-w-0">
+                  <p className="truncate">
+                    Đoạn {ttsIndex + 1} / {ttsParagraphs.length} · {progressPct}%
+                    {ttsCurrentSpeaker && (
+                      <span className="ml-1 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-primary/15 text-primary text-[10px] font-medium">
+                        {ttsCurrentSpeaker}
+                      </span>
+                    )}
+                  </p>
+                  {ttsEmotionLabel && <p className={cn('text-[10px] truncate', mutedCls)}>{ttsEmotionLabel}</p>}
+                </div>
               </div>
+              <input
+                type="range"
+                min={0}
+                max={seekMax}
+                step={1}
+                value={Math.min(ttsIndex, seekMax)}
+                onChange={(e) => onSeekParagraph?.(parseInt(e.target.value, 10))}
+                disabled={!onSeekParagraph || ttsParagraphs.length < 2}
+                className="w-full h-1.5 cursor-pointer"
+                style={{ accentColor }}
+                title="Chọn đoạn để đọc"
+              />
             </div>
           )}
 
@@ -520,11 +544,30 @@ export function ReadAloudPanel({
             </div>
           )}
         </footer>
+    </>
+  );
+
+  if (embedded) {
+    return <div className={cn('flex h-full min-h-0 flex-col text-xs', themeCls)}>{content}</div>;
+  }
+
+  return (
+    <>
+      {/* Slide-in panel from right — must render BEFORE backdrop so the
+          backdrop's z-index doesn't matter (panel is later in DOM). */}
+      <aside
+        className={cn(
+          'fixed top-0 right-0 bottom-0 z-[60] w-full sm:w-[380px] shadow-2xl',
+          'flex flex-col border-l border-border transition-transform',
+          themeCls, borderCls,
+        )}
+      >
+        {content}
       </aside>
 
       {/* Backdrop — sits below the panel but above the book content */}
       <div
-        className="fixed inset-0 z-[55] bg-black/30 backdrop-blur-[2px] transition-opacity"
+        className="fixed inset-0 z-[55] bg-modal-overlay backdrop-blur-[2px] transition-opacity"
         onClick={onClose}
       />
     </>

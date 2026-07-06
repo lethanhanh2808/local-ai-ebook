@@ -19,6 +19,7 @@ import {
   Flame, Sparkles, Plus, RefreshCw, Loader2, Settings as SettingsIcon,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { EmptyState, LoadingSkeleton } from '@/components/layout/EmptyState';
 import { cn, formatBytes, formatDate } from '@/lib/utils';
@@ -82,7 +83,7 @@ export default function Dashboard() {
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 sm:py-8 space-y-6">
       {/* ── 1. Welcome bar (compact, single row) ─────────────────────────── */}
-      <section className="relative overflow-hidden rounded-2xl border bg-gradient-to-br from-primary/8 via-primary/3 to-transparent p-5 sm:p-6">
+      <section className="relative overflow-hidden rounded-2xl border border-border bg-gradient-to-br from-primary/8 via-primary/3 to-transparent p-5 sm:p-6">
         <div className="relative z-10 flex flex-col gap-4">
           {/* Top row: greeting + actions */}
           <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
@@ -237,8 +238,8 @@ export default function Dashboard() {
       </section>
 
       {/* Footer with quick section links (single row) */}
-      <footer className="border-t pt-5 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
-        <span>Ebook Manager · OMLX + VieNeu-TTS</span>
+      <footer className="border-t border-border pt-5 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
+        <span>Ebook Manager · OMLX + Vietnamese Voice</span>
         <div className="flex items-center gap-3">
           <Link href="/shelves" className="hover:text-foreground transition-colors">Shelves</Link>
           <Link href="/stats" className="hover:text-foreground transition-colors">Thống kê</Link>
@@ -287,14 +288,14 @@ function InlineStat({
 function ContinueReadingCard({ book }: { book: BookSummary }) {
   return (
     <Link href={`/library/${book.id}/read`} className="block group">
-      <div className="flex flex-col rounded-xl border bg-card overflow-hidden transition-all hover:bg-muted/30 hover:border-primary/30 h-full">
+      <Card className="flex flex-col overflow-hidden transition-all hover:bg-muted/30 hover:border-primary/30 h-full">
         {/* Cover */}
         <div className="aspect-[2/3] w-full bg-muted overflow-hidden relative">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={`/api/library/${book.id}/cover`} alt={book.title} className="h-full w-full object-cover"
             onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
           {/* Progress bar overlay */}
-          <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/30">
+          <div className="absolute bottom-0 left-0 right-0 h-1 bg-foreground/15">
             <div className="h-full bg-primary" style={{ width: `${Math.min(100, Math.max(0, book.readProgress))}%` }} />
           </div>
         </div>
@@ -306,7 +307,7 @@ function ContinueReadingCard({ book }: { book: BookSummary }) {
             <ArrowRight className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
           </div>
         </div>
-      </div>
+      </Card>
     </Link>
   );
 }
@@ -315,7 +316,7 @@ function ContinueReadingCard({ book }: { book: BookSummary }) {
 function RecentBookCard({ book }: { book: BookSummary }) {
   return (
     <Link href={`/library/${book.id}/read`} className="block group shrink-0 w-32 sm:w-auto">
-      <div className="flex flex-col rounded-lg border bg-card overflow-hidden transition-all hover:bg-muted/30 hover:border-primary/30">
+      <Card className="flex flex-col rounded-lg border overflow-hidden transition-all hover:bg-muted/30 hover:border-primary/30">
         <div className="aspect-[2/3] bg-muted overflow-hidden">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={`/api/library/${book.id}/cover`} alt={book.title} className="h-full w-full object-cover"
@@ -327,7 +328,7 @@ function RecentBookCard({ book }: { book: BookSummary }) {
             {formatDate(book.addedAt)}
           </p>
         </div>
-      </div>
+      </Card>
     </Link>
   );
 }

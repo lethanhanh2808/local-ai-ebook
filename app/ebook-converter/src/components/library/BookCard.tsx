@@ -4,6 +4,8 @@ import { useState } from 'react';
 import { Download, Trash2, BookMarked, Tag, ImagePlus, Loader2, Sparkles, Pencil, Star, Heart, BookOpen, CheckCircle2, Clock } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { useToast } from '@/components/ui/toast';
+import { Card } from '@/components/ui/card';
 import { cn, formatBytes } from '@/lib/utils';
 import Link from 'next/link';
 import { MetadataModal } from './MetadataModal';
@@ -40,6 +42,7 @@ interface BookCardProps {
 }
 
 export function BookCard({ book: initialBook, onDelete, onUpdate, onEnhanced, compact = false }: BookCardProps) {
+  const toast = useToast();
   const [book, setBook] = useState(initialBook);
   const [deleting, setDeleting] = useState(false);
   const [coverKey, setCoverKey] = useState(0);
@@ -63,11 +66,23 @@ export function BookCard({ book: initialBook, onDelete, onUpdate, onEnhanced, co
     archived: 'bg-muted/50 text-muted-foreground/60',
   };
 
-  const handleDelete = async () => {
-    if (!confirm(`Remove "${book.title}" from library?`)) return;
-    setDeleting(true);
-    await fetch(`/api/library/${book.id}`, { method: 'DELETE' });
-    onDelete(book.id);
+  const handleDelete = () => {
+    toast.confirm({
+      title: `Remove "${book.title}" from library?`,
+      confirmLabel: 'Remove',
+      destructive: true,
+      onConfirm: async () => {
+        setDeleting(true);
+        try {
+          await fetch(`/api/library/${book.id}`, { method: 'DELETE' });
+          onDelete(book.id);
+          toast.success('Removed', { description: book.title });
+        } catch (e) {
+          toast.error('Failed to remove', { description: e instanceof Error ? e.message : String(e) });
+          setDeleting(false);
+        }
+      },
+    });
   };
 
   const handleGenerateCover = async (e: React.MouseEvent) => {
@@ -83,20 +98,26 @@ export function BookCard({ book: initialBook, onDelete, onUpdate, onEnhanced, co
     }
   };
 
-  const handleEnhance = async () => {
-    if (!confirm(`AI-enhance all chapters of "${book.title}"?\nThis creates a new book entry with " - AI Edited" suffix and may take several minutes.`)) return;
-    setEnhancing(true);
-    try {
-      const res = await fetch(`/api/library/${book.id}/enhance`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-      if (!res.ok) throw new Error((await res.json()).error ?? 'Enhancement failed');
-      const newBook = await res.json() as BookSummary;
-      onEnhanced?.(newBook);
-      alert(`✓ AI-enhanced version created: "${newBook.title}"`);
-    } catch (e) {
-      alert(`Enhancement failed: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setEnhancing(false);
-    }
+  const handleEnhance = () => {
+    toast.confirm({
+      title: `AI-enhance "${book.title}"?`,
+      description: 'Creates a new book entry with " - AI Edited" suffix. May take several minutes.',
+      confirmLabel: 'Enhance',
+      onConfirm: async () => {
+        setEnhancing(true);
+        try {
+          const res = await fetch(`/api/library/${book.id}/enhance`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+          if (!res.ok) throw new Error((await res.json()).error ?? 'Enhancement failed');
+          const newBook = await res.json() as BookSummary;
+          onEnhanced?.(newBook);
+          toast.success('AI-enhanced version created', { description: newBook.title });
+        } catch (e) {
+          toast.error('Enhancement failed', { description: e instanceof Error ? e.message : String(e) });
+        } finally {
+          setEnhancing(false);
+        }
+      },
+    });
   };
 
   const handleToggleFavorite = async () => {
@@ -131,7 +152,7 @@ export function BookCard({ book: initialBook, onDelete, onUpdate, onEnhanced, co
       {showMeta && (
         <MetadataModal book={book} onClose={() => setShowMeta(false)} onSaved={handleMetaSaved} />
       )}
-      <div className={cn("group flex flex-col overflow-hidden rounded-xl border bg-card shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5", compact && "text-[10px]")}>
+      <div className={cn("group flex flex-col overflow-hidden shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5", compact && "text-[10px]")}>
         {/* Cover */}
         <div className="relative aspect-[2/3] bg-muted overflow-hidden">
           {!coverError ? (
@@ -150,7 +171,7 @@ export function BookCard({ book: initialBook, onDelete, onUpdate, onEnhanced, co
           )}
 
           {book.readProgress > 0 && (
-            <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/20">
+            <div className="absolute bottom-0 left-0 right-0 h-1 bg-foreground/15">
               <div className="h-full bg-primary transition-all" style={{ width: `${book.readProgress}%` }} />
             </div>
           )}
@@ -178,7 +199,7 @@ export function BookCard({ book: initialBook, onDelete, onUpdate, onEnhanced, co
           )}
 
           {/* Hover overlay */}
-          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/50 transition-colors flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
+          <div className="absolute inset-0 bg-modal-overlay/0 group-hover:bg-modal-overlay transition-colors flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
             <button
               onClick={handleGenerateCover}
               disabled={generatingCover || enhancing}
@@ -245,7 +266,7 @@ export function BookCard({ book: initialBook, onDelete, onUpdate, onEnhanced, co
         </div>
 
         {/* Actions */}
-        <div className="flex gap-1 border-t p-2">
+        <div className="flex gap-1 border-t border-border p-2">
           <Link
             href={`/library/${book.id}/read`}
             className="flex flex-1 items-center justify-center gap-1 rounded-md bg-primary px-2 py-1.5 text-[11px] font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
@@ -256,21 +277,21 @@ export function BookCard({ book: initialBook, onDelete, onUpdate, onEnhanced, co
             onClick={handleEnhance}
             disabled={enhancing || deleting}
             title="AI-enhance this book (creates a new entry)"
-            className="flex items-center justify-center rounded-md border px-2 py-1.5 text-[11px] font-medium hover:bg-primary/10 hover:border-primary/40 transition-colors disabled:opacity-50"
+            className="flex items-center justify-center rounded-md border border-border px-2 py-1.5 text-[11px] font-medium hover:bg-primary/10 hover:border-primary/40 transition-colors disabled:opacity-50"
           >
             {enhancing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3 text-primary" />}
           </button>
           <Link
             href={`/library/${book.id}/edit`}
             title="Edit EPUB"
-            className="flex items-center justify-center rounded-md border px-2 py-1.5 text-[11px] font-medium hover:bg-muted transition-colors"
+            className="flex items-center justify-center rounded-md border border-border px-2 py-1.5 text-[11px] font-medium hover:bg-muted transition-colors"
           >
             <Pencil className="h-3 w-3" />
           </Link>
           <a
             href={`/api/library/${book.id}/download`}
             download
-            className="flex items-center justify-center rounded-md border px-2 py-1.5 text-[11px] font-medium hover:bg-muted transition-colors"
+            className="flex items-center justify-center rounded-md border border-border px-2 py-1.5 text-[11px] font-medium hover:bg-muted transition-colors"
           >
             <Download className="h-3 w-3" />
           </a>

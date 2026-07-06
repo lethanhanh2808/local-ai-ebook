@@ -1,23 +1,83 @@
 'use client';
 // src/components/library/EbookReader.tsx
 // Professional EPUB reader: spread (two-column Apple Books) + scroll modes
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, lazy, Suspense } from 'react';
+import { createPortal } from 'react-dom';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
+import { Progress } from '@/components/ui/progress';
+import { KbdHint } from '@/components/ui/kbd-hint';
+import { Tooltip } from '@/components/ui/tooltip';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import {
   ChevronLeft, ChevronRight, List, X, Home, Settings2,
   Bookmark, BookmarkCheck, AlignLeft, Minus, Plus,
   Search, Clock, RotateCcw, Maximize2, Minimize2,
   Columns, ScrollText, Wand2, Check, Loader2, Trash2,
   Volume2, VolumeX, Play, Pause, Square, Headphones,
-  Mic, Bug,
+  Mic, Bug, Terminal, Clipboard, Copy, Activity, CheckCircle2, AlertCircle,
+  Eye, Filter, ArrowUpDown, User, ChevronDown, MoreVertical,
 } from 'lucide-react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import { VoicePanel } from './VoicePanel';
-import { AudiobookPanel } from './AudiobookPanel';
-import { ReadAloudPanel } from './ReadAloudPanel';
-import { VoiceDebugPanel } from './VoiceDebugPanel';
 import { ServiceHealth } from '@/components/status/ServiceHealth';
+import { enqueueBibleRefresh } from '@/lib/character-bible-client';
+
+// Lazy-loaded heavy panels — these are sizeable feature surfaces that most
+// readers never open. Loading on demand cuts the reader's initial JS by
+// ~150kb and surfaces the chapter list a few hundred ms sooner.
+const AudiobookPanel = lazy(() => import('./AudiobookPanel').then((m) => ({ default: m.AudiobookPanel })));
+const ReadAloudPanel  = lazy(() => import('./ReadAloudPanel').then((m) => ({ default: m.ReadAloudPanel })));
+const VoiceDebugPanel = lazy(() => import('./VoiceDebugPanel').then((m) => ({ default: m.VoiceDebugPanel })));
+
+/** Tiny fallback while a lazy panel chunk resolves. Skeleton instead of a
+ *  spinner so panel height doesn't jump when content arrives. */
+const PanelSkeleton = () => (
+  <div className="m-3 flex h-32 items-center justify-center rounded-lg border border-border bg-muted/30 text-xs text-muted-foreground animate-pulse">
+    Loading panel…
+  </div>
+);
+
+// ── TTS debug instrumentation ─────────────────────────────────────────────
+// Set `localStorage.setItem('ttsDebug', '1')` in the browser console (or
+// window.ttsDebug=true at runtime) to enable verbose read-aloud logging.
+// Off by default to avoid console spam in production; the goal is to
+// surface the silent-failure paths that produce "I clicked Play and
+// heard nothing" without an error message.
+const TTS_DEBUG = (() => {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage?.getItem('ttsDebug') === '1'
+        || (window as unknown as { ttsDebug?: boolean }).ttsDebug === true;
+  } catch {
+    return false;
+  }
+})();
+function ttsDebug(...args: unknown[]): void {
+  if (!TTS_DEBUG) return;
+  // eslint-disable-next-line no-console
+  console.log('%c[tts]', 'color:#7c3aed;font-weight:bold', ...args);
+}
+function ttsWarn(...args: unknown[]): void {
+  // Always log warnings (silent failures are the bug we're fixing).
+  // eslint-disable-next-line no-console
+  console.warn('[tts]', ...args);
+  // Surface to the user in the status bar — pick the first string arg
+  // as the headline message.  The full payload is in the console.
+  const headline = args
+    .map((a) => (typeof a === 'string' ? a : null))
+    .filter(Boolean)[0];
+  if (headline && typeof window !== 'undefined') {
+    const evt = new CustomEvent('tts:warn', { detail: { message: headline, full: args } });
+    window.dispatchEvent(evt);
+  }
+}
 
 interface Chapter { id: string; title: string; order: number; }
 export interface EbookReaderProps {
@@ -48,6 +108,59 @@ const THEMES = [
   { id: 'sepia' as Theme, label: 'Sepia', bg: '#f4ede4', text: '#3b2f20' },
   { id: 'dark'  as Theme, label: 'Dark',  bg: '#1a1a2e', text: '#e2e2e8' },
 ];
+
+// ── Reader surface tokens (UI Polish §4.3) ──────────────────────────────
+// Map `settings.theme` to token-backed Tailwind classes. Sepia has its
+// own bespoke palette because it must look distinctly warm/sepia even
+// when the surrounding app is in light or dark mode; the light + dark
+// branches reuse the `--reader-*` tokens defined in src/app/theme.css.
+//
+// The iframe chapter HTML can't see these tokens (it's a separate
+// document) — the same hex values live in
+// `src/app/api/library/[id]/chapters/[chapterId]/route.ts` and are served
+// via ?theme=. Keep both surfaces in sync when adjusting palettes.
+type ReaderSurfaceKey = 'header' | 'panel' | 'divider' | 'muted' | 'active' | 'hover' | 'input' | 'btnBorder';
+function readerSurface(theme: Theme, key: ReaderSurfaceKey): string {
+  switch (theme) {
+    case 'dark':
+      switch (key) {
+        case 'header':   return 'bg-[hsl(var(--reader-paper))]/95 border-[hsl(var(--reader-divider))] text-[hsl(var(--reader-ink))]';
+        case 'panel':    return 'bg-[hsl(var(--reader-paper))] border-[hsl(var(--reader-divider))] text-[hsl(var(--reader-ink))]';
+        case 'divider':  return 'border-[hsl(var(--reader-divider))]';
+        case 'muted':    return 'text-[hsl(var(--reader-ink-soft))]';
+        case 'active':   return 'bg-blue-900/50 text-blue-200 border-blue-700';
+        case 'hover':    return 'hover:bg-white/5';
+        case 'input':    return 'border-[#3a3a5a] bg-[#1a1a2e]';
+        case 'btnBorder':return 'hsl(var(--reader-divider))';
+      }
+      break;
+    case 'sepia':
+      switch (key) {
+        case 'header':   return 'bg-[#f0e6d3]/95 border-[#c8b89a] text-[#3b2f20]';
+        case 'panel':    return 'bg-[#ede0ce] border-[#c8b89a] text-[#3b2f20]';
+        case 'divider':  return 'border-[#c8b89a]';
+        case 'muted':    return 'text-[#8a7a65]';
+        case 'active':   return 'bg-amber-200 text-amber-900 border-amber-500';
+        case 'hover':    return 'hover:bg-amber-100/50';
+        case 'input':    return 'border-[#c8b89a] bg-[#f4ede4]';
+        case 'btnBorder':return '#c8b89a';
+      }
+      break;
+    case 'light':
+    default:
+      switch (key) {
+        case 'header':   return 'bg-white/95 border-gray-200 text-gray-900';
+        case 'panel':    return 'bg-white border-gray-200 text-gray-900';
+        case 'divider':  return 'border-gray-200';
+        case 'muted':    return 'text-gray-500';
+        case 'active':   return 'bg-blue-100 text-blue-700 border-blue-300';
+        case 'hover':    return 'hover:bg-gray-100';
+        case 'input':    return 'border-gray-200 bg-white';
+        case 'btnBorder':return '#e2e2e2';
+      }
+      break;
+  }
+}
 const FONTS = [
   { id: 'serif' as Font, sample: 'Georgia', stack: 'Georgia,serif' },
   { id: 'sans'  as Font, sample: 'Helvetica', stack: 'Inter,sans-serif' },
@@ -118,6 +231,772 @@ function estimateReadTime(total: number, current: number): string {
   return m > 0 ? `~${h}h ${m}m left` : `~${h}h left`;
 }
 
+// ── ChapterJumpMenu ──────────────────────────────────────────────────────
+// Dropdown trigger for jumping to a specific chapter when the dot grid is
+// too dense to hit precisely (books > 80 chapters). Radix typeahead
+// filters as the user types — works on touch and desktop. Renders every
+// chapter; if the count is huge (>300), use the numeric jump input in the
+// toolbar instead.
+interface ChapterJumpMenuProps {
+  chapters: Chapter[];
+  currentIdx: number;
+  onJump: (idx: number) => void;
+  mutedCls: string;
+}
+function ChapterJumpMenu({ chapters, currentIdx, onJump, mutedCls }: ChapterJumpMenuProps) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Jump to chapter (currently ${currentIdx + 1} of ${chapters.length})`}
+          className={cn(
+            'inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[10px] font-medium',
+            'border-border bg-background hover:bg-muted transition-colors',
+            mutedCls,
+          )}
+          title="Mở danh sách chương để nhảy nhanh"
+        >
+          <ChevronDown className="h-3 w-3" />
+          <span className="tabular-nums">{currentIdx + 1}/{chapters.length}</span>
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="max-h-80 overflow-auto min-w-[16rem]">
+        {chapters.map((c, idx) => (
+          <DropdownMenuItem
+            key={c.id}
+            onSelect={() => onJump(idx)}
+            className={cn(
+              'text-xs gap-2',
+              idx === currentIdx && 'bg-primary/10 text-primary font-medium',
+            )}
+          >
+            <span className="w-8 shrink-0 tabular-nums text-muted-foreground">{idx + 1}.</span>
+            <span className="truncate flex-1">{c.title || `(Chương ${idx + 1})`}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+// ── Full Analyzer: mode union + helpers ────────────────────────────────
+// Three modes the user can pick before kicking off a run. Matched against
+// the server's `AnalyzeMode` type — if you add a mode here, also add it
+// in the API route's parseMode() + the dropdown in the Wand2 split-button.
+export type AnalyzeMode = 'combine' | 'full-llm' | 'local-only';
+
+export interface AnalyzeModeOption {
+  id: AnalyzeMode;
+  /** Vietnamese short label shown in the picker. */
+  label: string;
+  /** One-line description shown under the label. */
+  desc: string;
+  /** Badge hint for the toolbar (e.g. "fast", "expensive"). */
+  hint: string;
+  /** Tailwind class for the hint badge. */
+  hintCls: string;
+}
+
+export const ANALYZE_MODES: AnalyzeModeOption[] = [
+  {
+    id: 'combine',
+    label: 'Combine',
+    desc: 'parse + regex + local fusion → LLM chỉ những đoạn unresolved',
+    hint: 'Mặc định',
+    hintCls: 'bg-blue-500/15 text-blue-700 dark:text-blue-300',
+  },
+  {
+    id: 'full-llm',
+    label: 'Full LLM',
+    desc: 'Gửi TẤT CẢ đoạn qua LLM (chậm, tốn token, chính xác nhất)',
+    hint: 'Đắt',
+    hintCls: 'bg-amber-500/15 text-amber-700 dark:text-amber-300',
+  },
+  {
+    id: 'local-only',
+    label: 'Local only',
+    desc: 'parse + regex + local fusion — bỏ qua LLM, không cần oMLX',
+    hint: 'Nhanh',
+    hintCls: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
+  },
+];
+
+// ── Full Analyzer modal: shared subcomponents ───────────────────────────
+// Color map kept here so renderLogLine + HumanLogSummary + BatchProgressCard
+// all agree on the phase → Tailwind class mapping. New phases must be
+// added in BOTH this map AND the server's step() phase union.
+const PHASE_CLASS: Record<AnalysisLogLine['phase'], string> = {
+  error:     'text-red-600 dark:text-red-400',
+  llm:       'text-amber-700 dark:text-amber-300',
+  fuse:      'text-emerald-700 dark:text-emerald-300',
+  cache:     'text-cyan-700 dark:text-cyan-300',
+  stat:      'text-emerald-800 dark:text-emerald-200 font-semibold',
+  init:      'text-slate-700 dark:text-slate-300',
+  parse:     'text-blue-700 dark:text-blue-300',
+  regex:     'text-indigo-700 dark:text-indigo-300',
+  local:     'text-purple-700 dark:text-purple-300',
+  preflight: 'text-pink-700 dark:text-pink-300',
+};
+const PHASE_BG: Record<AnalysisLogLine['phase'], string> = {
+  error:     'bg-red-500/15 text-red-600 dark:text-red-400 border-red-500/30',
+  llm:       'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30',
+  fuse:      'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30',
+  cache:     'bg-cyan-500/15 text-cyan-700 dark:text-cyan-300 border-cyan-500/30',
+  stat:      'bg-emerald-500/15 text-emerald-800 dark:text-emerald-200 border-emerald-500/40',
+  init:      'bg-muted text-muted-foreground border border-border border-border',
+  parse:     'bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30',
+  regex:     'bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border-indigo-500/30',
+  local:     'bg-purple-500/15 text-purple-700 dark:text-purple-300 border-purple-500/30',
+  preflight: 'bg-pink-500/15 text-pink-700 dark:text-pink-300 border-pink-500/30',
+};
+const PHASE_LABEL: Record<AnalysisLogLine['phase'], string> = {
+  init: 'INIT', parse: 'PARSE', regex: 'REGEX', local: 'LOCAL',
+  preflight: 'PING', llm: 'LLM', fuse: 'FUSE', cache: 'CACHE',
+  stat: 'DONE', error: 'ERROR',
+};
+const PHASE_VN: Record<AnalysisLogLine['phase'], string> = {
+  init: 'Khởi tạo', parse: 'Phân tích câu', regex: 'Regex',
+  local: 'Hội thoại local', preflight: 'Ping oMLX',
+  llm: 'LLM (oMLX)', fuse: 'Hợp nhất', cache: 'Cache',
+  stat: 'Hoàn tất', error: 'Lỗi',
+};
+
+interface AnalysisLogLine {
+  /** The formatted human-readable line (already includes [+Nms] prefix). */
+  text: string;
+  /** Pipeline phase tag — drives the color-coding in the modal. */
+  phase:
+    | 'init' | 'parse' | 'regex' | 'local' | 'preflight'
+    | 'llm' | 'fuse' | 'cache' | 'stat' | 'error';
+  /** Wall-clock milliseconds since the pipeline started. */
+  wallMs?: number;
+  /** Delta from the previous log line — useful for spotting slow gaps. */
+  sinceLast?: number;
+  /** Structured counters from the server (batch index, ETA, etc.). */
+  meta?: Record<string, unknown> | null;
+}
+
+function metaToTooltip(meta: Record<string, unknown> | null | undefined): string {
+  if (!meta) return '';
+  return Object.entries(meta)
+    .filter(([, v]) => v != null && v !== '')
+    .slice(0, 10)
+    .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
+    .join('  ');
+}
+
+function renderLogLine(line: AnalysisLogLine, idx: number, failed: boolean) {
+  return (
+    <li
+      key={idx}
+      title={metaToTooltip(line.meta) || undefined}
+      className={cn(
+        'flex gap-2 items-start whitespace-pre-wrap break-words',
+        PHASE_CLASS[line.phase],
+        failed && line.phase !== 'error' ? 'opacity-60' : '',
+      )}
+    >
+      <span
+        className="inline-block w-16 shrink-0 text-right text-slate-400 dark:text-slate-500 tabular-nums"
+        aria-label="wall time"
+      >
+        {line.wallMs != null ? `+${(line.wallMs / 1000).toFixed(1)}s` : ''}
+      </span>
+      {line.sinceLast != null && line.sinceLast >= 100 ? (
+        <span
+          className="inline-block w-14 shrink-0 text-right text-slate-400 dark:text-slate-500 tabular-nums"
+          aria-label="delta since last line"
+          title={`Δ since previous line: ${line.sinceLast}ms`}
+        >
+          Δ{line.sinceLast < 1000 ? `${line.sinceLast}ms` : `${(line.sinceLast / 1000).toFixed(1)}s`}
+        </span>
+      ) : (
+        <span className="inline-block w-14 shrink-0" aria-hidden="true" />
+      )}
+      <span
+        className={cn(
+          'inline-block w-20 shrink-0 tracking-wide text-[10px] font-semibold uppercase',
+          'rounded px-1 py-0.5 border border-border',
+          PHASE_BG[line.phase],
+        )}
+      >
+        {PHASE_LABEL[line.phase]}
+      </span>
+      <span className="flex-1 min-w-0">{line.text}</span>
+    </li>
+  );
+}
+
+function BatchProgressCard({ lines }: { lines: AnalysisLogLine[] }) {
+  const first = lines[0];
+  const last = lines[lines.length - 1];
+  const lastMeta = (last.meta ?? {}) as Record<string, unknown>;
+  const firstMeta = (first.meta ?? {}) as Record<string, unknown>;
+  const totalBatches = (lastMeta.totalBatches ?? firstMeta.totalBatches ?? 0) as number;
+  const succeeded = (lastMeta.succeeded ?? 0) as number;
+  const failedBatches = (lastMeta.failedBatches ?? 0) as number;
+  const completed = succeeded + failedBatches;
+  const pct = totalBatches > 0 ? Math.min(100, Math.round((completed / totalBatches) * 100)) : 0;
+  const wallStart = first.wallMs ?? 0;
+  const wallEnd = last.wallMs ?? 0;
+  const durMs = wallEnd - wallStart;
+  const durStr = durMs < 1000 ? `${durMs}ms` : `${(durMs / 1000).toFixed(1)}s`;
+  return (
+    <li
+      className={cn(
+        'rounded-md border border-border px-3 py-2 my-1',
+        'bg-amber-500/5 border-amber-500/30',
+      )}
+    >
+      <div className="flex items-center justify-between gap-2 mb-1.5">
+        <div className="flex items-center gap-2 min-w-0">
+          <span
+            className={cn(
+              'inline-block tracking-wide text-[10px] font-semibold uppercase rounded px-1 py-0.5 border border-border',
+              PHASE_BG.llm,
+            )}
+          >
+            LLM
+          </span>
+          <span className="text-xs font-medium text-amber-800 dark:text-amber-200">
+            {lines.length === 1
+              ? `Batch ${firstMeta.batchIndex}/${totalBatches || '?'}`
+              : `Batches ${firstMeta.batchIndex}–${lastMeta.batchIndex} / ${totalBatches || '?'}`}
+          </span>
+          <span className="text-[10px] text-slate-500 dark:text-slate-400 tabular-nums">
+            · {completed}/{totalBatches} done ({succeeded}✓ {failedBatches}✗)
+          </span>
+        </div>
+        <span className="text-[10px] text-slate-500 dark:text-slate-400 tabular-nums shrink-0">
+          +{(wallStart / 1000).toFixed(1)}s → +{(wallEnd / 1000).toFixed(1)}s · {durStr}
+        </span>
+      </div>
+      <div className="h-1.5 w-full rounded-full bg-slate-300/40 dark:bg-slate-700/40 overflow-hidden flex">
+        <div
+          className="h-full bg-emerald-500 transition-all"
+          style={{ width: `${totalBatches > 0 ? (succeeded / totalBatches) * 100 : 0}%` }}
+        />
+        {failedBatches > 0 && (
+          <div
+            className="h-full bg-red-500 transition-all"
+            style={{ width: `${(failedBatches / totalBatches) * 100}%` }}
+          />
+        )}
+      </div>
+      <div className="flex items-center justify-between mt-1">
+        <span className="text-[10px] text-slate-500 dark:text-slate-400 tabular-nums">
+          {pct}% hoàn thành
+        </span>
+        {failedBatches > 0 && (
+          <span className="text-[10px] text-red-600 dark:text-red-400">
+            ⚠ {failedBatches} batch thất bại
+          </span>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function HumanLogSummary({ lines, failed, mutedCls }: {
+  lines: AnalysisLogLine[];
+  failed: boolean;
+  mutedCls: string;
+}) {
+  const phaseMap = new Map<AnalysisLogLine['phase'], AnalysisLogLine>();
+  for (const l of lines) phaseMap.set(l.phase, l);
+  const order: AnalysisLogLine['phase'][] = [
+    'init', 'parse', 'regex', 'local', 'preflight', 'llm', 'fuse', 'cache', 'stat',
+  ];
+  const cards = order
+    .filter((p) => phaseMap.has(p))
+    .map((p) => ({ phase: p, line: phaseMap.get(p)! }));
+  if (failed) {
+    const errLine = lines.find((l) => l.phase === 'error');
+    if (errLine) cards.push({ phase: 'error', line: errLine });
+  }
+  return (
+    <div data-testid="analyzer-log-human" className="space-y-2">
+      {cards.map(({ phase, line }) => {
+        const m = (line.meta ?? {}) as Record<string, unknown>;
+        const stats: Array<[string, string]> = [];
+        if (typeof m.bookId === 'string') stats.push(['book', m.bookId.slice(0, 8)]);
+        if (typeof m.chapterId === 'string') stats.push(['chapter', m.chapterId]);
+        if (typeof m.htmlChars === 'number') stats.push(['html', `${m.htmlChars.toLocaleString()} chars`]);
+        if (typeof m.characterCount === 'number') stats.push(['nhân vật', String(m.characterCount)]);
+        if (typeof m.paragraphCount === 'number') stats.push(['đoạn', String(m.paragraphCount)]);
+        if (typeof m.sentenceCount === 'number') stats.push(['câu', String(m.sentenceCount)]);
+        if (typeof m.regexHits === 'number') stats.push(['regex hits', String(m.regexHits)]);
+        if (typeof m.resolved === 'number') stats.push(['resolved', String(m.resolved)]);
+        if (typeof m.totalParagraphs === 'number') stats.push(['total', String(m.totalParagraphs)]);
+        if (typeof m.resolvedPct === 'string') stats.push(['resolved %', m.resolvedPct]);
+        if (typeof m.unresolved === 'number') stats.push(['cần LLM', String(m.unresolved)]);
+        if (typeof m.durationMs === 'number') stats.push(['thời gian', m.durationMs < 1000 ? `${m.durationMs}ms` : `${(m.durationMs / 1000).toFixed(1)}s`]);
+        if (typeof m.reachable === 'boolean') stats.push(['oMLX', m.reachable ? 'reachable ✓' : 'UNREACHABLE ✗']);
+        if (typeof m.requested === 'number') stats.push(['LLM requested', String(m.requested)]);
+        if (typeof m.succeeded === 'number' && typeof m.totalBatches === 'number') stats.push(['LLM ok', `${m.succeeded}/${m.totalBatches}`]);
+        if (typeof m.failedBatches === 'number' && m.failedBatches > 0) stats.push(['LLM fail', String(m.failedBatches)]);
+        if (typeof m.llmDelta === 'number') stats.push(['LLM added', m.llmDelta > 0 ? `+${m.llmDelta}` : String(m.llmDelta)]);
+        if (typeof m.persistedRows === 'number') stats.push(['lưu cache', `${m.persistedRows} dòng`]);
+        if (typeof m.totalDurationMs === 'number') stats.push(['tổng', m.totalDurationMs < 1000 ? `${m.totalDurationMs}ms` : `${(m.totalDurationMs / 1000).toFixed(1)}s`]);
+        return (
+          <div
+            key={phase}
+            className={cn(
+              'rounded-md border border-border px-3 py-2',
+              PHASE_BG[phase],
+              phase === 'error' ? 'border-red-500/50' : '',
+            )}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="inline-block tracking-wide text-[10px] font-semibold uppercase rounded px-1.5 py-0.5 border border-border border-current/30">
+                  {PHASE_LABEL[phase]}
+                </span>
+                <span className="text-sm font-medium truncate">{PHASE_VN[phase]}</span>
+              </div>
+              {line.wallMs != null && (
+                <span className={cn('text-[10px] tabular-nums shrink-0', mutedCls)}>
+                  +{(line.wallMs / 1000).toFixed(1)}s
+                </span>
+              )}
+            </div>
+            <div className="mt-1 text-xs leading-relaxed">{line.text}</div>
+            {stats.length > 0 && (
+              <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] tabular-nums">
+                {stats.map(([k, v]) => (
+                  <span key={k} className="inline-flex items-center gap-1">
+                    <span className="opacity-60">{k}:</span>
+                    <span className="font-medium">{v}</span>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Tiny client-side paragraph splitter ─────────────────────────────────
+// Used only as a fallback for the attribution-debug modal when the chapter
+// API doesn't return the structured `paragraphs[]` field (raw HTML mode).
+// Matches the server's sliceParagraphs() closely enough that paragraph
+// indices line up with the attribution map; small differences are
+// tolerable because the modal is for inspection, not as the source of truth.
+function clientSplitParagraphs(html: string): string[] {
+  // Strip block tags into newlines so each becomes a paragraph candidate.
+  const withBreaks = html
+    .replace(/<\s*\/?\s*(p|div|h[1-6]|li|blockquote|br|hr)\s*\/?\s*>/gi, '\n')
+    .replace(/<br\s*\/?\s*>/gi, '\n');
+  // Strip remaining tags.
+  const textOnly = withBreaks.replace(/<[^>]+>/g, ' ');
+  // Split on blank lines OR single newlines for tight layouts.
+  const blocks = textOnly.split(/\n+/).map((s) => s.replace(/\s+/g, ' ').trim()).filter((s) => s.length > 0);
+  return blocks;
+}
+
+// ── Hoisted types shared with AttributionDebugModal ────────────────────
+export interface AttributionRow {
+  speaker: string | null;
+  confidence: number;
+  source: string;
+}
+export type AttributionMap = Record<number, AttributionRow>;
+
+export interface AnalysisResult {
+  chapterId: string;
+  chapterTitle: string;
+  mode: AnalyzeMode;
+  stats: {
+    parserHits: number; regexHits: number; llmHits: number;
+    conversationHits: number; sourceDrift: number;
+    defaults: number; totalParagraphs: number;
+    llmFailures?: number; llmRequested?: number;
+  };
+  // VnCoreNLP parser removed 2026-07-05 — routes still return
+  // `parserReachable: false` for backwards compat, but this UI no
+  // longer tracks it.
+  omlxReachable: boolean;
+  durationMs: number;
+  llmDurationMs: number;
+  log: AnalysisLogLine[];
+  attribution?: AttributionMap;
+  layers?: {
+    parser: AttributionMap;
+    regex: AttributionMap;
+    local: AttributionMap;
+    llm: AttributionMap;
+  };
+  paragraphTexts?: string[];
+  failed: boolean;
+  errorMsg?: string;
+  running?: boolean;
+}
+
+// ── AttributionDebugModal ──────────────────────────────────────────────
+// Shows the per-paragraph result of a Full Analyzer run in a scrollable,
+// filterable table. Each row has: paragraph index, text preview, assigned
+// speaker, confidence, source (parser/regex/llm/conversation/default).
+//
+// Distinct from `VoiceDebugPanel`, which only surfaces voice-map resolution
+// (paragraph → voice name → voice-id). This one is the upstream truth:
+// "what did the analyzer decide, per paragraph?"
+//
+// Opens automatically after a successful Full Analyzer run, and is also
+// reachable via the "Xem gán vai" button in the analyzer modal footer.
+//
+// Filters:
+//   • Source   — show only rows from a given evidence layer
+//   • Speaker  — show only rows assigned to a specific character
+//   • Search   — substring match against paragraph text
+//
+// Sorts: by paragraph index (default) or by confidence (asc/desc).
+function AttributionDebugModal(props: {
+  open: boolean;
+  onClose: () => void;
+  data: AnalysisResult | null;
+  paragraphs: string[];
+  /** Optional click handler: jump to the paragraph in the reader. */
+  onJumpToParagraph?: (paragraphIndex: number) => void;
+  mutedCls: string;
+  dividerCls: string;
+  panelCls: string;
+  hoverCls: string;
+  activeCls: string;
+}) {
+  const { open, onClose, data, paragraphs, onJumpToParagraph, mutedCls, dividerCls, panelCls, hoverCls } = props;
+  const [sourceFilter, setSourceFilter] = useState<'all' | string>('all');
+  const [speakerFilter, setSpeakerFilter] = useState<'all' | string>('all');
+  const [textQuery, setTextQuery] = useState('');
+  const [sortBy, setSortBy] = useState<'paragraph' | 'confidence-asc' | 'confidence-desc'>('paragraph');
+
+  // Reset filters whenever a new result comes in.
+  useEffect(() => {
+    if (open) {
+      setSourceFilter('all');
+      setSpeakerFilter('all');
+      setTextQuery('');
+      setSortBy('paragraph');
+    }
+  }, [open, data?.chapterId, data?.durationMs]);
+
+  // ESC closes the modal.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  if (!data) return null;
+
+  // The server ships `attribution` / `layers` with STRING keys (JSON object
+  // keys are always strings, even when the original TS layer typed them as
+  // numbers). Look up by `String(i)` rather than `[i]`.
+  const lookup = <T,>(m: Record<number, T> | undefined, i: number): T | undefined => {
+    if (!m) return undefined;
+    // Cast through `unknown` — the TS type lies here because JSON keys
+    // are always strings; both the server and this client serialize
+    // paragraph indices via JSON, so the wire shape is `Record<string,T>`.
+    return (m as unknown as Record<string, T>)[String(i)];
+  };
+
+  // Build the row set: one entry per paragraph index (0..total-1), even
+  // if no attribution row exists for it (those show as "—" / default).
+  const totalParagraphs = data.stats.totalParagraphs || paragraphs.length || 0;
+  const rows: Array<{
+    idx: number;
+    text: string;
+    finalSpeaker: string | null;
+    finalConfidence: number;
+    finalSource: string;
+    // Per-layer answer for the "show evidence" toggle.
+    parser: string | null;
+    regex: string | null;
+    local: string | null;
+    llm: string | null;
+  }> = [];
+  for (let i = 0; i < totalParagraphs; i++) {
+    const finalRow  = lookup(data.attribution, i);
+    const parserRow = lookup(data.layers?.parser, i);
+    const regexRow  = lookup(data.layers?.regex, i);
+    const localRow  = lookup(data.layers?.local, i);
+    const llmRow    = lookup(data.layers?.llm, i);
+    rows.push({
+      idx: i,
+      text: paragraphs[i] ?? `(${i})`,
+      finalSpeaker: finalRow?.speaker ?? null,
+      finalConfidence: finalRow?.confidence ?? 0,
+      finalSource: finalRow?.source ?? 'default',
+      parser: parserRow?.speaker ?? null,
+      regex: regexRow?.speaker ?? null,
+      local: localRow?.speaker ?? null,
+      llm: llmRow?.speaker ?? null,
+    });
+  }
+
+  // Collect unique speakers for the dropdown (from final attribution + layers).
+  const speakerSet = new Set<string>();
+  for (const r of rows) {
+    if (r.finalSpeaker) speakerSet.add(r.finalSpeaker);
+    for (const s of [r.parser, r.regex, r.local, r.llm]) {
+      if (s) speakerSet.add(s);
+    }
+  }
+  const speakers = Array.from(speakerSet).sort((a, b) => a.localeCompare(b));
+
+  // Filter.
+  const filtered = rows.filter((r) => {
+    if (sourceFilter !== 'all' && r.finalSource !== sourceFilter) return false;
+    if (speakerFilter !== 'all' && r.finalSpeaker !== speakerFilter) return false;
+    if (textQuery) {
+      const q = textQuery.toLowerCase();
+      if (!r.text.toLowerCase().includes(q)) return false;
+    }
+    return true;
+  });
+  // Sort.
+  if (sortBy === 'confidence-asc') {
+    filtered.sort((a, b) => a.finalConfidence - b.finalConfidence);
+  } else if (sortBy === 'confidence-desc') {
+    filtered.sort((a, b) => b.finalConfidence - a.finalConfidence);
+  } else {
+    filtered.sort((a, b) => a.idx - b.idx);
+  }
+
+  // Source counts (for the filter dropdown labels).
+  const sourceCounts: Record<string, number> = {};
+  for (const r of rows) sourceCounts[r.finalSource] = (sourceCounts[r.finalSource] ?? 0) + 1;
+
+  // Speaker counts.
+  const speakerCounts: Record<string, number> = {};
+  for (const r of rows) {
+    if (r.finalSpeaker) speakerCounts[r.finalSpeaker] = (speakerCounts[r.finalSpeaker] ?? 0) + 1;
+  }
+
+  const SOURCE_COLOR: Record<string, string> = {
+    parser:       'bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30',
+    regex:        'bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border-indigo-500/30',
+    conversation: 'bg-purple-500/15 text-purple-700 dark:text-purple-300 border-purple-500/30',
+    llm:          'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30',
+    default:      'bg-muted text-muted-foreground border border-border border-border',
+  };
+
+  return (
+    <div
+      data-testid="attribution-debug-modal"
+      // Right-side slide-over panel (was a centered modal with a full-screen
+      // backdrop, but that hid the Voice assignment debug panel on the
+      // left). No backdrop now — both side panels stay visible at the same
+      // time after a Full Analyzer run. Slides in from the right.
+      className={cn(
+        'fixed inset-y-0 right-0 z-[60] flex flex-col w-[min(640px,55vw)] max-w-full h-full shadow-2xl border-l overflow-hidden transition-transform duration-200 ease-in-out',
+        panelCls,
+        open ? 'translate-x-0' : 'translate-x-full',
+      )}
+      onClick={(e) => e.stopPropagation()}
+    >
+        {/* Header */}
+        <div className={cn('flex items-center justify-between px-5 py-3 border-b shrink-0', dividerCls)}>
+          <div className="flex items-center gap-2 min-w-0">
+            <Eye className="h-4 w-4 text-primary shrink-0" />
+            <h3 className="font-semibold text-sm truncate">
+              Attribution Debug — {data.chapterTitle ?? data.chapterId}
+            </h3>
+            <span className={cn('text-[11px] tabular-nums shrink-0', mutedCls)}>
+              {filtered.length}/{rows.length} đoạn
+            </span>
+            <span className={cn('text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border border-border shrink-0', SOURCE_COLOR[data.mode] ?? SOURCE_COLOR.default)}>
+              {data.mode}
+            </span>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close attribution debug modal"
+            className={cn('rounded p-1', hoverCls)}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Filter bar */}
+        <div className={cn('flex flex-wrap items-center gap-2 px-5 py-2 border-b text-xs shrink-0', dividerCls)}>
+          <Filter className="h-3.5 w-3.5 opacity-60" />
+          {/* Source filter */}
+          <select
+            value={sourceFilter}
+            onChange={(e) => setSourceFilter(e.target.value)}
+            className={cn('rounded border border-border px-2 py-1 text-[11px]', dividerCls)}
+            aria-label="Filter by source"
+          >
+            <option value="all">Source: tất cả ({rows.length})</option>
+            {Object.entries(sourceCounts)
+              .sort((a, b) => b[1] - a[1])
+              .map(([src, count]) => (
+                <option key={src} value={src}>{src} ({count})</option>
+              ))}
+          </select>
+          {/* Speaker filter */}
+          <select
+            value={speakerFilter}
+            onChange={(e) => setSpeakerFilter(e.target.value)}
+            className={cn('rounded border border-border px-2 py-1 text-[11px]', dividerCls)}
+            aria-label="Filter by speaker"
+          >
+            <option value="all">Speaker: tất cả</option>
+            {speakers.map((s) => (
+              <option key={s} value={s}>
+                {s} ({speakerCounts[s] ?? 0})
+              </option>
+            ))}
+          </select>
+          {/* Text search */}
+          <div className="relative flex-1 min-w-[160px]">
+            <Search className="h-3 w-3 absolute left-2 top-1/2 -translate-y-1/2 opacity-50" />
+            <input
+              type="search"
+              value={textQuery}
+              onChange={(e) => setTextQuery(e.target.value)}
+              placeholder="Tìm trong text đoạn…"
+              className={cn('w-full rounded border border-border pl-7 pr-2 py-1 text-[11px]', dividerCls)}
+              aria-label="Search paragraph text"
+            />
+          </div>
+          {/* Sort */}
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+            className={cn('rounded border border-border px-2 py-1 text-[11px]', dividerCls)}
+            aria-label="Sort by"
+          >
+            <option value="paragraph">Sort: ¶ index</option>
+            <option value="confidence-desc">Sort: confidence ↓</option>
+            <option value="confidence-asc">Sort: confidence ↑</option>
+          </select>
+        </div>
+
+        {/* Table */}
+        <div className="flex-1 min-h-0 overflow-auto">
+          {filtered.length === 0 ? (
+            <div className={cn('p-8 text-center text-sm', mutedCls)}>
+              Không có đoạn nào khớp filter.
+            </div>
+          ) : (
+            <table className="w-full text-xs">
+              <thead className={cn('sticky top-0 z-10', dividerCls, panelCls)}>
+                <tr className="text-[10px] uppercase tracking-wide">
+                  <th className="text-right px-3 py-2 w-12 font-medium">¶</th>
+                  <th className="text-left px-3 py-2 font-medium">Đoạn văn</th>
+                  <th className="text-left px-3 py-2 w-44 font-medium">Speaker</th>
+                  <th className="text-right px-3 py-2 w-20 font-medium">Conf</th>
+                  <th className="text-left px-3 py-2 w-28 font-medium">Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((r) => (
+                  <tr
+                    key={r.idx}
+                    className={cn(
+                      'border-b',
+                      dividerCls,
+                      r.finalSpeaker === null ? 'opacity-60' : '',
+                      'hover:bg-muted/30',
+                      onJumpToParagraph ? 'cursor-pointer' : '',
+                    )}
+                    onClick={() => onJumpToParagraph?.(r.idx)}
+                    title={onJumpToParagraph ? `Click để nhảy tới đoạn ${r.idx}` : undefined}
+                  >
+                    <td className="text-right px-3 py-1.5 tabular-nums align-top text-slate-500">
+                      {r.idx}
+                    </td>
+                    <td className="px-3 py-1.5 align-top">
+                      <div className={cn('line-clamp-2 leading-relaxed', mutedCls)}>
+                        {r.text}
+                      </div>
+                      {/* Per-layer evidence — collapsed inline to keep the
+                          row scannable. Click to expand? Keep simple for
+                          now: show as small badges under the text. */}
+                      {(r.parser || r.regex || r.local || r.llm) && (
+                        <div className="mt-1 flex flex-wrap gap-1 text-[9px]">
+                          {r.parser && (
+                            <span className="px-1 rounded bg-blue-500/10 text-blue-700 dark:text-blue-300">
+                              parse: {r.parser}
+                            </span>
+                          )}
+                          {r.regex && (
+                            <span className="px-1 rounded bg-indigo-500/10 text-indigo-700 dark:text-indigo-300">
+                              regex: {r.regex}
+                            </span>
+                          )}
+                          {r.local && (
+                            <span className="px-1 rounded bg-purple-500/10 text-purple-700 dark:text-purple-300">
+                              local: {r.local}
+                            </span>
+                          )}
+                          {r.llm && (
+                            <span className="px-1 rounded bg-amber-500/10 text-amber-700 dark:text-amber-300">
+                              llm: {r.llm}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-3 py-1.5 align-top">
+                      {r.finalSpeaker
+                        ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-medium">
+                            <User className="h-3 w-3 opacity-60" />
+                            {r.finalSpeaker}
+                          </span>
+                        )
+                        : <span className={cn('text-[11px] italic', mutedCls)}>(no speaker — default voice)</span>}
+                    </td>
+                    <td className="text-right px-3 py-1.5 tabular-nums align-top">
+                      {r.finalConfidence > 0
+                        ? `${(r.finalConfidence * 100).toFixed(0)}%`
+                        : '—'}
+                    </td>
+                    <td className="px-3 py-1.5 align-top">
+                      <span
+                        className={cn(
+                          'inline-block px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wide border border-border',
+                          SOURCE_COLOR[r.finalSource] ?? SOURCE_COLOR.default,
+                        )}
+                      >
+                        {r.finalSource}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Footer with summary */}
+        <div className={cn('flex items-center justify-between gap-2 px-5 py-2 border-t text-[11px] shrink-0', dividerCls)}>
+          <div className={cn('flex flex-wrap gap-x-3', mutedCls)}>
+            {Object.entries(sourceCounts)
+              .sort((a, b) => b[1] - a[1])
+              .map(([src, count]) => (
+                <span key={src} className="inline-flex items-center gap-1">
+                  <span className={cn('inline-block w-2 h-2 rounded-sm', SOURCE_COLOR[src]?.split(' ')[0] ?? 'bg-muted-foreground')} />
+                  <span>{src}: {count}</span>
+                </span>
+              ))}
+          </div>
+          <span className={cn('tabular-nums', mutedCls)}>
+            {data.durationMs ? `${(data.durationMs / 1000).toFixed(1)}s total` : ''}
+          </span>
+        </div>
+    </div>
+  );
+}
+
 export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress = 0 }: EbookReaderProps) {
   const [chapters, setChapters]   = useState<Chapter[]>([]);
   const [currentIdx, setCurrentIdx] = useState(0);
@@ -134,6 +1013,53 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   // logic (speaker = wrong) or the voice map (speaker = right but voiceName
   // resolves wrong).
   const [voiceDebugOpen, setVoiceDebugOpen] = useState(false);
+  // Attribution debug modal: shows per-paragraph what role was assigned
+  // (speaker + confidence + source). Distinct from voiceDebugOpen, which
+  // only shows the voice-map resolution. Auto-opens after a successful
+  // Full Analyzer run so the user can immediately inspect the result.
+  const [attributionDebugOpen, setAttributionDebugOpen] = useState(false);
+  // Bumped every time the in-memory attribution cache is updated by a
+  // Full Analyzer run. Passed to `VoiceDebugPanel` as a useMemo-dep so
+  // the panel recomputes its rows when fresh attribution arrives — a ref
+  // mutation alone wouldn't trigger a re-render.
+  const [attributionRefreshTick, setAttributionRefreshTick] = useState(0);
+  // Mode picker state — what the user picked for the next Full Analyzer
+  // run. Persists to localStorage so the choice survives reloads.
+  const ANALYZER_MODE_KEY = 'analyzer-mode';
+  const [analyzerMode, setAnalyzerMode] = useState<AnalyzeMode>('combine');
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(ANALYZER_MODE_KEY);
+      if (raw === 'combine' || raw === 'full-llm' || raw === 'local-only') setAnalyzerMode(raw);
+    } catch { /* */ }
+  }, []);
+  const setAnalyzerModePersist = (m: AnalyzeMode) => {
+    setAnalyzerMode(m);
+    try { window.localStorage.setItem(ANALYZER_MODE_KEY, m); } catch { /* */ }
+  };
+  // Whether the dropdown next to the Wand2 button is open. Closes on
+  // outside click + ESC + after a mode is picked.
+  const [analyzerModePickerOpen, setAnalyzerModePickerOpen] = useState(false);
+  const analyzerModeBtnRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!analyzerModePickerOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (!analyzerModeBtnRef.current) return;
+      if (!analyzerModeBtnRef.current.contains(e.target as Node)) {
+        setAnalyzerModePickerOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setAnalyzerModePickerOpen(false);
+    };
+    document.addEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [analyzerModePickerOpen]);
   const [fullscreen, setFullscreen] = useState(false);
   const [iframeLoading, setIframeLoading] = useState(false);
   // Spread-mode page tracking
@@ -148,7 +1074,10 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   const [wmSelected, setWmSelected] = useState<Set<number>>(new Set());
   // Audiobook panel (voice management + pre-generation)
   const [abOpen, setAbOpen] = useState(false);
-  const [abTab, setAbTab] = useState<'audiobook' | 'voices'>('audiobook');
+  const [abTab, setAbTab] = useState<'readAloud' | 'audiobook' | 'voices' | 'characters'>('readAloud');
+  // Keyboard shortcuts overlay (UI Polish §5.3) — opened by pressing
+  // '?' anywhere in the reader. Mirrors the legend shown in tooltips.
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -162,7 +1091,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     isCustom?: boolean;
   }
 
-  // ── VieNeu-TTS built-in voices (Vietnamese-native, 48 kHz) ─────────────
+  // ── Vietnamese Voice built-in voices (VieNeu-TTS under the hood, 48 kHz) ─────
   const VIENEU_VOICES: TtsVoice[] = [
     { id: 'Ngọc Linh', name: 'Ngọc Linh (Nữ — trẻ, trong trẻo)' },
     { id: 'Ngọc Lan', name: 'Ngọc Lan (Nữ — trưởng thành, ấm áp)' },
@@ -178,6 +1107,10 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
 
   // Default voice (centre of the spectrum — easy to listen to)
   const [ttsState, setTtsState]           = useState<TtsState>('idle');
+  // Last read-aloud warning surfaced as a chip in the status bar so a
+  // non-developer can see "why did my play button do nothing" without
+  // opening DevTools. Cleared automatically on each successful /api/tts.
+  const [ttsLastError, setTtsLastError]   = useState<string | null>(null);
   const [ttsParagraphs, setTtsParagraphs] = useState<string[]>([]);
   const [ttsIndex, setTtsIndex]           = useState(0);
   const [ttsSpeed, setTtsSpeed]           = useState(1.0);
@@ -195,15 +1128,48 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   const ttsIsAdvancingRef = useRef(false);   // suppresses the stopTts in the chapter-change effect
   const chapterParagraphsRef = useRef<Map<string, string[]>>(new Map());  // chapterId → paragraphs
   const prefetchCacheRef = useRef<Map<string, Map<string, Promise<Blob>>>>(new Map()); // chapterId → request key → Promise<Blob>
-  // VnCoreNLP / regex / LLM per-paragraph attribution map keyed by chapterId.
+  // Regex / LLM per-paragraph attribution map keyed by chapterId.
+  // (VnCoreNLP parser removed 2026-07-05 — the map's `source` field
+  //  no longer carries a "parser" value; it's regex / conversation /
+  //  llm / default now.)
   // Fetched lazily by loadChapterAttribution() so we don't slow down the
   // initial chapter paint. detectSpeaker() consults this first and only
   // falls back to the local 6-pass regex when the map has no entry.
   const chapterAttributionRef = useRef<
     Map<string, {
       attribution: Record<number, { speaker: string | null; confidence: number; source: string }>;
+      /** Per-layer per-paragraph maps from the most recent Full Analyzer
+       *  run. VoiceDebugPanel reads these to render "regex:/local:/llm:"
+       *  chips next to each paragraph — same evidence the analyzer modal
+       *  shows. The `parser` layer is always empty since VnCoreNLP was
+       *  removed 2026-07-05. */
+      layers?: {
+        parser: Record<number, { speaker: string | null; confidence: number; source: string }>;
+        regex: Record<number, { speaker: string | null; confidence: number; source: string }>;
+        local: Record<number, { speaker: string | null; confidence: number; source: string }>;
+        llm: Record<number, { speaker: string | null; confidence: number; source: string }>;
+      };
+      /** Paragraph texts from the most recent analyzer run, indexed by
+       *  paragraph index. VoiceDebugPanel prefers these over `ttsParagraphs`
+       *  (which only populates once TTS starts) so the panel can render
+       *  rows immediately after a Full Analyzer, before the user hits
+       *  "Read aloud". Set at the same time as `attribution` — same
+       *  freshness semantics. */
+      paragraphTexts?: Record<number, string>;
       fromCache: boolean;
-      parserReachable: boolean;
+      // VnCoreNLP parser removed 2026-07-05 — API still returns
+      // `parserReachable: false` for backwards compat, this ref ignores it.
+      crossChapter?: {
+        seedApplied: boolean;
+        seedReason: 'applied' | 'no-row' | 'stale-chapter' | 'version-mismatch' | 'empty';
+        seedFromChapterIndex: number | null;
+        seedLastSpeaker: string | null;
+        persistedAt: number | null;
+      };
+      // G4: novel proper-noun candidates detected across the chapter.
+      // Surfaced in VoiceDebugPanel so the user can register them
+      // before they accumulate as unresolved-actor rows.
+      potentialNewCharacters?: string[];
     }>
   >(new Map());
   const chapterAttributionInFlightRef = useRef<Set<string>>(new Set());
@@ -214,16 +1180,279 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       regexHits: number;
       llmHits: number;
       conversationHits: number;
+      sourceDrift?: number;
       defaults: number;
       fromCache: boolean;
-      parserReachable: boolean;
+      // VnCoreNLP parser removed 2026-07-05 — API still returns
+      // `parserReachable: false` for backwards compat, this UI ignores it.
       omlxReachable: boolean;
     } | null>(null);
-  // ── Full-analysis (parser + regex + LLM) state ─────────────────────
+  // ── Full-analysis (regex + LLM) state ──────────────────────────────
+  // (VnCoreNLP parser removed 2026-07-05 — pipeline is now
+  //  regex → conversation-fusion → optional LLM.)
   // Set by the Wand2 toolbar button. Drives the in-flight spinner and the
   // progress hint. Reset to null when the chapter changes.
   const [analysisInFlight, setAnalysisInFlight] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState<string | null>(null);
+  // Full Analyzer result modal: holds the stats + per-step log returned by
+  // /api/library/.../attribute/analyze. Opened after a successful run.
+  // Non-null → modal visible.
+  // (AnalysisLogLine is hoisted to module scope above so the helper
+  // subcomponents PHASE_CLASS / renderLogLine / BatchProgressCard /
+  // HumanLogSummary can share the type.)
+  // NOTE: AttributionRow / AttributionMap / AnalysisResult are hoisted to
+  // module scope above so the AttributionDebugModal can share them.
+  const [analysisModal, setAnalysisModal] = useState<AnalysisResult | null>(null);
+  const [logCopied, setLogCopied] = useState(false);
+  // 'verbose' = every line shown as-is; 'grouped' = collapse adjacent batch
+  // events into a single progress card; 'human' = summarize the whole run
+  // into a small timeline of phase badges + key numbers. Persists to
+  // localStorage so the user's preference survives a reload.
+  const ANALYZER_LOG_MODE_KEY = 'analyzer-log-mode';
+  const [logMode, setLogMode] = useState<'verbose' | 'grouped' | 'human'>('grouped');
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(ANALYZER_LOG_MODE_KEY);
+      if (raw === 'verbose' || raw === 'grouped' || raw === 'human') setLogMode(raw);
+    } catch { /* */ }
+  }, []);
+  const setLogModePersist = (m: 'verbose' | 'grouped' | 'human') => {
+    setLogMode(m);
+    try { window.localStorage.setItem(ANALYZER_LOG_MODE_KEY, m); } catch { /* */ }
+  };
+  const analysisLogRef = useRef<HTMLOListElement | null>(null);
+  // "Follow tail" toggle: when on, the analyzer log auto-scrolls to the latest
+  // line on every streaming update. When off, the user's scroll position is
+  // preserved so they can read older lines without being yanked to the bottom.
+  // Persisted to localStorage so the choice survives reloads.
+  const ANALYZER_AUTO_SCROLL_KEY = 'analyzer-auto-scroll';
+  const [autoScrollLog, setAutoScrollLog] = useState<boolean>(true);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(ANALYZER_AUTO_SCROLL_KEY);
+      if (raw === '0' || raw === 'false') setAutoScrollLog(false);
+    } catch { /* */ }
+  }, []);
+  const setAutoScrollLogPersist = (next: boolean) => {
+    setAutoScrollLog(next);
+    try { window.localStorage.setItem(ANALYZER_AUTO_SCROLL_KEY, next ? '1' : '0'); } catch { /* */ }
+  };
+  // AbortController for the in-flight SSE fetch — lets the user cancel by
+  // closing the modal / clicking the close button / pressing ESC mid-run
+  // rather than waiting 60-180s for the server to finish.
+  const analysisAbortRef = useRef<AbortController | null>(null);
+  // ── Resizable panel width ─────────────────────────────────────────────
+  // Default bumped from 26rem (≈416px) to 44rem (≈704px) so the long batch
+  // lines ("Batch 12/60 ✓ success · [44,45,46,47] · 18234ms · 12/60 done
+  // (12✓ 0✗) · ETA ~88s") don't wrap awkwardly. User can drag the left edge
+  // to make it narrower (down to 24rem) or wider (up to 80vw). Persists to
+  // localStorage so the choice sticks across reloads.
+  const ANALYZER_PANEL_WIDTH_KEY = 'analyzer-panel-width-px';
+  const ANALYZER_PANEL_DEFAULT_PX = 704;       // 44rem
+  const ANALYZER_PANEL_MIN_PX = 384;           // 24rem — narrower than this and copy buttons clip
+  const ANALYZER_PANEL_MAX_RATIO = 0.85;       // never cover more than 85% of viewport
+  const [analyzerPanelWidth, setAnalyzerPanelWidth] = useState<number>(ANALYZER_PANEL_DEFAULT_PX);
+  // Load persisted width on mount (avoids SSR mismatch since we render the
+  // modal client-side via createPortal anyway).
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(ANALYZER_PANEL_WIDTH_KEY);
+      if (raw) {
+        const n = parseInt(raw, 10);
+        if (!Number.isNaN(n) && n >= ANALYZER_PANEL_MIN_PX) setAnalyzerPanelWidth(n);
+      }
+    } catch { /* localStorage denied — silent */ }
+  }, []);
+  const persistPanelWidth = (px: number) => {
+    try { window.localStorage.setItem(ANALYZER_PANEL_WIDTH_KEY, String(px)); } catch { /* */ }
+  };
+  // Drag-resize state. We track pointer position + start width so we can
+  // commit only on pointerup (avoiding re-render churn on every mousemove).
+  const panelResizeRef = useRef<{
+    startX: number;
+    startWidth: number;
+    rafId: number | null;
+    pendingWidth: number | null;
+  } | null>(null);
+  const onResizeHandlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (typeof window === 'undefined') return;
+    e.preventDefault();
+    e.stopPropagation();
+    const maxAllowed = Math.max(
+      ANALYZER_PANEL_MIN_PX,
+      Math.floor(window.innerWidth * ANALYZER_PANEL_MAX_RATIO),
+    );
+    panelResizeRef.current = {
+      startX: e.clientX,
+      startWidth: analyzerPanelWidth,
+      rafId: null,
+      pendingWidth: null,
+    };
+    const target = e.currentTarget;
+    target.setPointerCapture(e.pointerId);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+  const onResizeHandlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const r = panelResizeRef.current;
+    if (!r) return;
+    e.preventDefault();
+    // Since the panel is anchored to the right edge, dragging LEFT should
+    // WIDEN the panel. deltaX is negative when moving left → subtract.
+    const deltaX = e.clientX - r.startX;
+    const maxAllowed = Math.max(
+      ANALYZER_PANEL_MIN_PX,
+      Math.floor(window.innerWidth * ANALYZER_PANEL_MAX_RATIO),
+    );
+    const next = Math.max(
+      ANALYZER_PANEL_MIN_PX,
+      Math.min(maxAllowed, r.startWidth - deltaX),
+    );
+    r.pendingWidth = next;
+    if (r.rafId != null) return; // a frame is already queued
+    r.rafId = window.requestAnimationFrame(() => {
+      r.rafId = null;
+      if (r.pendingWidth != null) setAnalyzerPanelWidth(r.pendingWidth);
+    });
+  };
+  const onResizeHandlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const r = panelResizeRef.current;
+    if (!r) return;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* */ }
+    if (r.rafId != null) {
+      window.cancelAnimationFrame(r.rafId);
+      r.rafId = null;
+    }
+    if (r.pendingWidth != null) {
+      setAnalyzerPanelWidth(r.pendingWidth);
+      persistPanelWidth(r.pendingWidth);
+    }
+    panelResizeRef.current = null;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  };
+  // Double-click the handle → snap back to the default width (handy escape
+  // hatch when the user has narrowed the panel too much).
+  const onResizeHandleDoubleClick = () => {
+    setAnalyzerPanelWidth(ANALYZER_PANEL_DEFAULT_PX);
+    persistPanelWidth(ANALYZER_PANEL_DEFAULT_PX);
+  };
+  // ── Resizable Audio drawer width ────────────────────────────────────
+  // Same pattern as the Analyzer above: persisted to localStorage,
+  // pointer-capture for the handle, rAF-coalesced updates, double-click
+  // to reset. Default bumped from 26rem (416px) to 30rem (480px) because
+  // the Read-aloud tab + the tab header + the close button cramped the
+  // waveform / voice controls at 416px on a 13" laptop.
+  const AUDIO_PANEL_WIDTH_KEY = 'audio-panel-width-px';
+  const AUDIO_PANEL_DEFAULT_PX = 480;        // 30rem — wider default for breathing room
+  const AUDIO_PANEL_MIN_PX = 320;            // 20rem — narrower than this and the tab labels clip
+  const AUDIO_PANEL_MAX_RATIO = 0.85;        // never cover more than 85% of viewport
+  const [audioPanelWidth, setAudioPanelWidth] = useState<number>(AUDIO_PANEL_DEFAULT_PX);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(AUDIO_PANEL_WIDTH_KEY);
+      if (raw) {
+        const n = parseInt(raw, 10);
+        if (!Number.isNaN(n) && n >= AUDIO_PANEL_MIN_PX) setAudioPanelWidth(n);
+      }
+    } catch { /* localStorage denied — silent */ }
+  }, []);
+  const persistAudioPanelWidth = (px: number) => {
+    try { window.localStorage.setItem(AUDIO_PANEL_WIDTH_KEY, String(px)); } catch { /* */ }
+  };
+  // Mobile (<640px) collapses the audio panel to full-width — dragging a
+  // 320px-wide handle over a 360px viewport is unusable, so we hide the
+  // resize handle and force width:100vw. Re-evaluated on resize so
+  // orientation changes don't leave the panel stuck mid-state.
+  const [audioPanelMobile, setAudioPanelMobile] = useState<boolean>(false);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mql = window.matchMedia('(max-width: 639px)');
+    const sync = () => setAudioPanelMobile(mql.matches);
+    sync();
+    mql.addEventListener('change', sync);
+    return () => mql.removeEventListener('change', sync);
+  }, []);
+  // Reusing panelResizeRef is unsafe — its nullable state collides with the
+  // analyzer drag, so we keep a separate ref for the audio panel.
+  const audioPanelResizeRef = useRef<{
+    startX: number;
+    startWidth: number;
+    rafId: number | null;
+    pendingWidth: number | null;
+  } | null>(null);
+  const onAudioResizeHandlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (typeof window === 'undefined') return;
+    e.preventDefault();
+    e.stopPropagation();
+    audioPanelResizeRef.current = {
+      startX: e.clientX,
+      startWidth: audioPanelWidth,
+      rafId: null,
+      pendingWidth: null,
+    };
+    const target = e.currentTarget;
+    target.setPointerCapture(e.pointerId);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+  const onAudioResizeHandlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const r = audioPanelResizeRef.current;
+    if (!r) return;
+    e.preventDefault();
+    // Drawer is right-anchored → drag left → wider (deltaX negative).
+    const deltaX = e.clientX - r.startX;
+    const maxAllowed = Math.max(
+      AUDIO_PANEL_MIN_PX,
+      Math.floor(window.innerWidth * AUDIO_PANEL_MAX_RATIO),
+    );
+    const next = Math.max(
+      AUDIO_PANEL_MIN_PX,
+      Math.min(maxAllowed, r.startWidth - deltaX),
+    );
+    r.pendingWidth = next;
+    if (r.rafId != null) return;
+    r.rafId = window.requestAnimationFrame(() => {
+      r.rafId = null;
+      if (r.pendingWidth != null) setAudioPanelWidth(r.pendingWidth);
+    });
+  };
+  const onAudioResizeHandlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const r = audioPanelResizeRef.current;
+    if (!r) return;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* */ }
+    if (r.rafId != null) {
+      window.cancelAnimationFrame(r.rafId);
+      r.rafId = null;
+    }
+    if (r.pendingWidth != null) {
+      setAudioPanelWidth(r.pendingWidth);
+      persistAudioPanelWidth(r.pendingWidth);
+    }
+    audioPanelResizeRef.current = null;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  };
+  const onAudioResizeHandleDoubleClick = () => {
+    setAudioPanelWidth(AUDIO_PANEL_DEFAULT_PX);
+    persistAudioPanelWidth(AUDIO_PANEL_DEFAULT_PX);
+  };
+  // Auto-scroll the log to the bottom whenever a new line streams in — only if
+  // the "follow tail" toggle is on. When off, the user's scroll position is
+  // preserved so they can read older log lines without being yanked down.
+  useEffect(() => {
+    if (!autoScrollLog) return;
+    const el = analysisLogRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [analysisModal?.log.length, analysisModal?.running, autoScrollLog]);
+  // SSR safety for createPortal — only render portal client-side.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
   const [pregenStatus, setPregenStatus] = useState<{ chapterId: string; done: number; total: number } | null>(null);
   // Ref mirrors chapters[currentIdx] so async callbacks (setTimeout) always
   // see the latest chapter even after React has re-rendered with a new
@@ -232,6 +1461,24 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   useEffect(() => {
     currentChapterRef.current = chapters[currentIdx] ?? null;
   }, [chapters, currentIdx]);
+
+  // Listen for ttsWarn → surface the headline message as a chip in the
+  // status bar.  Cleared on every successful /api/tts POST (see
+  // prefetchParagraph).
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onWarn = (e: Event) => {
+      const ce = e as CustomEvent<{ message: string; full: unknown[] }>;
+      setTtsLastError(ce.detail.message);
+    };
+    const onOk = () => setTtsLastError(null);
+    window.addEventListener('tts:warn', onWarn as EventListener);
+    window.addEventListener('tts:ok', onOk as EventListener);
+    return () => {
+      window.removeEventListener('tts:warn', onWarn as EventListener);
+      window.removeEventListener('tts:ok', onOk as EventListener);
+    };
+  }, []);
   const [ttsCustomVoices, setTtsCustomVoices] = useState<TtsVoice[]>([]);
   const [ttsCharacterMap, setTtsCharacterMap] = useState<Record<string, string>>({}); // name|alias → voice name
   const [ttsCharacterList, setTtsCharacterList] = useState<{ name: string; voiceName?: string }[]>([]);
@@ -252,7 +1499,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   const voiceCommandHandlerRef = useRef<(text: string) => void>(() => {});
   const [voiceCommandText, setVoiceCommandText] = useState('');
   const [voiceCommandError, setVoiceCommandError] = useState('');
-  // ── Voice preview state (the 10 default VieNeu voices) ───────────────
+  // ── Voice preview state (the 10 default Vietnamese Voice voices) ───────────────
   const [previewingVoice, setPreviewingVoice] = useState<string | null>(null);
   const voicePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -367,14 +1614,32 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
       if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); handleNext(); }
       else if (e.key === 'ArrowLeft') { e.preventDefault(); handlePrev(); }
-      else if (e.key === 'Escape') { setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); setVoiceDebugOpen(false); }
+      else if (e.key === 'Escape') {
+        setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); setVoiceDebugOpen(false);
+        if (analysisModal) closeAnalysisModal();
+        setShortcutsOpen(false);
+      }
       else if (e.key === 'b' || e.key === 'B') toggleBookmark();
       else if (e.key === 't' || e.key === 'T') setTocOpen((o) => !o);
+      // '?' (Shift+/) opens the keyboard shortcuts overlay. Held in any
+      // text-input context is ignored by the earlier tag check.
+      else if (e.key === '?' || (e.shiftKey && e.key === '/')) setShortcutsOpen(true);
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentIdx, chapters, bookmarks, settings.layout, spreadPage, spreadTotal]);
+
+  /**
+   * Close the analyzer modal AND cancel any in-flight SSE stream.  All four
+   * close paths (✕ icon, "Đóng (ESC)" footer, backdrop click, ESC key) call
+   * this helper so server work stops the moment the user dismisses it.
+   */
+  function closeAnalysisModal() {
+    analysisAbortRef.current?.abort();
+    analysisAbortRef.current = null;
+    setAnalysisModal(null);
+  }
 
   const saveProgress = useCallback((idx: number, total: number) => {
     if (!total) return;
@@ -419,7 +1684,62 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         iframeRef.current?.contentWindow?.postMessage({ type: 'go-last-page' }, '*');
       }, 80);
     }
+    setTimeout(() => {
+      if (ttsStateRef.current !== 'idle') syncTtsHighlight(ttsIndex);
+    }, 120);
   };
+
+  function syncTtsHighlight(index: number | null) {
+    const doc = iframeRef.current?.contentDocument;
+    if (!doc) return;
+    const existing = doc.querySelectorAll('[data-tts-current="true"]');
+    existing.forEach((el) => {
+      el.removeAttribute('data-tts-current');
+      el.classList.remove('tts-current-block');
+    });
+    if (index === null || index < 0) return;
+
+    let style = doc.getElementById('tts-current-style') as HTMLStyleElement | null;
+    if (!style) {
+      style = doc.createElement('style');
+      style.id = 'tts-current-style';
+      style.textContent = `
+        .tts-current-block {
+          background: rgba(59, 130, 246, 0.18) !important;
+          outline: 2px solid rgba(59, 130, 246, 0.58) !important;
+          border-radius: 6px !important;
+          box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.10) !important;
+          transition: background 180ms ease, outline-color 180ms ease, box-shadow 180ms ease;
+        }
+      `;
+      doc.head.appendChild(style);
+    }
+
+    const blocks = Array.from(doc.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote'))
+      .filter((el) => (el.textContent ?? '').trim().length > 0) as HTMLElement[];
+    const el = blocks[index];
+    if (!el) return;
+    el.dataset.ttsCurrent = 'true';
+    el.classList.add('tts-current-block');
+
+    const clip = doc.getElementById('epub-clip');
+    if (clip) {
+      const clipRect = clip.getBoundingClientRect();
+      const elRect = el.getBoundingClientRect();
+      clip.scrollTo({
+        left: Math.max(0, clip.scrollLeft + elRect.left - clipRect.left - clip.clientWidth * 0.15),
+        behavior: 'smooth',
+      });
+    } else {
+      el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
+    }
+  }
+
+  useEffect(() => {
+    if (ttsState === 'idle') syncTtsHighlight(null);
+    else syncTtsHighlight(ttsIndex);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ttsState, ttsIndex, currentIdx, iframeLoading]);
 
   function updateSetting<K extends keyof ReaderSettings>(key: K, value: ReaderSettings[K]) {
     const next = { ...settings, [key]: value };
@@ -523,13 +1843,26 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       const data = await r.json() as {
         attribution: Record<number, { speaker: string | null; confidence: number; source: string }>;
         fromCache: boolean;
-        parserReachable: boolean;
+        // VnCoreNLP parser removed 2026-07-05 — API still returns
+        // `parserReachable: false` for backwards compat, we just ignore it.
         omlxReachable: boolean;
+        crossChapter?: {
+          seedApplied: boolean;
+          seedReason: 'applied' | 'no-row' | 'stale-chapter' | 'version-mismatch' | 'empty';
+          seedFromChapterIndex: number | null;
+          seedLastSpeaker?: string | null;
+          persistedAt: number | null;
+        };
+        // G4: novel proper-noun candidates surfaced so the user can
+        // register new characters before they accumulate as unresolved-
+        // actor rows. Optional on legacy cached rows.
+        potentialNewCharacters?: string[];
         stats: {
           parserHits: number;
           regexHits: number;
           llmHits: number;
           conversationHits: number;
+          sourceDrift?: number;
           defaults: number;
           totalParagraphs: number;
         };
@@ -537,7 +1870,24 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       chapterAttributionRef.current.set(chapterId, {
         attribution: data.attribution ?? {},
         fromCache: !!data.fromCache,
-        parserReachable: !!data.parserReachable,
+        // VnCoreNLP parser removed 2026-07-05 — parserReachable is no
+        // longer surfaced in the chapter attribution ref. We accept the
+        // field on the wire (it always comes back as `false` now) but
+        // don't store it.
+        // (parserReachable: !!data.parserReachable omitted intentionally)
+        crossChapter: data.crossChapter
+          ? {
+              seedApplied: !!data.crossChapter.seedApplied,
+              seedReason: data.crossChapter.seedReason,
+              seedFromChapterIndex: data.crossChapter.seedFromChapterIndex,
+              seedLastSpeaker: data.crossChapter.seedLastSpeaker ?? null,
+              persistedAt: data.crossChapter.persistedAt,
+            }
+          : undefined,
+        // G4: forward the list so VoiceDebugPanel can render the chip.
+        // Default to [] so the panel's `novel.length === 0` branch
+        // correctly hides the section when no novel names exist.
+        potentialNewCharacters: data.potentialNewCharacters ?? [],
       });
       setChapterAttributionStats({
         chapterId,
@@ -545,9 +1895,14 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         regexHits: data.stats?.regexHits ?? 0,
         llmHits: data.stats?.llmHits ?? 0,
         conversationHits: data.stats?.conversationHits ?? 0,
+        sourceDrift: data.stats?.sourceDrift ?? 0,
         defaults: data.stats?.defaults ?? 0,
         fromCache: !!data.fromCache,
-        parserReachable: !!data.parserReachable,
+        // VnCoreNLP parser removed 2026-07-05 — parserReachable is no
+        // longer surfaced in the chapter attribution ref. We accept the
+        // field on the wire (it always comes back as `false` now) but
+        // don't store it.
+        // (parserReachable: !!data.parserReachable omitted intentionally)
         omlxReachable: !!data.omlxReachable,
       });
     } catch {
@@ -569,69 +1924,315 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
    * Never throws — failures are surfaced via the toast + a `omlxReachable:
    * false` UI hint, not by breaking the reader.
    */
-  async function runFullAnalysis() {
+  async function runFullAnalysis(mode: AnalyzeMode = 'combine') {
     const chapterId = chapters[currentIdx]?.id;
+    const chapterTitle = chapters[currentIdx]?.title ?? chapterId ?? '?';
     if (!chapterId || analysisInFlight) return;
     setAnalysisInFlight(true);
-    setAnalysisProgress('Đang chạy parser + regex + oMLX…');
+    const progressText = mode === 'full-llm'
+      ? 'Đang chạy Full LLM (tất cả đoạn qua LLM)…'
+      : mode === 'local-only'
+        ? 'Đang chạy local-only (không gọi LLM)…'
+        : 'Đang chạy Combine (parser + regex + local → LLM chỉ unresolved)…';
+    setAnalysisProgress(progressText);
+
+    // Open the modal IMMEDIATELY so the user can watch the pipeline run,
+    // same UX as the Audio tab (read-aloud progress). Log lines stream in
+    // as each step() fires on the server.
+    setAnalysisModal({
+      chapterId,
+      chapterTitle,
+      mode,
+      stats: {
+        parserHits: 0, regexHits: 0, llmHits: 0, conversationHits: 0,
+        sourceDrift: 0, defaults: 0, totalParagraphs: 0,
+        llmFailures: 0, llmRequested: 0,
+      },
+      // VnCoreNLP parser removed 2026-07-05 — `parserReachable` field
+      // dropped from this UI's state shape.
+      omlxReachable: false,
+      durationMs: 0,
+      llmDurationMs: 0,
+      log: [],
+      layers: { parser: {}, regex: {}, local: {}, llm: {} },
+      failed: false,
+      running: true,
+    });
+
+    // Helper to merge into modal state while preserving `running`.
+    const pushModal = (patch: Partial<AnalysisResult>) => {
+      setAnalysisModal((cur) => cur
+        ? { ...cur, ...patch, running: patch.running ?? cur.running }
+        : cur);
+    };
+    const appendLog = (line: AnalysisLogLine) => {
+      setAnalysisModal((cur) => cur
+        ? { ...cur, log: [...cur.log, line] }
+        : cur);
+    };
+
     try {
+      // Cancel any prior in-flight analyzer before starting a new one.
+      analysisAbortRef.current?.abort();
+      const ac = new AbortController();
+      analysisAbortRef.current = ac;
+
       const r = await fetch(
         `/api/library/${bookId}/chapters/${encodeURIComponent(chapterId)}/attribute/analyze`,
-        { method: 'POST' },
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode }),
+          signal: ac.signal,
+        },
       );
-      if (!r.ok) {
+      if (!r.ok || !r.body) {
+        // Fall back to a JSON error body — server may still have streamed a
+        // short log before bailing.
+        let errBody: { log?: string[] } = {};
+        try { errBody = await r.json(); } catch { /* ignore */ }
+        const errLines = errBody.log ?? [];
+        for (const L of errLines) {
+          appendLog({ text: L, phase: 'error' });
+        }
+        pushModal({
+          failed: true,
+          running: false,
+          errorMsg: `HTTP ${r.status}`,
+        });
         setAnalysisProgress('Full analysis thất bại — kiểm tra log server');
-        setAnalysisInFlight(false);
         return;
       }
-      const data = await r.json() as {
-        attribution: Record<number, { speaker: string | null; confidence: number; source: string }>;
-        parserReachable: boolean;
-        omlxReachable: boolean;
-        stats: {
-          parserHits: number; regexHits: number; llmHits: number; conversationHits: number;
+
+      // Read the SSE stream line by line. Each `data: <json>` block has a
+      // JSON event object — `log` for a status line, `result` for the final
+      // stats payload, `error` for a fatal abort.
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let resultData: {
+        attribution?: AttributionMap;
+        layers?: { parser: AttributionMap; regex: AttributionMap; local: AttributionMap; llm: AttributionMap };
+        paragraphTexts?: Record<string, string>;
+        // VnCoreNLP parser removed 2026-07-05 — `parserReachable` field
+        // no longer read by this UI.
+        omlxReachable?: boolean;
+        mode?: AnalyzeMode;
+        durationMs?: number;
+        llmDurationMs?: number;
+        chapter?: { chapterIndex: number; chapterId: string; file: string };
+        stats?: {
+          parserHits: number; regexHits: number; llmHits: number;
+          conversationHits: number; sourceDrift?: number;
           llmFailures?: number; llmRequested?: number;
           defaults: number; totalParagraphs: number;
         };
+      } | null = null;
+      // Helper: build a typed AnalysisLogLine from a parsed SSE event. The
+      // server may send events with the legacy single-string `line` (no
+      // phase/meta) — default to 'parse' so it still gets color-coded.
+      //
+      // Strip the redundant `[+Nms +N.Xs | PHASE] ` prefix the server
+      // prepends to `line` — the modal already renders `wallMs`,
+      // `sinceLast`, and the phase badge as separate columns / a chip,
+      // so leaving the prefix in `line.text` produces triple-encoded
+      // timestamps in the output. Keep only the human-readable payload.
+      const STRIP_PREFIX = /^\[\+\s*\d+\s*(?:ms)?(?:\s*\+\d+(?:\.\d+)?s)?\s*\|\s*[a-z]+\s*\]\s*/;
+      const buildLogLine = (evt: { [k: string]: unknown }): AnalysisLogLine => {
+        const line = typeof evt.line === 'string' ? evt.line : String(evt.line ?? '');
+        const phaseRaw = typeof evt.phase === 'string' ? evt.phase : 'parse';
+        const phase = (
+          ['init', 'parse', 'regex', 'local', 'preflight', 'llm', 'fuse', 'cache', 'stat', 'error'] as const
+        ).includes(phaseRaw as never) ? phaseRaw as AnalysisLogLine['phase'] : 'parse';
+        return {
+          text: line.replace(STRIP_PREFIX, ''),
+          phase,
+          wallMs: typeof evt.wallMs === 'number' ? evt.wallMs : undefined,
+          sinceLast: typeof evt.sinceLast === 'number' ? evt.sinceLast : undefined,
+          meta: (evt.meta && typeof evt.meta === 'object') ? evt.meta as Record<string, unknown> : null,
+        };
       };
-      // Replace the cached attribution for this chapter.
-      chapterAttributionRef.current.set(chapterId, {
-        attribution: data.attribution ?? {},
-        fromCache: false,
-        parserReachable: !!data.parserReachable,
-      });
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        // SSE messages are separated by "\n\n"; within each message, lines
+        // starting with "data:" carry the payload.
+        let sep: number;
+        while ((sep = buffer.indexOf('\n\n')) !== -1) {
+          const raw = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + 2);
+          let payload = '';
+          for (const line of raw.split('\n')) {
+            if (line.startsWith('data:')) payload += line.slice(5).trimStart();
+          }
+          if (!payload) continue;
+          let evt: { type: string;[k: string]: unknown };
+          try { evt = JSON.parse(payload); } catch { continue; }
+          if (evt.type === 'log') {
+            const logLine = buildLogLine(evt);
+            appendLog(logLine);
+            // Optimistic "what's running" hint in the toolbar progress line.
+            // (VnCoreNLP removed 2026-07-05 — filter only on LLM / oMLX now.)
+            if (typeof window !== 'undefined' && /\bLLM\b|\boMLX\b/.test(logLine.text)) {
+              setAnalysisProgress(`Đang chạy: ${logLine.text}`);
+            }
+          } else if (evt.type === 'result') {
+            resultData = evt as unknown as typeof resultData;
+          } else if (evt.type === 'error') {
+            pushModal({ failed: true, running: false, errorMsg: String(evt.message ?? 'Unknown error') });
+            setAnalysisProgress('Full analysis lỗi: ' + (evt.message ?? '?'));
+          }
+        }
+      }
+      // Drain trailing buffer (no trailing \n\n at end-of-stream is possible).
+      if (buffer.trim()) {
+        let payload = '';
+        for (const line of buffer.split('\n')) {
+          if (line.startsWith('data:')) payload += line.slice(5).trimStart();
+        }
+        if (payload) {
+          try {
+            const evt = JSON.parse(payload);
+            if (evt.type === 'result') resultData = evt;
+            else if (evt.type === 'log') appendLog(buildLogLine(evt));
+            else if (evt.type === 'error') pushModal({ failed: true, running: false, errorMsg: String(evt.message ?? 'Unknown error') });
+          } catch { /* ignore */ }
+        }
+      }
+
+      if (!resultData || !resultData.stats) {
+        // Stream closed cleanly but no result event — unusual.
+        pushModal({ failed: true, running: false, errorMsg: 'No result event received' });
+        setAnalysisProgress('Full analysis lỗi: không nhận được kết quả');
+        return;
+      }
+
+      // Update in-memory attribution cache. We also carry `layers` so the
+      // Voice assignment debug panel can render per-evidence chips
+      // (regex / conversation / llm) next to each paragraph — same view
+      // the analyzer modal shows. We also stash `paragraphTexts` so the
+      // Voice Debug panel has source paragraphs to render even before
+      // the user starts TTS playback (which is what populates
+      // `ttsParagraphs`). Bump `attributionRefreshTick` because refs
+      // don't trigger re-renders; VoiceDebugPanel's `useMemo` reads this
+      // tick so it knows to recompute its rows.
+      if (resultData.attribution) {
+        // Convert paragraphTexts[] (server ships it array-shaped) into
+        // a {idx → text} record so the panel can index by paragraph
+        // number without scanning the array each row.
+        const paragraphTextsRecord: Record<number, string> = {};
+        if (resultData.paragraphTexts) {
+          for (const [k, v] of Object.entries(resultData.paragraphTexts)) {
+            const n = Number(k);
+            if (Number.isFinite(n) && typeof v === 'string') paragraphTextsRecord[n] = v;
+          }
+        }
+        chapterAttributionRef.current.set(chapterId, {
+          attribution: resultData.attribution,
+          layers: resultData.layers,
+          paragraphTexts: paragraphTextsRecord,
+          fromCache: false,
+          // VnCoreNLP parser removed 2026-07-05 — see comment above.
+        // (parserReachable: !!resultData.parserReachable omitted)
+        });
+      }
+      setAttributionRefreshTick((t) => t + 1);
       setChapterAttributionStats({
         chapterId,
-        parserHits: data.stats?.parserHits ?? 0,
-        regexHits: data.stats?.regexHits ?? 0,
-        llmHits: data.stats?.llmHits ?? 0,
-        conversationHits: data.stats?.conversationHits ?? 0,
-        defaults: data.stats?.defaults ?? 0,
+        parserHits: resultData.stats.parserHits ?? 0,
+        regexHits: resultData.stats.regexHits ?? 0,
+        llmHits: resultData.stats.llmHits ?? 0,
+        conversationHits: resultData.stats.conversationHits ?? 0,
+        sourceDrift: resultData.stats.sourceDrift ?? 0,
+        defaults: resultData.stats.defaults ?? 0,
         fromCache: false,
-        parserReachable: !!data.parserReachable,
-        omlxReachable: !!data.omlxReachable,
+        // VnCoreNLP parser removed 2026-07-05 — see comment above.
+        // (parserReachable: !!resultData.parserReachable omitted)
+        omlxReachable: !!resultData.omlxReachable,
       });
-      // Build a one-line summary rendered next to the toolbar.
-      const llmPart = data.omlxReachable
-        ? `${data.stats.llmHits} LLM`
-        : data.stats.llmRequested && data.stats.llmRequested > 0
-          ? `oMLX lỗi (${data.stats.llmFailures ?? 0} batch fail)`
+
+      // Pull the chapter's paragraph text list so the debug modal can show the
+      // paragraph alongside its assigned speaker. We prefer the structured
+      // `paragraphs[]` field returned by /api/library/.../chapters/:id —
+      // it's already split + ordered the same way the server's
+      // sliceParagraphs() does. If only `html` is returned (raw mode),
+      // we send a small inline splitter that doesn't pull the server's
+      // oMLX/node-fetch chain.
+      let paragraphTexts: string[] = [];
+      try {
+        const chResp = await fetch(
+          `/api/library/${bookId}/chapters/${encodeURIComponent(chapterId)}`,
+        );
+        if (chResp.ok) {
+          const chData = await chResp.json() as {
+            paragraphs?: { index: number; text: string }[];
+            html?: string;
+          };
+          if (Array.isArray(chData.paragraphs)) {
+            const sorted = [...chData.paragraphs].sort((a, b) => a.index - b.index);
+            paragraphTexts = sorted.map((p) => p.text);
+          } else if (typeof chData.html === 'string') {
+            // Tiny client-side splitter that matches the server's logic
+            // closely enough for the debug modal. We split on block-level
+            // tags (<p>, <div>, <br>, headings) and strip remaining tags.
+            paragraphTexts = clientSplitParagraphs(chData.html);
+          }
+        }
+      } catch (e) {
+        console.warn('[full-analysis] failed to fetch paragraph texts for debug modal:', e);
+      }
+
+      // Final modal state with stats filled in.
+      pushModal({
+        stats: {
+          parserHits: resultData.stats.parserHits ?? 0,
+          regexHits: resultData.stats.regexHits ?? 0,
+          llmHits: resultData.stats.llmHits ?? 0,
+          conversationHits: resultData.stats.conversationHits ?? 0,
+          sourceDrift: resultData.stats.sourceDrift ?? 0,
+          defaults: resultData.stats.defaults ?? 0,
+          totalParagraphs: resultData.stats.totalParagraphs ?? 0,
+          llmFailures: resultData.stats.llmFailures ?? 0,
+          llmRequested: resultData.stats.llmRequested ?? 0,
+        },
+        // VnCoreNLP parser removed 2026-07-05 — see comment above.
+        // (parserReachable: !!resultData.parserReachable omitted)
+        omlxReachable: !!resultData.omlxReachable,
+        mode: resultData.mode ?? mode,
+        durationMs: resultData.durationMs ?? 0,
+        llmDurationMs: resultData.llmDurationMs ?? 0,
+        attribution: resultData.attribution,
+        layers: resultData.layers,
+        paragraphTexts,
+        running: false,
+        failed: false,
+      });
+
+      // Toolbar summary.
+      const llmPart = resultData.omlxReachable
+        ? `${resultData.stats.llmHits} LLM`
+        : resultData.stats.llmRequested && resultData.stats.llmRequested > 0
+          ? `oMLX lỗi (${resultData.stats.llmFailures ?? 0} batch fail)`
           : 'oMLX không chạy';
       setAnalysisProgress(
-        `Full analysis xong — ${data.stats.parserHits} parser, ${data.stats.regexHits} regex, ${data.stats.conversationHits ?? 0} conversation, ${llmPart}`,
+        // VnCoreNLP parser removed 2026-07-05 — `parserHits` no longer in the
+        // success summary (always 0). Kept the type field for backwards compat
+        // with the API response shape.
+        `Full analysis xong — ${resultData.stats.regexHits} regex, ${resultData.stats.conversationHits ?? 0} conversation, ${llmPart}`,
       );
+      setAttributionDebugOpen(true);
       setVoiceDebugOpen(true);
-      // Auto-clear the success message after a few seconds (failure messages
-      // stay until the user clicks again or changes chapter).
+      // Auto-clear the success message after a few seconds.
       setTimeout(() => {
         setAnalysisProgress((cur) =>
           cur && cur.startsWith('Full analysis xong') ? null : cur,
         );
       }, 6000);
     } catch (e) {
-      setAnalysisProgress(
-        'Full analysis lỗi: ' + (e instanceof Error ? e.message : String(e)),
-      );
+      const msg = e instanceof Error ? e.message : String(e);
+      setAnalysisProgress('Full analysis lỗi: ' + msg);
+      pushModal({ failed: true, running: false, errorMsg: msg });
     } finally {
       setAnalysisInFlight(false);
     }
@@ -1149,10 +2750,10 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
    *    2. Local 6-pass regex (findSpeakerForQuote) — used when the map has
    *       no entry for this paragraph OR when the user has toggled the
    *       parser off. */
-  function detectSpeaker(
+  const detectSpeaker = useCallback((
     text: string,
     paragraphIndex?: number,
-  ): { name?: string; voiceName?: string; source?: 'parser' | 'regex' | 'llm' | 'conversation' } {
+  ): { name?: string; voiceName?: string; source?: 'parser' | 'regex' | 'llm' | 'conversation' } => {
     if (!ttsUseCharacterVoice) return {};
     const quotes = findQuoteSpans(text);
     if (quotes.length === 0) return {};
@@ -1189,7 +2790,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       }
     }
     return {};
-  }
+  }, [ttsUseCharacterVoice, chapters, currentIdx, ttsCharacterMap]);
 
     // ── TTS prefetch helpers ───────────────────────────────────────────────
   // Audio is fetched lazily per paragraph. To eliminate the visible gap
@@ -1227,7 +2828,9 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     const existing = chapterMap.get(key) as Promise<Blob> | undefined;
     if (existing) return existing;
 
+    const fetchStart = performance.now();
     const promise = (async () => {
+      ttsDebug('POST /api/tts', { idx, character, emotion, voice: ttsVoice, speed });
       const resp = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1243,8 +2846,31 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
           callIdx: idx,
         }),
       });
-      if (!resp.ok) throw new Error(`TTS failed: ${resp.status}`);
-      return resp.blob();
+      if (!resp.ok) {
+        // Surface the server's body in the warn so the user/dev can see
+        // WHY /api/tts returned 502/503.  The original code only logged
+        // the status number, which is opaque.
+        let detail = '';
+        try { detail = await resp.text(); } catch { /* ignore */ }
+        ttsWarn('POST /api/tts non-OK', {
+          idx, status: resp.status,
+          body: detail.slice(0, 300),
+          backend: resp.headers.get('X-TTS-Backend'),
+        });
+        throw new Error(`TTS failed: ${resp.status} — ${detail.slice(0, 120)}`);
+      }
+      const blob = await resp.blob();
+      ttsDebug('POST /api/tts ok', {
+        idx, ms: Math.round(performance.now() - fetchStart),
+        bytes: blob.size, type: blob.type,
+        backend: resp.headers.get('X-TTS-Backend'),
+        voiceUsed: resp.headers.get('X-Voice-Used'),
+      });
+      // Clear any previous warning chip (an OK POST means the path works now).
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('tts:ok'));
+      }
+      return blob;
     })().catch((err) => {
       // Remove failed entry so we can retry
       chapterMap!.delete(key);
@@ -1288,10 +2914,18 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     if (!ch) return;
     // Skip if already pre-generated (cache already has entries for this chapter)
     const existingMap = prefetchCacheRef.current.get(ch.id);
-    if (existingMap && existingMap.size > 0) return;
+    if (existingMap && existingMap.size > 0) {
+      ttsDebug('pregenerateChapter: cache hit, skipping', { chapterId: ch.id });
+      return;
+    }
 
+    ttsDebug('pregenerateChapter: starting', { chapterId: ch.id, paragraphs: '(loading)' });
     const paragraphs = await getChapterParagraphs(ch.id);
-    if (paragraphs.length === 0) return;
+    if (paragraphs.length === 0) {
+      ttsDebug('pregenerateChapter: chapter has 0 paragraphs, skipping', { chapterId: ch.id });
+      return;
+    }
+    ttsDebug('pregenerateChapter: paragraph count', { chapterId: ch.id, count: paragraphs.length });
 
     // Load server-side attribution (parser + regex + LLM) so detectSpeaker()
     // can pick VnCoreNLP's answer over the local regex when both are
@@ -1299,7 +2933,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     void loadChapterAttribution(ch.id);
 
     // Sequential prefetch with small concurrency so we don't hammer the
-    // OMLX/VieNeu backend (single-threaded on Apple Silicon anyway).
+    // OMLX / Vietnamese Voice backend (single-threaded on Apple Silicon anyway).
     const CONCURRENCY = 2;
     setPregenStatus({ chapterId: ch.id, done: 0, total: paragraphs.length });
 
@@ -1340,6 +2974,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     emotion = 'neutral',
     expressiveness = ttsNoise,
   ): Promise<void> {
+    ttsDebug('speakParagraph', { idx, character, emotion, speed, preview: paragraphs[idx]?.slice(0, 60) });
     // Eagerly prefetch the next paragraphs so the audio is ready when the
     // current one ends. With a slow TTS backend (~15-20s per call on
     // Apple Silicon) we need a deep lookahead — 5 paragraphs ≈ 10s of
@@ -1354,32 +2989,78 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         const nextEmo = ttsUseAI
           ? detectEmotion(paragraphs[nextIdx], ttsSpeed, ttsNoise)
           : { speed: ttsSpeed, noiseScale: ttsNoise, label: '', emoji: '', emotion: 'neutral' };
-        prefetchParagraph(chapterId, paragraphs, nextIdx, nextEmo.speed, nextSp.name, nextEmo.emotion, nextEmo.noiseScale).catch(() => {});
+        prefetchParagraph(chapterId, paragraphs, nextIdx, nextEmo.speed, nextSp.name, nextEmo.emotion, nextEmo.noiseScale).catch((e) => {
+          ttsWarn('eager prefetch failed', { nextIdx, err: String(e) });
+        });
       }
     }
 
-    const blob = await prefetchParagraph(chapterId, paragraphs, idx, speed, character, emotion, expressiveness);
+    const ttsStart = performance.now();
+    let blob: Blob;
+    try {
+      blob = await prefetchParagraph(chapterId, paragraphs, idx, speed, character, emotion, expressiveness);
+    } catch (e) {
+      ttsWarn('prefetchParagraph FAILED — first paragraph will be silent', {
+        idx, character, emotion, err: String(e),
+        hint: 'Check unified TTS log + /api/tts response',
+      });
+      throw e;
+    }
+    ttsDebug('prefetch ok', { idx, bytes: blob.size, ms: Math.round(performance.now() - ttsStart) });
     return new Promise((resolve) => {
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
       audioRef.current = audio;
       let settled = false;
-      const finish = () => {
+      const finish = (reason: string) => {
         if (settled) return;
         settled = true;
         ttsAudioFinishRef.current = null;
         if (audioRef.current === audio) audioRef.current = null;
         URL.revokeObjectURL(url);
+        ttsDebug('audio finished', { idx, reason });
         if (ttsParagraphGap > 0 && !ttsAbortRef.current) {
           setTimeout(resolve, ttsParagraphGap);
         } else {
           resolve();
         }
       };
-      ttsAudioFinishRef.current = finish;
-      audio.onended = finish;
-      audio.onerror = finish;
-      audio.play().catch(finish);
+      ttsAudioFinishRef.current = () => finish('manual');
+      audio.onended   = () => finish('ended');
+      audio.onerror   = (e) => {
+        ttsWarn('audio.onerror fired', { idx, err: String(e), code: audio.error?.code });
+        finish('error');
+      };
+      audio.play().then(
+        () => ttsDebug('audio.play() resolved', { idx }),
+        (err) => {
+          // Autoplay rejection, decoder error, missing user gesture, etc.
+          // Before the fix this was `finish` with no reason → silent skip
+          // that left the user wondering why nothing played.
+          // New behaviour: if this is the FIRST paragraph of the run, halt
+          // the run entirely (mark aborted, flip state to idle so the
+          // user can retry). Otherwise (prefetch for next paragraph), the
+          // outer flow is unaffected — finish() lets the for-loop move on.
+          if (idx === 0) {
+            ttsWarn('audio.play() REJECTED on paragraph 0 — halting run', {
+              idx,
+              err: String(err),
+              hint: 'Browser blocked autoplay. Click anywhere on the page, then press Play again.',
+            });
+            ttsAbortRef.current = true;
+            ttsRunIdRef.current += 1;  // invalidate the run so the loop exits
+            ttsStateRef.current = 'idle';
+            setTtsState('idle');
+            finish('play-rejected');
+          } else {
+            ttsWarn('audio.play() rejected on later paragraph', {
+              idx, err: String(err),
+              note: 'skipping paragraph (non-fatal — next will try)',
+            });
+            finish('play-rejected');
+          }
+        },
+      );
     });
   }
 
@@ -1396,12 +3077,44 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
 
   async function startTts(fromIndex = 0) {
     const runId = ++ttsRunIdRef.current;
+    ttsDebug('startTts invoked', { runId, fromIndex, ttsState: ttsStateRef.current });
+
+    // ── Synchronously unlock browser audio within the user gesture ───────
+    // The "Đọc to" button click is our user gesture, but by the time we get
+    // to audio.play() in speakParagraph we've crossed multiple awaits
+    // (chapter paragraphs fetch + TTS blob fetch), so the gesture context
+    // is gone and audio.play() rejects with NotAllowedError silently.
+    //
+    // Fix: synchronously create an Audio element with a tiny in-memory
+    // silent WAV and call play() on it RIGHT NOW, before any await. This
+    // succeeds (it's a valid media element within a user gesture), which
+    // unlocks the document's autoplay policy. Subsequent new Audio(url).play()
+    // calls in speakParagraph then work without a fresh user gesture.
+    //
+    // We discard the unlock element after; speakParagraph creates its own.
+    try {
+      // 44-byte silent mono 8 kHz WAV (≈ 1 ms of silence).
+      const SILENT_WAV =
+        'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+      const unlock = new Audio(SILENT_WAV);
+      unlock.volume = 0;       // double-safety in case any platform leaks audio
+      unlock.play().then(() => { unlock.pause(); }).catch(() => { /* ignore */ });
+    } catch { /* older browsers — best-effort only */ }
     // Use the ref so we always pick up the chapter at the moment we run,
     // even if currentIdx changed (auto-advance) between calls.
     const myChapter = currentChapterRef.current;
-    if (!myChapter) return;
+    if (!myChapter) {
+      ttsWarn('startTts aborted: no current chapter (metadata not loaded yet?)');
+      return;
+    }
     const myChapterIdx = chapters.findIndex((c) => c.id === myChapter.id);
-    if (myChapterIdx < 0) return;
+    if (myChapterIdx < 0) {
+      ttsWarn('startTts aborted: chapter not in list', { chapterId: myChapter.id });
+      return;
+    }
+    ttsDebug('startTts chapter resolved', {
+      chapterId: myChapter.id, chapterTitle: myChapter.title, chapterIdx: myChapterIdx,
+    });
 
     ttsAbortRef.current = false;
     ttsStateRef.current = 'loading';
@@ -1416,11 +3129,27 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     // Load current chapter's paragraphs (from cache if we have them)
     let paras = chapterParagraphsRef.current.get(myChapter.id);
     if (!paras) {
-      paras = await getChapterParagraphs(myChapter.id);
+      ttsDebug('fetching paragraphs for chapter', { chapterId: myChapter.id });
+      const fetchStart = performance.now();
+      try {
+        paras = await getChapterParagraphs(myChapter.id);
+      } catch (e) {
+        ttsWarn('getChapterParagraphs failed', { chapterId: myChapter.id, err: String(e) });
+        ttsStateRef.current = 'idle';
+        setTtsState('idle');
+        return;
+      }
+      ttsDebug('paragraphs fetched', { count: paras.length, ms: Math.round(performance.now() - fetchStart) });
+    } else {
+      ttsDebug('paragraphs cache hit', { count: paras.length });
     }
     setTtsParagraphs(paras);
-    if (ttsRunIdRef.current !== runId || ttsAbortRef.current) return;
+    if (ttsRunIdRef.current !== runId || ttsAbortRef.current) {
+      ttsDebug('startTts aborted during/after paragraph load (runId/abort changed)');
+      return;
+    }
     if (paras.length === 0) {
+      ttsWarn('startTts aborted: chapter has 0 paragraphs', { chapterId: myChapter.id });
       ttsStateRef.current = 'idle';
       setTtsState('idle');
       return;
@@ -1439,6 +3168,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     for (let i = fromIndex; i < paras.length; i++) {
       if (ttsAbortRef.current || ttsRunIdRef.current !== runId) break;
       setTtsIndex(i);
+      syncTtsHighlight(i);
       // Wait while paused
       await new Promise<void>((res) => {
         const check = () => {
@@ -1476,6 +3206,18 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     // ── Chapter finished ──────────────────────────────────────────
     // If continuous-play is enabled AND there's a next chapter, advance.
     // Otherwise, just go idle (user can manually go to next chapter).
+
+    // Character Bible auto-refresh — fire after each chapter so the bible
+    // accumulates new characters / relationships / speech-style hints the
+    // LLM discovers. Debounced 5 s and deduped server-side via BullMQ
+    // jobId so a flurry of "advance" events collapses to one worker call.
+    // `bookId` is captured by closure; safe to use from this async path.
+    enqueueBibleRefresh({
+      bookId,
+      chapterIndex: myChapterIdx,
+      reason: 'chapter-close',
+    });
+
     if (ttsContinuousPlay && myChapterIdx + 1 < chapters.length) {
       // Mark this as an auto-advance so the chapter-change useEffect
       // doesn't call stopTts() and tear down our state.
@@ -1503,6 +3245,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   }
 
   function stopTts() {
+    ttsDebug('stopTts called', { runId: ttsRunIdRef.current, state: ttsStateRef.current });
     ttsRunIdRef.current += 1;
     ttsAbortRef.current = true;
     finishCurrentTtsAudio();
@@ -1513,6 +3256,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     setTtsEmotionLabel('');
     // Cancel any in-flight pre-generation (it polls ttsAbortRef between batches)
     setPregenStatus(null);
+    syncTtsHighlight(null);
   }
 
   function toggleTtsPause() {
@@ -1853,22 +3597,23 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     ? chapters.filter((c) => c.title.toLowerCase().includes(tocSearch.toLowerCase()))
     : chapters;
 
-  // CSS classes per theme
-  const headerCls = isDark
-    ? 'bg-[#12122a]/95 border-[#2a2a4a] text-[#e2e2e8]'
-    : isSepia
-    ? 'bg-[#f0e6d3]/95 border-[#c8b89a] text-[#3b2f20]'
-    : 'bg-white/95 border-gray-200 text-gray-900';
-  const btnBorder = isDark ? '#2a2a4a' : isSepia ? '#c8b89a' : '#e2e2e2';
+  // CSS classes per theme — token-backed via `readerSurface(...)`. Sepia
+  // has bespoke colours because it must look distinctly warm even when
+  // the surrounding app is in light or dark mode; light + dark reuse the
+  // `--reader-*` tokens declared in src/app/theme.css.
+  const headerCls = readerSurface(settings.theme, 'header');
+  const panelCls  = readerSurface(settings.theme, 'panel');
+  const dividerCls = readerSurface(settings.theme, 'divider');
+  const mutedCls  = readerSurface(settings.theme, 'muted');
+  const activeCls = readerSurface(settings.theme, 'active');
+  const hoverCls  = readerSurface(settings.theme, 'hover');
+  const inputCls  = readerSurface(settings.theme, 'input');
+  const btnBorder = readerSurface(settings.theme, 'btnBorder');
   const btnStyle  = { color: themeObj.text, borderColor: btnBorder, background: 'transparent' };
-  const panelCls = isDark ? 'bg-[#12122a] border-[#2a2a4a] text-[#e2e2e8]'
-    : isSepia ? 'bg-[#ede0ce] border-[#c8b89a] text-[#3b2f20]' : 'bg-white border-gray-200 text-gray-900';
-  const dividerCls = isDark ? 'border-[#2a2a4a]' : isSepia ? 'border-[#c8b89a]' : 'border-gray-200';
-  const mutedCls   = isDark ? 'text-[#888]' : isSepia ? 'text-[#8a7a65]' : 'text-gray-500';
-  const activeCls  = isDark ? 'bg-blue-900/50 text-blue-200 border-blue-700'
-    : isSepia ? 'bg-amber-200 text-amber-900 border-amber-500' : 'bg-blue-100 text-blue-700 border-blue-300';
-  const hoverCls   = isDark ? 'hover:bg-white/5' : isSepia ? 'hover:bg-amber-100/50' : 'hover:bg-gray-100';
-  const inputCls   = isDark ? 'border-[#3a3a5a] bg-[#1a1a2e]' : isSepia ? 'border-[#c8b89a] bg-[#f4ede4]' : 'border-gray-200 bg-white';
+  const ttsSeekMax = Math.max(0, ttsParagraphs.length - 1);
+  const ttsProgressPct = ttsParagraphs.length > 0
+    ? Math.round(((ttsIndex + 1) / ttsParagraphs.length) * 100)
+    : 0;
 
   const NavPanel = ({ side, open, children }: { side: 'left' | 'right'; open: boolean; children: React.ReactNode }) => (
     <aside
@@ -1908,11 +3653,15 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         <Link href="/library" title="Back">
           <Button variant="ghost" size="icon" className="h-8 w-8"><Home className="h-4 w-4" /></Button>
         </Link>
-        <button onClick={() => { setTocOpen((o) => !o); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); }}
-          className={cn('flex h-8 w-8 items-center justify-center rounded-md transition-colors border', tocOpen ? activeCls : `border-transparent ${hoverCls}`)}
-          title="Table of Contents (T)">
-          <List className="h-4 w-4" />
-        </button>
+        <Tooltip content={<span className="inline-flex items-center gap-1.5">Mục lục <KbdHint keys={['T']} /></span>} side="bottom">
+          <button onClick={() => { setTocOpen((o) => !o); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); }}
+            data-testid="toc-toggle"
+            aria-label="Table of Contents"
+            className={cn('flex h-8 w-8 items-center justify-center rounded-md transition-colors border border-border', tocOpen ? activeCls : `border-transparent ${hoverCls}`)}
+            title="Mục lục (T)">
+            <List className="h-4 w-4" />
+          </button>
+        </Tooltip>
 
         <div className="flex-1 min-w-0 text-center px-2">
           <p className="text-xs font-semibold truncate">{bookTitle}</p>
@@ -1933,7 +3682,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
           <form onSubmit={(e) => { e.preventDefault(); const n = parseInt(jumpInput, 10) - 1; if (!isNaN(n)) goToChapter(n); setJumpInput(''); }} className="hidden sm:flex items-center gap-1">
             <input type="number" min={1} max={chapters.length} value={jumpInput}
               onChange={(e) => setJumpInput(e.target.value)} placeholder={String(currentIdx + 1)}
-              className={cn('w-12 rounded border text-center text-xs py-0.5 outline-none', inputCls)} title="Jump to chapter" />
+              className={cn('w-12 rounded border border-border text-center text-xs py-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring', inputCls)} title="Jump to chapter" />
             <span className={cn('text-xs', mutedCls)}>/ {chapters.length}</span>
           </form>
         )}
@@ -1946,82 +3695,339 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         )}
 
         {/* Layout toggle */}
-        <div className="flex rounded-md border overflow-hidden">
+        <div className="hidden md:flex rounded-md border border-border overflow-hidden">
           {(['spread', 'scroll'] as Layout[]).map((l) => (
-            <button key={l} onClick={() => updateSetting('layout', l)} title={l === 'spread' ? 'Two-column (Apple Books)' : 'Scroll'}
-              className={cn('flex h-7 w-7 items-center justify-center border-r last:border-r-0 transition-colors', settings.layout === l ? activeCls : `border-transparent ${hoverCls}`)}>
-              {l === 'spread' ? <Columns className="h-3.5 w-3.5" /> : <ScrollText className="h-3.5 w-3.5" />}
-            </button>
+            <Tooltip key={l} content={l === 'spread' ? 'Hai cột (Apple Books)' : 'Cuộn dọc'} side="bottom">
+              <button onClick={() => updateSetting('layout', l)} title={l === 'spread' ? 'Hai cột (Apple Books)' : 'Cuộn dọc'}
+                className={cn('flex h-7 w-7 items-center justify-center border-r last:border-r-0 transition-colors', settings.layout === l ? activeCls : `border-transparent ${hoverCls}`)}>
+                {l === 'spread' ? <Columns className="h-3.5 w-3.5" /> : <ScrollText className="h-3.5 w-3.5" />}
+              </button>
+            </Tooltip>
           ))}
         </div>
 
-        <button onClick={toggleBookmark}
-          className={cn('flex h-8 w-8 items-center justify-center rounded-md border transition-colors', isBookmarked ? activeCls : `border-transparent ${hoverCls}`)}
-          title={isBookmarked ? 'Remove bookmark (B)' : 'Bookmark (B)'}>
-          {isBookmarked ? <BookmarkCheck className="h-4 w-4" /> : <Bookmark className="h-4 w-4" />}
-        </button>
+        <Tooltip content={<span className="inline-flex items-center gap-1.5">{isBookmarked ? 'Bỏ bookmark' : 'Bookmark'} <KbdHint keys={['B']} /></span>} side="bottom">
+          <button onClick={toggleBookmark}
+            className={cn('flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors', isBookmarked ? activeCls : `border-transparent ${hoverCls}`)}
+            title={isBookmarked ? 'Bỏ bookmark (B)' : 'Bookmark (B)'}>
+            {isBookmarked ? <BookmarkCheck className="h-4 w-4" /> : <Bookmark className="h-4 w-4" />}
+          </button>
+        </Tooltip>
         <button onClick={() => { setBookmarksOpen((o) => !o); setTocOpen(false); setSettingsOpen(false); setWmOpen(false); }}
-          className={cn('flex h-8 w-8 items-center justify-center rounded-md border transition-colors', bookmarksOpen ? activeCls : `border-transparent ${hoverCls}`)}>
+          className={cn('flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors', bookmarksOpen ? activeCls : `border-transparent ${hoverCls}`)}>
           <AlignLeft className="h-4 w-4" />
         </button>
         <button onClick={() => { setSettingsOpen((o) => !o); setTocOpen(false); setBookmarksOpen(false); setWmOpen(false); setAbOpen(false); }}
-          className={cn('flex h-8 w-8 items-center justify-center rounded-md border transition-colors', settingsOpen ? activeCls : `border-transparent ${hoverCls}`)}>
+          className={cn('flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors', settingsOpen ? activeCls : `border-transparent ${hoverCls}`)}>
           <Settings2 className="h-4 w-4" />
         </button>
-        <button onClick={() => { setAbOpen((o) => !o); setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); }}
-          className={cn('flex h-8 w-8 items-center justify-center rounded-md border transition-colors', abOpen ? activeCls : `border-transparent ${hoverCls}`)}
-          title="Audiobook (giọng đọc trước)">
+        <button onClick={() => { setAbOpen((o) => !o); setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); setTtsSettingsOpen(false); }}
+          className={cn('flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors', abOpen ? activeCls : `border-transparent ${hoverCls}`)}
+          title="Audio: Read aloud, Audiobook, Voices">
           <Headphones className="h-4 w-4" />
         </button>
         <button onClick={() => { setVoiceDebugOpen((o) => !o); setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); setAbOpen(false); }}
-          className={cn('flex h-8 w-8 items-center justify-center rounded-md border transition-colors', voiceDebugOpen ? activeCls : `border-transparent ${hoverCls}`)}
+          data-testid="voice-debug-toggle"
+          aria-label="Open voice debug panel"
+          className={cn('hidden md:flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors', voiceDebugOpen ? activeCls : `border-transparent ${hoverCls}`)}
           title="Voice assignment debug (xem ai đang nói, voice nào)">
           <Bug className="h-4 w-4" />
         </button>
-        <button
-          onClick={() => { void runFullAnalysis(); }}
-          disabled={analysisInFlight || !chapters[currentIdx]?.id}
-          title={analysisInFlight
-            ? `Đang chạy full analysis…${analysisProgress ?? ''}`
-            : 'Full analysis: parser + regex + oMLX (ghi đè cache)'}
-          className={cn('flex h-8 w-8 items-center justify-center rounded-md border transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
-            analysisInFlight ? activeCls : `border-transparent ${hoverCls}`)}>
-          {analysisInFlight
-            ? <Loader2 className="h-4 w-4 animate-spin" />
-            : <Wand2 className="h-4 w-4" />}
-        </button>
-        <button onClick={toggleFullscreen} className={cn('hidden sm:flex h-8 w-8 items-center justify-center rounded-md border border-transparent', hoverCls)}>
+        <div
+          ref={analyzerModeBtnRef}
+          // NOTE: no `overflow-hidden` here on purpose — the dropdown
+          // menu (absolutely positioned below) gets clipped by it, which
+          // hid the mode picker entirely. Each child button gets its
+          // own rounded corners so the visual still feels unified.
+          className="relative hidden md:flex items-stretch h-8 rounded-md border border-border border-transparent"
+          data-testid="analyzer-mode-split"
+        >
+          {/* Main button — runs with the currently-selected mode. Shows the
+              mode name so users know what they're about to run AND that
+              there's a mode picker next to it (the ▾ chevron was easy to
+              miss on its own). */}
+          <button
+            onClick={() => { void runFullAnalysis(analyzerMode); }}
+            disabled={analysisInFlight || !chapters[currentIdx]?.id}
+            title={analysisInFlight
+              ? `Đang chạy full analysis (mode = ${analyzerMode})…${analysisProgress ?? ''}`
+              : `Full analysis — mode = ${analyzerMode}. Click ▾ bên phải để đổi mode.`}
+            aria-label={`Run full analysis (mode = ${analyzerMode})`}
+            data-testid="analyzer-run-btn"
+            className={cn(
+              'flex items-center justify-center gap-1.5 px-2.5 rounded-l-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+              analysisInFlight ? activeCls : hoverCls,
+            )}
+          >
+            {analysisInFlight
+              ? <Loader2 className="h-4 w-4 animate-spin" />
+              : <Wand2 className="h-4 w-4" />}
+            <span className="text-[11px] font-medium capitalize">
+              {analyzerMode === 'combine' ? 'Combine'
+                : analyzerMode === 'full-llm' ? 'Full LLM'
+                : 'Local'}
+            </span>
+          </button>
+          {/* Divider */}
+          <div className={cn('w-px shrink-0', dividerCls)} />
+          {/* Dropdown trigger — opens mode picker. Wider + bordered so it's
+              obviously clickable on its own. */}
+          <button
+            onClick={() => setAnalyzerModePickerOpen((o) => !o)}
+            disabled={analysisInFlight}
+            aria-label="Pick analyzer mode"
+            aria-haspopup="menu"
+            aria-expanded={analyzerModePickerOpen}
+            data-testid="analyzer-mode-toggle"
+            title={`Đổi mode (hiện tại: ${analyzerMode})`}
+            className={cn(
+              'flex items-center justify-center w-7 rounded-r-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+              analyzerModePickerOpen ? activeCls : hoverCls,
+            )}
+          >
+            <ChevronDown className={cn(
+              'h-3.5 w-3.5 transition-transform',
+              analyzerModePickerOpen ? 'rotate-180' : '',
+            )} />
+          </button>
+          {/* Dropdown menu */}
+          {analyzerModePickerOpen && (
+            <div
+              role="menu"
+              data-testid="analyzer-mode-menu"
+              className={cn(
+                'absolute right-0 top-9 z-50 w-72 rounded-md border border-border shadow-xl p-1',
+                panelCls,
+                dividerCls,
+                'animate-in fade-in slide-in-from-top-2',
+              )}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className={cn('px-3 py-2 text-[10px] uppercase tracking-wide', mutedCls)}>
+                Chọn mode cho Full Analyzer
+              </div>
+              {ANALYZE_MODES.map((opt) => {
+                const isSelected = analyzerMode === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    role="menuitemradio"
+                    aria-checked={isSelected}
+                    data-testid={`analyzer-mode-${opt.id}`}
+                    onClick={() => {
+                      setAnalyzerModePersist(opt.id);
+                      setAnalyzerModePickerOpen(false);
+                    }}
+                    className={cn(
+                      'w-full text-left rounded px-3 py-2 flex flex-col gap-0.5 transition-colors',
+                      isSelected ? 'bg-primary/15 ring-1 ring-primary/40' : hoverCls,
+                    )}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">{opt.label}</span>
+                      <span className={cn('text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded', opt.hintCls)}>
+                        {opt.hint}
+                      </span>
+                      {isSelected && (
+                        <Check className="h-3 w-3 ml-auto text-primary" />
+                      )}
+                    </div>
+                    <div className={cn('text-[11px] leading-snug', mutedCls)}>
+                      {opt.desc}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        <button onClick={toggleFullscreen} className={cn('hidden sm:flex h-8 w-8 items-center justify-center rounded-md border border-border border-transparent', hoverCls)}>
           {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
         </button>
         <button
           onClick={toggleVoiceControl}
           disabled={!voiceControlSupported}
           title={voiceControlSupported ? (voiceControlOn ? 'Tắt nghe lệnh giọng nói' : 'Bật nghe lệnh giọng nói') : 'Trình duyệt không hỗ trợ nhận lệnh giọng nói'}
-          className={cn('flex h-8 w-8 items-center justify-center rounded-md border transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
+          className={cn('hidden md:flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
             voiceControlOn ? activeCls : `border-transparent ${hoverCls}`)}>
           <Mic className="h-4 w-4" />
         </button>
         <ServiceHealth showWorker={false} className="hidden md:inline-flex" />
-        {/* TTS toggle — opens settings panel when idle, stops when active */}
+        {/* TTS toggle — opens settings panel when idle, stops when active. Visual
+            hierarchy: filled primary when actively reading, outlined when
+            idle, so the eye finds the most-used action first. */}
         <button
           onClick={() => {
             if (ttsState === 'idle') {
               void loadTtsContext();
-              setTtsSettingsOpen((o) => !o);
+              setAbTab('readAloud');
+              setAbOpen(true);
+              setTtsSettingsOpen(false);
             } else {
               stopTts();
             }
           }}
-          title={ttsState === 'idle' ? 'Read aloud' : 'Stop reading'}
-          className={cn('flex h-8 w-8 items-center justify-center rounded-md border transition-colors',
-            ttsState !== 'idle' || ttsSettingsOpen ? activeCls : `border-transparent ${hoverCls}`)}>
+          title={ttsState === 'idle' ? 'Read aloud controls' : 'Stop reading'}
+          aria-label={ttsState === 'idle' ? 'Open read aloud controls' : 'Stop reading aloud'}
+          aria-pressed={ttsState !== 'idle'}
+          className={cn(
+            'flex h-8 items-center gap-1.5 rounded-md border border-border px-2 transition-colors shrink-0',
+            ttsState === 'playing'
+              ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+              : ttsState === 'loading'
+                ? 'bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30'
+                : ttsState !== 'idle'
+                  ? `${activeCls} border-primary/40`
+                  : `border-transparent ${hoverCls}`,
+          )}>
           {ttsState === 'loading'
             ? <Loader2 className="h-4 w-4 animate-spin" />
             : ttsState !== 'idle'
             ? <VolumeX className="h-4 w-4" />
             : <Volume2 className="h-4 w-4" />}
+          <span className="hidden sm:inline text-[11px] font-medium">
+            {ttsState === 'playing' ? 'Dừng' : ttsState === 'paused' ? 'Tiếp' : ttsState === 'loading' ? '…' : 'Đọc'}
+          </span>
         </button>
+
+        {/* Mobile overflow menu — surfaces the secondary controls we hid
+            below the `md:` breakpoint. Tap outside / ESC dismisses via
+            Radix. Mirrors desktop actions without duplicating handlers. */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-label="Mở menu công cụ khác"
+              className={cn(
+                'md:hidden flex h-8 w-8 items-center justify-center rounded-md border border-border border-transparent shrink-0',
+                hoverCls,
+              )}
+              title="Mở menu công cụ khác"
+            >
+              <MoreVertical className="h-4 w-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-[14rem]">
+            <DropdownMenuItem
+              onSelect={() => updateSetting('layout', settings.layout === 'spread' ? 'scroll' : 'spread')}
+              className="gap-2"
+            >
+              {settings.layout === 'spread'
+                ? <><ScrollText className="h-3.5 w-3.5" />Scroll layout</>
+                : <><Columns className="h-3.5 w-3.5" />Spread layout (2 cột)</>}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={() => {
+                setVoiceDebugOpen((o) => !o);
+                setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false);
+                setWmOpen(false); setAbOpen(false);
+              }}
+              className="gap-2"
+            >
+              <Bug className="h-3.5 w-3.5" />
+              <span className="flex-1">Voice debug</span>
+              {voiceDebugOpen && <Check className="h-3 w-3 text-primary" />}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={() => { void runFullAnalysis(analyzerMode); }}
+              disabled={analysisInFlight || !chapters[currentIdx]?.id}
+              className="gap-2"
+            >
+              {analysisInFlight
+                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                : <Wand2 className="h-3.5 w-3.5" />}
+              <span className="flex-1 capitalize">
+                {analysisInFlight ? 'Đang chạy' : `Full Analyzer (${analyzerMode})`}
+              </span>
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={toggleVoiceControl}
+              disabled={!voiceControlSupported}
+              className="gap-2"
+            >
+              <Mic className="h-3.5 w-3.5" />
+              <span className="flex-1">Điều khiển giọng nói</span>
+              {voiceControlOn && <Check className="h-3 w-3 text-primary" />}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={toggleFullscreen}
+              className="gap-2"
+            >
+              {fullscreen
+                ? <><Minimize2 className="h-3.5 w-3.5" />Thoát toàn màn hình</>
+                : <><Maximize2 className="h-3.5 w-3.5" />Toàn màn hình</>}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </header>
+
+      {/* ── Keyboard shortcuts overlay (UI Polish §5.3) ─────────────────
+          Opens on '?' / Shift+/. ESC closes. Uses the hand-rolled
+          focus-trapping modal substrate (matches Analyzer drawer
+          behaviour) rather than <Dialog> because it must sit above
+          EVERY reader surface (z-100). */}
+      {shortcutsOpen && mounted && createPortal(
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="shortcuts-overlay-title"
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-modal-overlay p-4 animate-in fade-in"
+          onClick={() => setShortcutsOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className={cn(
+              'w-full max-w-md rounded-lg border border-border shadow-2xl p-5 space-y-4',
+              'animate-in zoom-in-95 fade-in',
+              panelCls,
+            )}>
+            <div className="flex items-center justify-between">
+              <h2 id="shortcuts-overlay-title" className="font-semibold text-sm flex items-center gap-1.5">
+                <KbdHint keys={['?']} />
+                <span>Phím tắt</span>
+              </h2>
+              <button
+                type="button"
+                onClick={() => setShortcutsOpen(false)}
+                aria-label="Đóng"
+                className={cn('rounded p-1', hoverCls)}
+                title="Đóng (ESC)">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <ul className="space-y-2 text-xs">
+              <li className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Trang sau / Phát</span>
+                <KbdHint keys={['→']} /><span className="text-muted-foreground">/</span><KbdHint keys={['Space']} />
+              </li>
+              <li className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Trang trước</span>
+                <KbdHint keys={['←']} />
+              </li>
+              <li className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Mục lục</span>
+                <KbdHint keys={['T']} />
+              </li>
+              <li className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Bookmark</span>
+                <KbdHint keys={['B']} />
+              </li>
+              <li className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Đóng panel / overlay</span>
+                <KbdHint keys={['Esc']} />
+              </li>
+              <li className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Mở hộp phím tắt này</span>
+                <KbdHint keys={['?']} />
+              </li>
+            </ul>
+            <p className={cn('text-[10px] pt-1 border-t', dividerCls, mutedCls)}>
+              Nhấn <KbdHint keys={['?']} /> bất kỳ lúc nào để mở lại hộp này.
+            </p>
+          </div>
+        </div>,
+        document.body,
+      )}
 
       {(voiceControlOn || voiceCommandText || voiceCommandError) && (
         <div className={cn('flex items-center gap-2 px-3 py-1 border-b shrink-0 text-[11px]', headerCls)}>
@@ -2040,84 +4046,79 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         </div>
       )}
 
-      {/* ── Read-aloud side panel (right slide-in drawer) ─────────────── */}
-      <ReadAloudPanel
-        open={ttsSettingsOpen}
-        onClose={() => setTtsSettingsOpen(false)}
-        defaultVoice={ttsVoice}
-        setDefaultVoice={setTtsVoice}
-        customVoices={ttsCustomVoices.map((v) => ({ id: v.id, name: v.name, isCloned: v.isCustom }))}
-        setCustomVoices={(vs) => setTtsCustomVoices(vs.map((v) => ({ id: v.id, name: v.name, isCustom: v.isCloned })))}
-        characterList={ttsCharacterList}
-        useCharacterVoice={ttsUseCharacterVoice}
-        setUseCharacterVoice={setTtsUseCharacterVoice}
-        speed={ttsSpeed}
-        setSpeed={setTtsSpeed}
-        expressiveness={ttsNoise}
-        setExpressiveness={setTtsNoise}
-        paragraphGap={ttsParagraphGap}
-        setParagraphGap={setTtsParagraphGap}
-        continuousPlay={ttsContinuousPlay}
-        setContinuousPlay={setTtsContinuousPlay}
-        pregenStatus={pregenStatus}
-        useAIEmotion={ttsUseAI}
-        setUseAIEmotion={setTtsUseAI}
-        ttsState={ttsState}
-        ttsParagraphs={ttsParagraphs}
-        ttsIndex={ttsIndex}
-        ttsCurrentSpeaker={ttsCurrentSpeaker}
-        ttsEmotionLabel={ttsEmotionLabel}
-        onStart={() => { setTtsSettingsOpen(false); startTts(0); }}
-        onStop={stopTts}
-        onTogglePause={toggleTtsPause}
-        onPreviewDefaultVoice={previewDefaultVoice}
-        onStopPreview={stopVoicePreview}
-        previewingVoice={previewingVoice}
-        bookId={bookId}
-        onOpenVoiceLibrary={() => setAbOpen(true)}
-        accentColor={accentColor}
-        themeCls={headerCls}
-        mutedCls={mutedCls}
-        borderCls={dividerCls}
-        hoverCls={hoverCls}
-        activeCls={activeCls}
-      />
-
-      {/* ── TTS status bar (visible while reading) ── */}
-      {ttsState !== 'idle' && (
-        <div className={cn('flex items-center gap-2 px-3 py-1.5 border-b shrink-0 text-xs', headerCls)}>
-          <Volume2 className="h-3.5 w-3.5 shrink-0 opacity-70" />
-          <span className={cn('flex-1 truncate', mutedCls)}>
-            {ttsState === 'loading' ? 'Đang chuẩn bị…'
-              : ttsParagraphs.length > 0 ? `Đoạn ${ttsIndex + 1} / ${ttsParagraphs.length}`
-              : 'Đang đọc…'}
-            {ttsEmotionLabel && <span className="ml-1.5 opacity-80">{ttsEmotionLabel}</span>}
-            {ttsCurrentSpeaker && (
-              <span className="ml-1.5 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-primary/15 text-primary text-[10px] font-medium">
-                🗣 {ttsCurrentSpeaker}
+      {/* ── TTS status bar (visible while reading OR while an error is showing) ── */}
+      {(ttsState !== 'idle' || ttsLastError) && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={cn(
+            'space-y-1.5 px-3 py-1.5 shrink-0 text-xs transition-colors',
+            ttsState === 'playing'
+              ? 'border-b-2 border-primary/40 bg-primary/[0.04]'
+              : 'border-b',
+            headerCls,
+          )}
+        >
+          {ttsLastError && (
+            <div className="flex items-center gap-1.5 rounded bg-red-500/15 text-red-600 dark:text-red-400 px-2 py-1">
+              <Bug className="h-3 w-3 shrink-0" />
+              <span className="flex-1 truncate" title={ttsLastError}>
+                Read-aloud: {ttsLastError}
               </span>
-            )}
-          </span>
-          {/* Speed quick-switch */}
-          <div className="flex items-center gap-1 shrink-0">
-            {[0.75, 1.0, 1.25, 1.5].map((s) => (
-              <button key={s} onClick={() => setTtsSpeed(s)}
-                className={cn('rounded px-1.5 py-0.5 text-[10px] border transition-colors',
-                  ttsSpeed === s ? activeCls : `border-transparent ${hoverCls}`)}>
-                {s}×
+              <button
+                onClick={() => setTtsLastError(null)}
+                className="rounded px-1 hover:bg-red-500/20"
+                title="Dismiss"
+              >
+                <X className="h-3 w-3" />
               </button>
-            ))}
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <Volume2 className="h-3.5 w-3.5 shrink-0 opacity-70" />
+            <span className={cn('flex-1 truncate', mutedCls)}>
+              {ttsState === 'loading' ? 'Đang chuẩn bị…'
+                : ttsParagraphs.length > 0 ? `Đoạn ${ttsIndex + 1} / ${ttsParagraphs.length} · ${ttsProgressPct}%`
+                : 'Đang đọc…'}
+              {ttsEmotionLabel && <span className="ml-1.5 opacity-80">{ttsEmotionLabel}</span>}
+              {ttsCurrentSpeaker && (
+                <span className="ml-1.5 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-primary/15 text-primary text-[10px] font-medium">
+                  {ttsCurrentSpeaker}
+                </span>
+              )}
+            </span>
+            <div className="hidden sm:flex items-center gap-1 shrink-0">
+              {[0.75, 1.0, 1.25, 1.5].map((s) => (
+                <button key={s} onClick={() => setTtsSpeed(s)}
+                  className={cn('rounded px-1.5 py-0.5 text-[10px] border border-border transition-colors',
+                    ttsSpeed === s ? activeCls : `border-transparent ${hoverCls}`)}>
+                  {s}×
+                </button>
+              ))}
+            </div>
+            <button onClick={toggleTtsPause}
+              className={cn('flex h-6 w-6 items-center justify-center rounded border border-border', hoverCls)}
+              title={ttsState === 'paused' ? 'Tiếp tục' : 'Tạm dừng'}>
+              {ttsState === 'paused' ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
+            </button>
+            <button onClick={stopTts}
+              className={cn('flex h-6 w-6 items-center justify-center rounded border border-border', hoverCls)}
+              title="Dừng">
+              <Square className="h-3 w-3" />
+            </button>
           </div>
-          <button onClick={toggleTtsPause}
-            className={cn('flex h-6 w-6 items-center justify-center rounded border', hoverCls)}
-            title={ttsState === 'paused' ? 'Tiếp tục' : 'Tạm dừng'}>
-            {ttsState === 'paused' ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
-          </button>
-          <button onClick={stopTts}
-            className={cn('flex h-6 w-6 items-center justify-center rounded border', hoverCls)}
-            title="Dừng">
-            <Square className="h-3 w-3" />
-          </button>
+          <input
+            type="range"
+            min={0}
+            max={ttsSeekMax}
+            step={1}
+            value={Math.min(ttsIndex, ttsSeekMax)}
+            onChange={(e) => restartTtsAt(parseInt(e.target.value, 10))}
+            disabled={ttsParagraphs.length < 2}
+            className="w-full h-1.5 cursor-pointer"
+            style={{ accentColor }}
+            title="Chọn đoạn để đọc"
+          />
         </div>
       )}
 
@@ -2134,7 +4135,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
             <div className="relative">
               <Search className={cn('absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2', mutedCls)} />
               <input type="search" placeholder="Search…" value={tocSearch} onChange={(e) => setTocSearch(e.target.value)}
-                className={cn('w-full rounded-md border pl-8 pr-3 py-1.5 text-xs outline-none', inputCls)} />
+                className={cn('w-full rounded-md border border-border pl-8 pr-3 py-1.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring', inputCls)} />
             </div>
           </div>
           <nav className="flex-1 overflow-y-auto">
@@ -2146,6 +4147,9 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
                 return (
                   <li key={ch.id}>
                     <button onClick={() => goToChapter(ri)}
+                      data-testid={`toc-chapter-${ri}`}
+                      data-chapter-id={ch.id}
+                      aria-current={active ? 'page' : undefined}
                       className={cn('w-full text-left px-3 py-2 text-xs leading-snug flex items-center gap-1.5 border-l-2 transition-colors',
                         active ? activeCls : `border-transparent ${hoverCls}`)}>
                       {marked && <Bookmark className="h-2.5 w-2.5 shrink-0 fill-amber-500 text-amber-500" />}
@@ -2177,7 +4181,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
           </div>
           <nav className="flex-1 overflow-y-auto">
             {bookmarks.length === 0 ? (
-              <p className={cn('px-4 py-8 text-xs text-center', mutedCls)}>No bookmarks.<br />Press <kbd className="px-1 rounded border">B</kbd> to add one.</p>
+              <p className={cn('px-4 py-8 text-xs text-center', mutedCls)}>No bookmarks.<br />Press <kbd className="px-1 rounded border border-border">B</kbd> to add one.</p>
             ) : bookmarks.map((idx) => {
               const ch = chapters[idx];
               if (!ch) return null;
@@ -2206,7 +4210,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
                 {[{ id: 'spread' as Layout, label: 'Book (2-col)', icon: Columns },
                   { id: 'scroll' as Layout, label: 'Scroll', icon: ScrollText }].map(({ id, label, icon: Icon }) => (
                   <button key={id} onClick={() => updateSetting('layout', id)}
-                    className={cn('flex flex-col items-center gap-1 rounded-lg border py-3 text-xs font-medium transition-all bg-transparent',
+                    className={cn('flex flex-col items-center gap-1 rounded-lg border border-border py-3 text-xs font-medium transition-all bg-transparent',
                       settings.layout === id ? activeCls : `${hoverCls} opacity-70`)}>
                     <Icon className="h-4 w-4" />{label}
                   </button>
@@ -2219,7 +4223,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
               <div className="flex gap-2">
                 {THEMES.map((t) => (
                   <button key={t.id} onClick={() => updateSetting('theme', t.id)}
-                    className={cn('flex-1 rounded-lg border py-2.5 text-xs font-medium transition-all', settings.theme === t.id ? 'ring-2' : 'opacity-60')}
+                    className={cn('flex-1 rounded-lg border border-border py-2.5 text-xs font-medium transition-all', settings.theme === t.id ? 'ring-2' : 'opacity-60')}
                     style={{ background: t.bg, color: t.text }}>
                     {t.label}
                   </button>
@@ -2232,7 +4236,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
               <div className="flex gap-2">
                 {FONTS.map((f) => (
                   <button key={f.id} onClick={() => updateSetting('font', f.id)}
-                    className={cn('flex-1 rounded-lg border py-2 text-xs transition-all bg-transparent', settings.font === f.id ? activeCls + ' font-semibold' : `${hoverCls} opacity-70`)}
+                    className={cn('flex-1 rounded-lg border border-border py-2 text-xs transition-all bg-transparent', settings.font === f.id ? activeCls + ' font-semibold' : `${hoverCls} opacity-70`)}
                     style={{ fontFamily: f.stack }}>{f.sample}</button>
                 ))}
               </div>
@@ -2245,11 +4249,11 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
               </div>
               <div className="flex items-center gap-2">
                 <button onClick={() => updateSetting('fontSize', Math.max(12, settings.fontSize - 1))}
-                  className={cn('flex h-7 w-7 items-center justify-center rounded border', hoverCls)}><Minus className="h-3.5 w-3.5" /></button>
+                  className={cn('flex h-7 w-7 items-center justify-center rounded border border-border', hoverCls)}><Minus className="h-3.5 w-3.5" /></button>
                 <input type="range" min={12} max={28} step={1} value={settings.fontSize}
                   onChange={(e) => updateSetting('fontSize', parseInt(e.target.value, 10))} className="flex-1" style={{ accentColor }} />
                 <button onClick={() => updateSetting('fontSize', Math.min(28, settings.fontSize + 1))}
-                  className={cn('flex h-7 w-7 items-center justify-center rounded border', hoverCls)}><Plus className="h-3.5 w-3.5" /></button>
+                  className={cn('flex h-7 w-7 items-center justify-center rounded border border-border', hoverCls)}><Plus className="h-3.5 w-3.5" /></button>
               </div>
             </div>
             {/* Line height */}
@@ -2268,7 +4272,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
               <div className="grid grid-cols-4 gap-1.5">
                 {INDENT_PRESETS.map((p) => (
                   <button key={p.em} onClick={() => updateSetting('indent', p.em)}
-                    className={cn('rounded-lg border py-2 text-[10px] font-medium transition-all bg-transparent', settings.indent === p.em ? activeCls : `${hoverCls} opacity-70`)}>
+                    className={cn('rounded-lg border border-border py-2 text-[10px] font-medium transition-all bg-transparent', settings.indent === p.em ? activeCls : `${hoverCls} opacity-70`)}>
                     {p.label}
                   </button>
                 ))}
@@ -2281,7 +4285,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
                 <div className="grid grid-cols-4 gap-1.5">
                   {WIDTHS.map((w) => (
                     <button key={w.px} onClick={() => updateSetting('width', w.px)}
-                      className={cn('rounded-lg border py-2 text-[10px] font-medium transition-all bg-transparent', settings.width === w.px ? activeCls : `${hoverCls} opacity-70`)}>
+                      className={cn('rounded-lg border border-border py-2 text-[10px] font-medium transition-all bg-transparent', settings.width === w.px ? activeCls : `${hoverCls} opacity-70`)}>
                       {w.label}
                     </button>
                   ))}
@@ -2311,7 +4315,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
             </div>
             {/* Reset */}
             <button onClick={() => { setSettings(DEFAULT_SETTINGS); saveSettings(DEFAULT_SETTINGS); }}
-              className={cn('w-full flex items-center justify-center gap-1.5 rounded-lg border py-2 text-xs', hoverCls)}>
+              className={cn('w-full flex items-center justify-center gap-1.5 rounded-lg border border-border py-2 text-xs', hoverCls)}>
               <RotateCcw className="h-3.5 w-3.5" /> Reset defaults
             </button>
             {/* Watermark section */}
@@ -2325,11 +4329,11 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
               )}
               <div className="flex gap-2">
                 <button onClick={() => detectWatermarks(false)}
-                  className={cn('flex-1 flex items-center justify-center gap-1 rounded-lg border py-2 text-[10px] font-medium', hoverCls)}>
+                  className={cn('flex-1 flex items-center justify-center gap-1 rounded-lg border border-border py-2 text-[10px] font-medium', hoverCls)}>
                   <Search className="h-3 w-3" /> Detect
                 </button>
                 <button onClick={() => detectWatermarks(true)}
-                  className={cn('flex-1 flex items-center justify-center gap-1 rounded-lg border py-2 text-[10px] font-medium', hoverCls)}>
+                  className={cn('flex-1 flex items-center justify-center gap-1 rounded-lg border border-border py-2 text-[10px] font-medium', hoverCls)}>
                   <Wand2 className="h-3 w-3" /> AI Detect
                 </button>
               </div>
@@ -2339,7 +4343,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
               <p className="font-semibold uppercase tracking-widest mb-2">Shortcuts</p>
               {[['→ / Space','Next'],['←','Prev'],['T','TOC'],['B','Bookmark'],['Esc','Close']].map(([k,d]) => (
                 <div key={k} className="flex justify-between items-center">
-                  <kbd className="px-1.5 py-0.5 rounded border font-mono text-[9px]">{k}</kbd><span>{d}</span>
+                  <kbd className="px-1.5 py-0.5 rounded border border-border font-mono text-[9px]">{k}</kbd><span>{d}</span>
                 </div>
               ))}
             </div>
@@ -2365,7 +4369,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
                 <p className={cn('text-xs', mutedCls)}>Select phrases to remove. They will be stripped from every chapter when reading.</p>
                 <div className="space-y-2">
                   {wmCandidates.map((c, i) => (
-                    <label key={i} className={cn('flex items-start gap-2 rounded-lg border p-2.5 cursor-pointer transition-colors text-xs',
+                    <label key={i} className={cn('flex items-start gap-2 rounded-lg border border-border p-2.5 cursor-pointer transition-colors text-xs',
                       wmSelected.has(i) ? activeCls : hoverCls)}>
                       <input type="checkbox" checked={wmSelected.has(i)} onChange={() => {
                         const next = new Set(wmSelected);
@@ -2391,46 +4395,139 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
           )}
         </NavPanel>
 
-        {/* Audiobook panel (right side, with tabs) */}
+        {/* Audio panel: live read-aloud, pre-generated audiobook, and voices */}
         <aside
           onClick={(e) => e.stopPropagation()}
           className={cn('absolute inset-y-0 right-0 z-20 flex flex-col shadow-2xl transition-transform duration-200 ease-in-out overflow-hidden',
             panelCls,
-            'w-96 border-l',
+            'max-w-full border-l',
             abOpen ? 'translate-x-0' : 'translate-x-full',
           )}
+          style={{ width: audioPanelMobile ? '100vw' : `${audioPanelWidth}px` }}
         >
+          {/* Left-edge resize handle (panel is right-anchored). Hidden on
+              mobile because the panel is full-width and there's nothing
+              to resize. */}
+          {!audioPanelMobile && (
+            <div
+              data-testid="audio-panel-resize-handle"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Kéo để thay đổi chiều rộng bảng Audio — double-click để reset"
+              onPointerDown={onAudioResizeHandlePointerDown}
+              onPointerMove={onAudioResizeHandlePointerMove}
+              onPointerUp={onAudioResizeHandlePointerUp}
+              onPointerCancel={onAudioResizeHandlePointerUp}
+              onDoubleClick={onAudioResizeHandleDoubleClick}
+              className={cn(
+                'group absolute inset-y-0 left-0 w-2 -translate-x-1/2 cursor-col-resize',
+                'flex items-center justify-center',
+                'z-30',
+              )}
+            >
+              <div className={cn(
+                'h-full w-[3px] rounded-full transition-colors',
+                'bg-transparent group-hover:bg-blue-500/60 group-active:bg-blue-500',
+              )} />
+            </div>
+          )}
           <div className={cn('flex items-center justify-between px-4 py-3 border-b shrink-0', dividerCls)}>
             <span className="font-semibold text-sm flex items-center gap-1.5">
-              <Headphones className="h-3.5 w-3.5" />Audiobook
+              <Headphones className="h-3.5 w-3.5" />Audio
             </span>
             <button onClick={() => setAbOpen(false)} className={cn('rounded p-1', hoverCls)}><X className="h-3.5 w-3.5" /></button>
           </div>
           {/* Tabs */}
           <div className={cn('flex border-b shrink-0', dividerCls)}>
+            <button onClick={() => setAbTab('readAloud')}
+              className={cn('flex-1 py-2 text-xs font-medium transition-colors border-b-2',
+                abTab === 'readAloud' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')}>
+              Read aloud
+            </button>
             <button onClick={() => setAbTab('audiobook')}
               className={cn('flex-1 py-2 text-xs font-medium transition-colors border-b-2',
                 abTab === 'audiobook' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')}>
-              Pre-generation
+              Audiobook
             </button>
             <button onClick={() => setAbTab('voices')}
               className={cn('flex-1 py-2 text-xs font-medium transition-colors border-b-2',
                 abTab === 'voices' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')}>
-              Giọng & nhân vật
+              Giọng
+            </button>
+            <button onClick={() => setAbTab('characters')}
+              className={cn('flex-1 py-2 text-xs font-medium transition-colors border-b-2',
+                abTab === 'characters' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')}>
+              Nhân vật
             </button>
           </div>
-          <div className="flex-1 overflow-y-auto p-4">
-            {abTab === 'audiobook' ? <AudiobookPanel bookId={bookId} /> : <VoicePanel bookId={bookId} bookLanguage="vi" />}
+          <div className={cn('flex-1 min-h-0 overflow-y-auto', abTab === 'readAloud' ? '' : 'p-4')}>
+            {abTab === 'readAloud' ? (
+              <Suspense fallback={<PanelSkeleton />}>
+                <ReadAloudPanel
+                  embedded
+                  open
+                  onClose={() => setAbOpen(false)}
+                  defaultVoice={ttsVoice}
+                  setDefaultVoice={setTtsVoice}
+                  customVoices={ttsCustomVoices.map((v) => ({ id: v.id, name: v.name, isCloned: v.isCustom }))}
+                  setCustomVoices={(vs) => setTtsCustomVoices(vs.map((v) => ({ id: v.id, name: v.name, isCustom: v.isCloned })))}
+                  characterList={ttsCharacterList}
+                  useCharacterVoice={ttsUseCharacterVoice}
+                  setUseCharacterVoice={setTtsUseCharacterVoice}
+                  speed={ttsSpeed}
+                  setSpeed={setTtsSpeed}
+                  expressiveness={ttsNoise}
+                  setExpressiveness={setTtsNoise}
+                  paragraphGap={ttsParagraphGap}
+                  setParagraphGap={setTtsParagraphGap}
+                  continuousPlay={ttsContinuousPlay}
+                  setContinuousPlay={setTtsContinuousPlay}
+                  pregenStatus={pregenStatus}
+                  useAIEmotion={ttsUseAI}
+                  setUseAIEmotion={setTtsUseAI}
+                  ttsState={ttsState}
+                  ttsParagraphs={ttsParagraphs}
+                  ttsIndex={ttsIndex}
+                  ttsCurrentSpeaker={ttsCurrentSpeaker}
+                  ttsEmotionLabel={ttsEmotionLabel}
+                  onStart={() => startTts(0)}
+                  onStop={stopTts}
+                  onTogglePause={toggleTtsPause}
+                  onSeekParagraph={restartTtsAt}
+                  onPreviewDefaultVoice={previewDefaultVoice}
+                  onStopPreview={stopVoicePreview}
+                  previewingVoice={previewingVoice}
+                  bookId={bookId}
+                  onOpenVoiceLibrary={() => { setAbOpen(true); setAbTab('voices'); }}
+                  accentColor={accentColor}
+                  themeCls={panelCls}
+                  mutedCls={mutedCls}
+                  borderCls={dividerCls}
+                  hoverCls={hoverCls}
+                  activeCls={activeCls}
+                />
+              </Suspense>
+            ) : abTab === 'audiobook' ? (
+              <Suspense fallback={<PanelSkeleton />}>
+                <AudiobookPanel bookId={bookId} />
+              </Suspense>
+            ) : abTab === 'voices' ? (
+              <VoicePanel bookId={bookId} bookLanguage="vi" section="voices" />
+            ) : (
+              <VoicePanel bookId={bookId} bookLanguage="vi" section="characters" />
+            )}
           </div>
         </aside>
 
-        {/* Voice-assignment debug panel (right side, narrower) */}
+        {/* Voice-assignment debug panel (left side) — moved from right to avoid
+            overlapping with the Audio panel (right). On the left it slides
+            over the table-of-contents / bookmarks area instead. */}
         <aside
           onClick={(e) => e.stopPropagation()}
-          className={cn('absolute inset-y-0 right-0 z-20 flex flex-col shadow-2xl transition-transform duration-200 ease-in-out overflow-hidden',
+          className={cn('absolute inset-y-0 left-0 z-20 flex flex-col shadow-2xl transition-transform duration-200 ease-in-out overflow-hidden',
             panelCls,
-            'w-[28rem] max-w-full border-l',
-            voiceDebugOpen ? 'translate-x-0' : 'translate-x-full',
+            'w-[26rem] max-w-full border-r',
+            voiceDebugOpen ? 'translate-x-0' : '-translate-x-full',
           )}
         >
           <div className={cn('flex items-center justify-between px-4 py-3 border-b shrink-0', dividerCls)}>
@@ -2439,19 +4536,31 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
             </span>
             <button onClick={() => setVoiceDebugOpen(false)} className={cn('rounded p-1', hoverCls)}><X className="h-3.5 w-3.5" /></button>
           </div>
-          <VoiceDebugPanel
-            paragraphs={ttsParagraphs}
-            ttsCharacterList={ttsCharacterList}
-            ttsCharacterMap={ttsCharacterMap}
-            detectSpeaker={detectSpeaker}
-            chapterAttributionRef={chapterAttributionRef}
-            chapterAttributionStats={chapterAttributionStats}
-            currentChapterId={chapters[currentIdx]?.id}
-            isDark={isDark}
-            dividerCls={dividerCls}
-            hoverCls={hoverCls}
-            panelCls={panelCls}
-          />
+          <Suspense fallback={<PanelSkeleton />}>
+            <VoiceDebugPanel
+              // Prefer the analyzer's paragraph texts (populated by the
+              // most recent Full Analyzer run) when they match the current
+              // chapter. `ttsParagraphs` is only populated when TTS playback
+              // starts, so without this fallback the panel would be empty
+              // if the user runs the analyzer before pressing play.
+              paragraphs={
+                analysisModal && analysisModal.chapterId === chapters[currentIdx]?.id
+                  ? (analysisModal.paragraphTexts ?? [])
+                  : ttsParagraphs
+              }
+              ttsCharacterList={ttsCharacterList}
+              ttsCharacterMap={ttsCharacterMap}
+              detectSpeaker={detectSpeaker}
+              chapterAttributionRef={chapterAttributionRef}
+              chapterAttributionStats={chapterAttributionStats}
+              currentChapterId={chapters[currentIdx]?.id}
+              attributionRefreshTick={attributionRefreshTick}
+              isDark={isDark}
+              dividerCls={dividerCls}
+              hoverCls={hoverCls}
+              panelCls={panelCls}
+            />
+          </Suspense>
         </aside>
 
         {/* Chapter iframe */}
@@ -2480,32 +4589,95 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         <Button variant="outline" size="sm" onClick={handlePrev}
           disabled={chapters.length === 0 || (currentIdx <= 0 && (settings.layout === 'scroll' || spreadPage <= 0))}
           style={btnStyle}
+          aria-label="Previous chapter"
           className="gap-1 text-xs">
           <ChevronLeft className="h-3.5 w-3.5" /><span className="hidden sm:block">Prev</span>
         </Button>
 
         <div className="flex-1 flex flex-col items-center gap-1">
+          {/* ── Intra-chapter progress: thin 1px-tall bar driven by the
+              iframe's page-info postMessage. Shows where you are inside
+              the current chapter as a continuous percentage, complementing
+              the chapter-level dots below. */}
+          {chapters.length > 0 && spreadTotal > 1 && (
+            <Progress
+              value={Math.round(((spreadPage + 1) / spreadTotal) * 100)}
+              label={`Trang ${spreadPage + 1}/${spreadTotal} trong chương hiện tại`}
+              className="h-[2px] w-full max-w-xs"
+              indicatorClassName="bg-primary/70"
+            />
+          )}
           {settings.layout === 'spread' && spreadTotal > 1 && (
             <p className={cn('text-[10px]', mutedCls)}>Page {spreadPage + 1} / {spreadTotal} in chapter</p>
           )}
-          {chapters.length > 0 && chapters.length <= 30 ? (
-            <div className="flex flex-wrap justify-center gap-0.5 max-w-xs">
-              {chapters.map((_, idx) => (
-                <button key={idx} onClick={() => goToChapter(idx)} title={chapters[idx]?.title}
-                  className="rounded-full transition-all"
-                  style={{
-                    width: idx === currentIdx ? 10 : 6, height: idx === currentIdx ? 10 : 6,
-                    background: bookmarks.includes(idx) ? '#f59e0b' : idx === currentIdx ? accentColor : 'currentColor',
-                    opacity: idx === currentIdx ? 1 : bookmarks.includes(idx) ? 0.8 : 0.2,
-                  }} />
-              ))}
+          {chapters.length > 0 && chapters.length <= 80 ? (
+            // ── Condensed dots — ≤80 chapters, each dot 3px (4px active). ──
+            <div className="flex flex-wrap justify-center items-center gap-1 max-w-md">
+              {chapters.map((_, idx) => {
+                const isActive = idx === currentIdx;
+                const isBookmarked = bookmarks.includes(idx);
+                return (
+                  <button key={idx} onClick={() => goToChapter(idx)} title={chapters[idx]?.title}
+                    data-testid={`chapter-dot-${idx}`}
+                    data-chapter-index={idx}
+                    aria-label={`Jump to chapter ${idx + 1}${isBookmarked ? ' (bookmarked)' : ''}`}
+                    aria-current={isActive ? 'true' : undefined}
+                    className="rounded-full transition-all"
+                    style={{
+                      width: isActive ? 4 : 3,
+                      height: isActive ? 4 : 3,
+                      background: isBookmarked ? '#f59e0b' : isActive ? accentColor : 'currentColor',
+                      opacity: isActive ? 1 : isBookmarked ? 0.8 : 0.25,
+                    }} />
+                );
+              })}
             </div>
-          ) : chapters.length > 30 ? (
-            <div className="w-full max-w-xs">
-              <div className="h-1.5 rounded-full" style={{ background: `${accentColor}22` }}>
-                <div className="h-full rounded-full transition-all" style={{ background: accentColor, width: `${chapters.length > 0 ? ((currentIdx + 1) / chapters.length) * 100 : 0}%` }} />
+          ) : chapters.length > 80 && chapters.length <= 300 ? (
+            // ── Dot grid (same dots) + DropdownMenu "Jump to…" trigger for
+            //     touch devices where small targets are hard to hit. ──
+            <div className="flex items-center gap-2 max-w-md w-full">
+              <div className="flex flex-wrap justify-center items-center gap-1 flex-1 min-w-0">
+                {chapters.map((_, idx) => {
+                  const isActive = idx === currentIdx;
+                  const isBookmarked = bookmarks.includes(idx);
+                  return (
+                    <button key={idx} onClick={() => goToChapter(idx)} title={chapters[idx]?.title}
+                      data-testid={`chapter-dot-${idx}`}
+                      data-chapter-index={idx}
+                      aria-label={`Jump to chapter ${idx + 1}${isBookmarked ? ' (bookmarked)' : ''}`}
+                      aria-current={isActive ? 'true' : undefined}
+                      className="rounded-full transition-all"
+                      style={{
+                        width: isActive ? 4 : 3,
+                        height: isActive ? 4 : 3,
+                        background: isBookmarked ? '#f59e0b' : isActive ? accentColor : 'currentColor',
+                        opacity: isActive ? 1 : isBookmarked ? 0.8 : 0.25,
+                      }} />
+                  );
+                })}
               </div>
-              <p className={cn('text-center text-[10px] mt-0.5', mutedCls)}>{currentIdx + 1} / {chapters.length}</p>
+              <ChapterJumpMenu
+                chapters={chapters}
+                currentIdx={currentIdx}
+                onJump={goToChapter}
+                mutedCls={mutedCls}
+              />
+            </div>
+          ) : chapters.length > 300 ? (
+            // ── Long books (>300 ch): progress bar + jump menu (mobile). ──
+            <div className="w-full max-w-xs flex items-center gap-2">
+              <div className="flex-1">
+                <div className="h-1.5 rounded-full" style={{ background: `${accentColor}22` }}>
+                  <div className="h-full rounded-full transition-all" style={{ background: accentColor, width: `${chapters.length > 0 ? ((currentIdx + 1) / chapters.length) * 100 : 0}%` }} />
+                </div>
+                <p className={cn('text-center text-[10px] mt-0.5', mutedCls)}>{currentIdx + 1} / {chapters.length}</p>
+              </div>
+              <ChapterJumpMenu
+                chapters={chapters}
+                currentIdx={currentIdx}
+                onJump={goToChapter}
+                mutedCls={mutedCls}
+              />
             </div>
           ) : null}
         </div>
@@ -2513,10 +4685,441 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         <Button variant="outline" size="sm" onClick={handleNext}
           disabled={chapters.length === 0 || (currentIdx >= chapters.length - 1 && (settings.layout === 'scroll' || spreadPage >= spreadTotal - 1))}
           style={btnStyle}
+          aria-label="Next chapter"
           className="gap-1 text-xs">
           <span className="hidden sm:block">Next</span><ChevronRight className="h-3.5 w-3.5" />
         </Button>
       </footer>
+
+      {/* ── Full Analyzer drawer — shown after Wand2 click ──
+          Docks to the RIGHT side of the viewport (mirrors the Audio panel's
+          layout). Rendered through a portal so it escapes the reader's
+          full-screen `fixed inset-0 z-50` wrapper — otherwise the modal is
+          trapped in the reader's stacking context and either fails to
+          paint or paints behind sibling panels.
+
+          Backdrop is a separate full-screen dim layer; the drawer itself
+          slides in from the right via translate-x-0/translate-x-full. */}
+      {analysisModal && mounted && createPortal(
+        // Backdrop is purely decorative now — clicking it does NOT close
+        // the modal, only ✕ / Đóng (ESC) / Hủy / ESC key do. The dim layer
+        // is here to make the drawer read clearly against the reader text.
+        <div
+          data-testid="analyzer-modal-backdrop"
+          aria-hidden="true"
+          className="fixed inset-0 z-[100] bg-modal-overlay animate-in fade-in pointer-events-none"
+        />,
+        document.body,
+      )}
+      {analysisModal && mounted && createPortal(
+        <aside
+          data-testid="analyzer-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="analyzer-modal-title"
+          onClick={(e) => e.stopPropagation()}
+          className={cn(
+            'fixed inset-y-0 right-0 z-[101] flex shadow-2xl transition-transform duration-200 ease-in-out',
+            panelCls,
+            'border-l',
+            'translate-x-0',                  /* slide-in state — no translate-x-full when open */
+          )}
+          style={{ width: `${analyzerPanelWidth}px`, maxWidth: '100vw' }}
+        >
+          {/* ── Left-edge resize handle ─────────────────────────────────
+              Drag horizontally to widen/narrow. Cursor + user-select are
+              swapped at the document level during drag so the cursor
+              doesn't flicker when crossing child boundaries. Double-click
+              snaps back to the default 44rem width. */}
+          <div
+            data-testid="analyzer-modal-resize-handle"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Kéo để thay đổi chiều rộng bảng — double-click để reset"
+            title="Kéo để thay đổi chiều rộng — double-click để reset về mặc định"
+            onPointerDown={onResizeHandlePointerDown}
+            onPointerMove={onResizeHandlePointerMove}
+            onPointerUp={onResizeHandlePointerUp}
+            onPointerCancel={onResizeHandlePointerUp}
+            onDoubleClick={onResizeHandleDoubleClick}
+            className={cn(
+              'group absolute inset-y-0 left-0 w-2 -translate-x-1/2 cursor-col-resize',
+              'flex items-center justify-center',
+              'z-[102]',
+            )}
+          >
+            <div
+              className={cn(
+                'h-full w-[3px] rounded-full transition-colors',
+                'bg-transparent group-hover:bg-blue-500/60 group-active:bg-blue-500',
+              )}
+            />
+          </div>
+          <div
+            className={cn(
+              'flex flex-col h-full overflow-hidden',
+              'animate-in slide-in-from-right',
+            )}
+          >
+            {/* Header */}
+            <div className={cn('flex items-center justify-between px-5 py-3 border-b shrink-0', dividerCls)}>
+              <div className="min-w-0 flex-1">
+                <h2 id="analyzer-modal-title" className="font-semibold text-sm flex items-center gap-1.5">
+                  <Wand2 className="h-4 w-4 text-primary" />
+                  Full Analyzer {analysisModal.running ? '— đang chạy…' : '— kết quả'}
+                  {analysisModal.running && (
+                    <span className="ml-2 inline-flex items-center gap-1.5 rounded-full bg-blue-500/15 text-blue-600 dark:text-blue-400 px-2 py-0.5 text-[10px] font-medium">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      {analysisModal.log.length} dòng
+                    </span>
+                  )}
+                  {analysisModal.failed && (
+                    <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-red-500/15 text-red-600 dark:text-red-400 px-2 py-0.5 text-[10px] font-medium">
+                      <AlertCircle className="h-3 w-3" />thất bại
+                    </span>
+                  )}
+                </h2>
+                <p className={cn('text-xs truncate mt-0.5', mutedCls)}>
+                  {chapters.find((c) => c.id === analysisModal.chapterId)?.title ?? analysisModal.chapterTitle}
+                </p>
+              </div>
+              {/* "Follow tail" toggle — when off, the log keeps its scroll
+                  position while streaming so the user can read older lines. */}
+              <label
+                className="flex items-center gap-1.5 text-[10px] text-muted-foreground shrink-0 mr-1 cursor-pointer select-none"
+                title="Tự cuộn xuống dòng mới nhất. Tắt để giữ vị trí cuộn khi đọc log cũ."
+              >
+                <Switch
+                  checked={autoScrollLog}
+                  onCheckedChange={setAutoScrollLogPersist}
+                  aria-label="Auto-scroll to latest log line"
+                  className="scale-90"
+                />
+                <span>Follow tail</span>
+              </label>
+              <button
+                onClick={() => closeAnalysisModal()}
+                aria-label="Close analyzer modal"
+                className={cn('rounded p-1 shrink-0 ml-2', hoverCls)}
+                title="Đóng (ESC)">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Summary panel */}
+            <div className={cn('px-5 py-4 border-b shrink-0', dividerCls)}>
+              <div className="flex items-center gap-2 mb-3">
+                <Activity className="h-3.5 w-3.5 text-primary" />
+                <span className="font-medium text-xs uppercase tracking-wide opacity-70">Tóm tắt</span>
+                {analysisModal.running && (
+                  <span className="inline-flex items-center gap-1.5 text-[11px] text-blue-600 dark:text-blue-400">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    đang stream kết quả…
+                  </span>
+                )}
+                <span className={cn('ml-auto text-[11px]', mutedCls)}>
+                  {analysisModal.running
+                    ? '… đang đo'
+                    : analysisModal.durationMs > 0
+                      ? `${(analysisModal.durationMs / 1000).toFixed(1)}s tổng`
+                      : ''}
+                  {!analysisModal.running && analysisModal.llmDurationMs > 0 &&
+                    ` · LLM ${(analysisModal.llmDurationMs / 1000).toFixed(1)}s`}
+                </span>
+              </div>
+              {analysisModal.running ? (
+                /* While the SSE stream is live, we don't have any stats yet
+                   — show a shimmer placeholder instead of zeros that would
+                   confuse the user into thinking the run is already done. */
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                  {['Tổng đoạn', 'Đã gán', 'Voice mặc định', 'Source drift'].map((label) => (
+                    <div key={label} className={cn('rounded-md border border-border px-3 py-2 opacity-50', dividerCls)}>
+                      <div className={cn('text-[10px] uppercase tracking-wide', mutedCls)}>{label}</div>
+                      <div className="text-lg font-semibold mt-0.5 flex items-center gap-1">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin opacity-60" />
+                        <span className="text-xs font-normal opacity-60">đang chạy…</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                {/* Total paragraphs */}
+                <div className={cn('rounded-md border border-border px-3 py-2', dividerCls)}>
+                  <div className={cn('text-[10px] uppercase tracking-wide', mutedCls)}>Tổng đoạn</div>
+                  <div className={cn('text-lg font-semibold mt-0.5')}>{analysisModal.stats.totalParagraphs}</div>
+                </div>
+                {/* Resolved */}
+                <div className={cn('rounded-md border border-border px-3 py-2', dividerCls)}>
+                  <div className={cn('text-[10px] uppercase tracking-wide', mutedCls)}>Đã gán</div>
+                  <div className={cn('text-lg font-semibold mt-0.5 text-emerald-600 dark:text-emerald-400')}>
+                    {analysisModal.stats.parserHits + analysisModal.stats.regexHits
+                      + analysisModal.stats.llmHits + analysisModal.stats.conversationHits}
+                  </div>
+                </div>
+                {/* Defaults */}
+                <div className={cn('rounded-md border border-border px-3 py-2', dividerCls)}>
+                  <div className={cn('text-[10px] uppercase tracking-wide', mutedCls)}>Voice mặc định</div>
+                  <div className={cn('text-lg font-semibold mt-0.5', analysisModal.stats.defaults > 0 ? 'text-amber-600 dark:text-amber-400' : '')}>
+                    {analysisModal.stats.defaults}
+                  </div>
+                </div>
+                {/* Source drift */}
+                <div className={cn('rounded-md border border-border px-3 py-2', dividerCls)}>
+                  <div className={cn('text-[10px] uppercase tracking-wide', mutedCls)}>Source drift</div>
+                  <div className={cn('text-lg font-semibold mt-0.5')}>{analysisModal.stats.sourceDrift}</div>
+                </div>
+
+                {/* Evidence-source breakdown — VnCoreNLP parser removed 2026-07-05
+                    so we no longer show the `parser` chip (always 0). */}
+                <div className={cn('rounded-md border border-border px-3 py-2 col-span-2 sm:col-span-4', dividerCls)}>
+                  <div className={cn('text-[10px] uppercase tracking-wide mb-1', mutedCls)}>Nguồn suy ra</div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[11px] font-medium">
+                      <span className="font-semibold">{analysisModal.stats.regexHits}</span> regex
+                    </span>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-500/15 text-purple-600 dark:text-purple-400 text-[11px] font-medium">
+                      <span className="font-semibold">{analysisModal.stats.llmHits}</span> LLM
+                    </span>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-600 dark:text-sky-400 text-[11px] font-medium">
+                      <span className="font-semibold">{analysisModal.stats.conversationHits}</span> conversation
+                    </span>
+                  </div>
+                </div>
+
+                {/* Service reachability — only oMLX is shown now. VnCoreNLP
+                    was removed 2026-07-05; the pipeline is regex →
+                    conversation-fusion → optional LLM, and oMLX
+                    reachability is the only gate that can drop the
+                    LLM step. */}
+                <div className={cn('rounded-md border border-border px-3 py-2 col-span-2', dividerCls)}>
+                  <div className={cn('text-[10px] uppercase tracking-wide mb-1', mutedCls)}>Services</div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={cn(
+                      'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium',
+                      analysisModal.omlxReachable
+                        ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                        : 'bg-red-500/15 text-red-600 dark:text-red-400',
+                    )}>
+                      {analysisModal.omlxReachable
+                        ? <CheckCircle2 className="h-3 w-3" />
+                        : <AlertCircle className="h-3 w-3" />}
+                      oMLX {analysisModal.omlxReachable
+                        ? `OK${analysisModal.stats.llmRequested ? ` · ${analysisModal.stats.llmRequested} batch` : ''}`
+                        : 'down'}
+                    </span>
+                    {analysisModal.stats.llmFailures !== undefined && analysisModal.stats.llmFailures > 0 && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-500/15 text-red-600 dark:text-red-400 text-[11px] font-medium">
+                        <AlertCircle className="h-3 w-3" />
+                        {analysisModal.stats.llmFailures} batch LLM fail
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Error */}
+                {analysisModal.failed && analysisModal.errorMsg && (
+                  <div className="rounded-md border border-border border-red-500/30 bg-red-500/10 px-3 py-2 col-span-2 sm:col-span-4 text-xs text-red-600 dark:text-red-400">
+                    <strong>Lỗi:</strong> {analysisModal.errorMsg}
+                  </div>
+                )}
+              </div>
+              )}
+            </div>
+
+            {/* Pipeline log */}
+            <div className={cn('flex flex-wrap items-center justify-between gap-2 px-5 py-2 border-b shrink-0', dividerCls)}>
+              <div className="flex items-center gap-2 min-w-0">
+                <Terminal className="h-3.5 w-3.5 opacity-70 shrink-0" />
+                <span className="font-medium text-xs shrink-0">Pipeline log</span>
+                {analysisModal.running && (
+                  <span className="inline-flex items-center gap-1 text-[10px] text-blue-600 dark:text-blue-400 shrink-0">
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-500 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
+                    </span>
+                    LIVE
+                  </span>
+                )}
+                <span className={cn('text-[10px] tabular-nums shrink-0', mutedCls)}>
+                  ({analysisModal.log.length} dòng)
+                </span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {/* Mode switcher — verbose shows every line, grouped collapses
+                    adjacent batch events into a single card, human only shows
+                    phase boundaries + the headline numbers. */}
+                <div
+                  className="inline-flex rounded border border-border overflow-hidden text-[11px]"
+                  role="tablist"
+                  aria-label="Chế độ hiển thị log"
+                >
+                  {(['verbose', 'grouped', 'human'] as const).map((m) => (
+                    <button
+                      key={m}
+                      role="tab"
+                      aria-selected={logMode === m}
+                      onClick={() => setLogModePersist(m)}
+                      title={
+                        m === 'verbose' ? 'Hiện tất cả dòng — bao gồm từng batch LLM'
+                        : m === 'grouped' ? 'Gộp các dòng batch LLM liên tiếp thành thẻ tiến độ'
+                        : 'Chỉ hiện ranh giới phase + số liệu chính'
+                      }
+                      className={cn(
+                        'px-2 py-1 capitalize transition-colors',
+                        logMode === m
+                          ? 'bg-primary text-primary-foreground'
+                          : 'hover:bg-muted/40',
+                      )}
+                    >
+                      {m === 'verbose' ? 'Chi tiết' : m === 'grouped' ? 'Gộp' : 'Tóm tắt'}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={async () => {
+                    try {
+                      // Copy the raw human-readable text, not the JSON-encoded
+                      // structured line objects, so the clipboard payload is
+                      // immediately greppable in a terminal.
+                      const text = analysisModal.log.map((l) => l.text).join('\n');
+                      await navigator.clipboard.writeText(text);
+                      setLogCopied(true);
+                      setTimeout(() => setLogCopied(false), 1500);
+                    } catch {
+                      /* clipboard denied — silent */
+                    }
+                  }}
+                  className={cn('inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] border border-border', hoverCls)}
+                  title="Copy log to clipboard"
+                >
+                  {logCopied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                  {logCopied ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+            </div>
+            <div className={cn('flex-1 min-h-0 overflow-auto px-5 py-3', mutedCls)}>
+              {analysisModal.log.length === 0 ? (
+                <div
+                  ref={analysisLogRef as unknown as React.RefObject<HTMLDivElement>}
+                  data-testid="analyzer-log"
+                  className={cn('text-[11px] leading-relaxed font-mono whitespace-pre-wrap break-words',
+                    analysisModal.failed ? 'text-red-600/90 dark:text-red-400/90' : '')}
+                >
+                  (log trống — pipeline không chạy đến bước nào)
+                </div>
+              ) : logMode === 'human' ? (
+                // ── Human summary view ─────────────────────────────────
+                // Show only phase boundaries + key counters, with the wall
+                // time of each. Best for "what just happened?" lookback.
+                <HumanLogSummary lines={analysisModal.log} failed={analysisModal.failed} mutedCls={mutedCls} />
+              ) : (
+                <ol
+                  ref={analysisLogRef}
+                  data-testid="analyzer-log"
+                  className="text-[11px] leading-relaxed font-mono space-y-0.5"
+                >
+                  {(() => {
+                    // ── Grouped view ────────────────────────────────────
+                    // Collapse adjacent LLM batch lines into a single
+                    // progress card so the panel doesn't drown in 60+
+                    // near-identical rows. Non-batch lines pass through.
+                    if (logMode === 'verbose') {
+                      return analysisModal.log.map((line, idx) => renderLogLine(line, idx, analysisModal.failed));
+                    }
+                    const groups: Array<{ kind: 'line'; line: AnalysisLogLine; idx: number } |
+                                         { kind: 'batches'; lines: AnalysisLogLine[] }> = [];
+                    let batchBuf: AnalysisLogLine[] = [];
+                    const flushBatches = () => {
+                      if (batchBuf.length === 0) return;
+                      groups.push({ kind: 'batches', lines: batchBuf });
+                      batchBuf = [];
+                    };
+                    analysisModal.log.forEach((line, idx) => {
+                      // A line is "batch-like" if its phase is 'llm' AND the
+                      // meta has a batchIndex field (so init / skip lines
+                      // are excluded — they're real headings).
+                      const isBatch = line.phase === 'llm'
+                        && line.meta
+                        && typeof (line.meta as Record<string, unknown>).batchIndex === 'number';
+                      if (isBatch) {
+                        batchBuf.push(line);
+                      } else {
+                        flushBatches();
+                        groups.push({ kind: 'line', line, idx });
+                      }
+                    });
+                    flushBatches();
+                    return groups.map((g, gi) =>
+                      g.kind === 'line'
+                        ? renderLogLine(g.line, gi, analysisModal.failed)
+                        : <BatchProgressCard key={`b-${gi}`} lines={g.lines} />,
+                    );
+                  })()}
+                </ol>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className={cn('flex items-center justify-end gap-2 px-5 py-3 border-t shrink-0', dividerCls)}>
+              {analysisModal.running && (
+                <span className={cn('mr-auto text-[11px]', mutedCls)}>
+                  Đang stream pipeline log từ server — có thể đóng bất kỳ lúc nào để dừng.
+                </span>
+              )}
+              {analysisModal.running && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => closeAnalysisModal()}
+                  className="text-xs border-red-500/40 text-red-600 dark:text-red-400"
+                  title="Hủy server-side analyze + đóng modal"
+                >
+                  Hủy
+                </Button>
+              )}
+              {!analysisModal.running && analysisModal.attribution && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAttributionDebugOpen(true)}
+                  className="text-xs"
+                  title="Mở bảng debug gán vai — xem từng đoạn được gán cho nhân vật nào"
+                >
+                  <Eye className="h-3.5 w-3.5 mr-1" />
+                  Xem gán vai
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => closeAnalysisModal()}
+                className="text-xs"
+              >
+                Đóng (ESC)
+              </Button>
+            </div>
+          </div>
+        </aside>,
+        document.body,
+      )}
+
+      {/* Attribution debug modal — shows per-paragraph speaker/source/conf.
+          Auto-opens after a successful Full Analyzer run; also reachable
+          via "Xem gán vai" button in the analyzer footer. */}
+      {mounted && (
+        <AttributionDebugModal
+          open={attributionDebugOpen}
+          onClose={() => setAttributionDebugOpen(false)}
+          data={analysisModal}
+          paragraphs={analysisModal?.paragraphTexts ?? []}
+          mutedCls={mutedCls}
+          dividerCls={dividerCls}
+          panelCls={panelCls}
+          hoverCls={hoverCls}
+          activeCls={activeCls}
+        />
+      )}
     </div>
   );
 }

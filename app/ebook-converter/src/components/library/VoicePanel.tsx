@@ -7,7 +7,10 @@ import {
   Plus, Mic, Trash2, Loader2, Volume2, Star, Square, Upload, X, Play, Sparkles,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
+import { useToast } from '@/components/ui/toast';
+import { ErrorState } from '@/components/layout/ErrorState';
 import { CharacterDetection } from './CharacterDetection';
 
 interface Voice {
@@ -52,9 +55,16 @@ interface Character {
 interface Props {
   bookId: string;
   bookLanguage: string;
+  // Optional anchor passed by parent (EbookReader sidebar tabs). When
+  // 'characters' the parent is showing the per-character voice-assignment
+  // surface; when 'voices' it shows the library-management surface. The
+  // component renders both today; the hint is kept for the upcoming
+  // tab refactor (Phase 3 §3.2) and is safe to ignore for now.
+  section?: 'voices' | 'characters';
 }
 
-export function VoicePanel({ bookId, bookLanguage }: Props) {
+export function VoicePanel({ bookId, bookLanguage, section: _section }: Props) {
+  const toast = useToast();
   const [voices, setVoices] = useState<Voice[]>([]);
   const [characters, setCharacters] = useState<Character[]>([]);
   const [loading, setLoading] = useState(true);
@@ -72,6 +82,7 @@ export function VoicePanel({ bookId, bookLanguage }: Props) {
   const [previewingChar, setPreviewingChar] = useState<string | null>(null);
   const [charPreviewError, setCharPreviewError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   // Auto-assign state — separate from CharacterDetection's internal flow so
   // this button works even if the user never opened the AI panel above.
   const [autoAssigning, setAutoAssigning] = useState(false);
@@ -79,13 +90,19 @@ export function VoicePanel({ bookId, bookLanguage }: Props) {
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
-    const [v, c] = await Promise.all([
-      fetch(`/api/library/${bookId}/voices`).then((r) => r.json()),
-      fetch(`/api/library/${bookId}/characters`).then((r) => r.json()),
-    ]);
-    setVoices(v.voices ?? []);
-    setCharacters(c.characters ?? []);
-    setLoading(false);
+    setFetchError(null);
+    try {
+      const [v, c] = await Promise.all([
+        fetch(`/api/library/${bookId}/voices`).then((r) => r.json()),
+        fetch(`/api/library/${bookId}/characters`).then((r) => r.json()),
+      ]);
+      setVoices(v.voices ?? []);
+      setCharacters(c.characters ?? []);
+    } catch (e) {
+      setFetchError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
   }, [bookId]);
 
   useEffect(() => { void fetchAll(); }, [fetchAll]);
@@ -203,10 +220,16 @@ export function VoicePanel({ bookId, bookLanguage }: Props) {
     setPreviewingChar(null);
   };
 
-  const handleDelete = async (voice: Voice) => {
-    if (!confirm(`Xoá giọng "${voice.name}"?`)) return;
-    await fetch(`/api/library/${bookId}/voices?voiceId=${voice.id}`, { method: 'DELETE' });
-    await fetchAll();
+  const handleDelete = (voice: Voice) => {
+    toast.confirm({
+      title: `Xoá giọng "${voice.name}"?`,
+      confirmLabel: 'Xoá',
+      destructive: true,
+      onConfirm: async () => {
+        await fetch(`/api/library/${bookId}/voices?voiceId=${voice.id}`, { method: 'DELETE' });
+        await fetchAll();
+      },
+    });
   };
 
   const toggleDefault = async (voice: Voice) => {
@@ -357,6 +380,17 @@ export function VoicePanel({ bookId, bookLanguage }: Props) {
     return <div className="p-6 text-sm text-muted-foreground flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Đang tải…</div>;
   }
 
+  if (fetchError) {
+    return (
+      <ErrorState
+        onRetry={() => void fetchAll()}
+        message={fetchError}
+        details={String(fetchError)}
+        retrying={loading}
+      />
+    );
+  }
+
   return (
     <div className="space-y-5">
       {/* AI Character Detection */}
@@ -376,22 +410,22 @@ export function VoicePanel({ bookId, bookLanguage }: Props) {
         </div>
 
         {showUploadForm && (
-          <div className="rounded-xl border bg-card p-4 space-y-3 mb-3">
+          <Card className="rounded-xl border border-border p-4 space-y-3 mb-3">
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Tên giọng (vd: Người kể chuyện, Linh, Phong)</label>
               <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Narrator"
-                className="w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
             </div>
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Mô tả (tuỳ chọn)</label>
               <input type="text" value={newDesc} onChange={(e) => setNewDesc(e.target.value)} placeholder="Giọng nam trầm, chậm rãi"
-                className="w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="text-xs text-muted-foreground mb-1 block">Ngôn ngữ</label>
                 <select value={newLang} onChange={(e) => setNewLang(e.target.value)}
-                  className="w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none">
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background">
                   <option value="vi">Tiếng Việt</option>
                   <option value="en">English</option>
                   <option value="zh">中文</option>
@@ -403,7 +437,7 @@ export function VoicePanel({ bookId, bookLanguage }: Props) {
                 <label className="text-xs text-muted-foreground mb-1 block">Tốc độ mặc định</label>
                 <input type="number" value={newSpeed} step={0.05} min={0.5} max={2}
                   onChange={(e) => setNewSpeed(parseFloat(e.target.value))}
-                  className="w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none" />
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background" />
               </div>
             </div>
             <label className="flex items-center gap-2 text-xs cursor-pointer">
@@ -421,7 +455,7 @@ export function VoicePanel({ bookId, bookLanguage }: Props) {
                 File mẫu tốt: 10-30 giây, giọng rõ, không nhạc nền, không tạp âm.
               </p>
             </div>
-          </div>
+          </Card>
         )}
 
         {voices.length === 0 ? (
@@ -429,7 +463,7 @@ export function VoicePanel({ bookId, bookLanguage }: Props) {
         ) : (
           <div className="space-y-2">
             {voices.map((v) => (
-              <div key={v.id} className={cn('rounded-lg border p-3 flex items-center gap-2', v.isDefault && 'border-primary/50 bg-primary/5')}>
+              <div key={v.id} className={cn('rounded-lg border border-border p-3 flex items-center gap-2', v.isDefault && 'border-primary/50 bg-primary/5')}>
                 <button onClick={() => toggleDefault(v)} className="shrink-0"
                   title={v.isDefault ? 'Bỏ mặc định' : 'Đặt mặc định'}>
                   <Star className={cn('h-4 w-4', v.isDefault ? 'fill-amber-400 text-amber-400' : 'text-muted-foreground/40')} />
@@ -457,7 +491,7 @@ export function VoicePanel({ bookId, bookLanguage }: Props) {
 
       {/* Characters */}
       {characters.length > 0 && (
-        <div className="pt-3 border-t">
+        <div className="pt-3 border-t border-border">
           <div className="flex items-center justify-between mb-2 gap-2">
             <h3 className="text-sm font-semibold shrink-0">Nhân vật ({characters.length})</h3>
             <Button
@@ -488,13 +522,13 @@ export function VoicePanel({ bookId, bookLanguage }: Props) {
               // Show preview button whenever a voice is assigned (built-in OR custom)
               const hasAssignedVoice = !!assignedVoiceName;
               return (
-                <div key={c.id} className="flex items-center gap-2 rounded-lg border bg-card px-3 py-2">
+                <div key={c.id} className="flex items-center gap-2 px-3 py-2">
                   <p className="text-sm font-medium flex-1 truncate">{c.name}</p>
                   {hasAssignedVoice && (
                     <button
                       onClick={() => previewing ? stopCharPreview() : previewCharacter(c)}
                       className={cn(
-                        'flex items-center justify-center w-7 h-7 rounded border transition-colors shrink-0',
+                        'flex items-center justify-center w-7 h-7 rounded border border-border transition-colors shrink-0',
                         previewing
                           ? 'bg-primary text-primary-foreground border-primary'
                           : 'border-border hover:bg-muted',
@@ -507,7 +541,7 @@ export function VoicePanel({ bookId, bookLanguage }: Props) {
                   <select
                     value={c.voiceId ?? ''}
                     onChange={(e) => setCharVoice(c.id, e.target.value || null)}
-                    className="rounded-md border bg-background px-2 py-1 text-xs outline-none max-w-[160px]"
+                    className="rounded-md border border-border bg-background px-2 py-1 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring max-w-[160px]"
                   >
                     <option value="">— Mặc định —</option>
                     {/* Built-in VieNeu voices (always available, no upload needed) */}

@@ -1,8 +1,10 @@
 'use client';
 // src/components/library/StatsView.tsx – Reading statistics dashboard
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { BookOpen, CheckCircle2, Clock, Archive, Globe, BarChart3 } from 'lucide-react';
 import Link from 'next/link';
+import { Card } from '@/components/ui/card';
+import { ErrorState } from '@/components/layout/ErrorState';
 
 interface Stats {
   total: number;
@@ -30,16 +32,40 @@ const LANG_LABEL: Record<string, string> = { vi: '🇻🇳 Vietnamese', en: '�
 export function StatsView() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch('/api/stats').then(r => r.json()).then(d => { setStats(d as Stats); setLoading(false); });
+  const fetchStats = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const r = await fetch('/api/stats');
+      const d = await r.json();
+      setStats(d as Stats);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => { void fetchStats(); }, [fetchStats]);
 
   if (loading) {
     return (
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-24 animate-pulse rounded-xl bg-muted" />)}
       </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <ErrorState
+        onRetry={() => void fetchStats()}
+        message={error}
+        details={String(error)}
+        retrying={loading}
+      />
     );
   }
 
@@ -51,7 +77,7 @@ export function StatsView() {
   return (
     <div className="space-y-6">
       {/* Big number */}
-      <div className="rounded-2xl border bg-card p-6 flex items-center gap-6">
+      <Card className="rounded-2xl border border-border p-6 flex items-center gap-6">
         <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10">
           <BarChart3 className="h-8 w-8 text-primary" />
         </div>
@@ -63,14 +89,14 @@ export function StatsView() {
           </div>
           <p className="text-xs text-muted-foreground mt-1">{readPct}% read</p>
         </div>
-      </div>
+      </Card>
 
       {/* Status breakdown */}
       <div>
         <h2 className="text-sm font-semibold text-muted-foreground mb-3 uppercase tracking-wide">By Reading Status</h2>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {(['unread', 'reading', 'read', 'archived'] as const).map((s) => (
-            <div key={s} className="rounded-xl border bg-card p-4 flex items-center gap-3">
+            <div key={s} className="p-4 flex items-center gap-3">
               {STATUS_ICON[s]}
               <div>
                 <p className="text-xl font-bold">{statusMap[s] ?? 0}</p>
@@ -86,7 +112,7 @@ export function StatsView() {
         <h2 className="text-sm font-semibold text-muted-foreground mb-3 uppercase tracking-wide">By Language</h2>
         <div className="grid gap-3 sm:grid-cols-3">
           {stats.byLanguage.map((l) => (
-            <div key={l.language} className="rounded-xl border bg-card p-4 flex items-center gap-3">
+            <div key={l.language} className="p-4 flex items-center gap-3">
               <Globe className="h-5 w-5 text-primary/70" />
               <div>
                 <p className="text-xl font-bold">{l._count}</p>
@@ -101,7 +127,7 @@ export function StatsView() {
       {stats.recentlyRead.length > 0 && (
         <div>
           <h2 className="text-sm font-semibold text-muted-foreground mb-3 uppercase tracking-wide">Recently Read</h2>
-          <div className="rounded-xl border bg-card divide-y">
+          <Card className="rounded-xl border border-border divide-y">
             {stats.recentlyRead.map((b) => (
               <Link key={b.id} href={`/library/${b.id}/read`} className="flex items-center gap-4 px-4 py-3 hover:bg-muted/50 transition-colors">
                 <div className="flex-1 min-w-0">
@@ -118,15 +144,15 @@ export function StatsView() {
                 </div>
               </Link>
             ))}
-          </div>
+          </Card>
         </div>
       )}
 
       {/* OPDS link */}
-      <div className="rounded-xl border bg-muted/30 p-4">
+      <div className="rounded-xl border border-border bg-muted/30 p-4">
         <h2 className="text-sm font-semibold mb-1">OPDS Catalog</h2>
         <p className="text-xs text-muted-foreground mb-2">Connect your e-reader app (Koreader, Kindle, etc.) using the OPDS feed URL:</p>
-        <code className="block rounded-lg bg-background border px-3 py-2 text-xs font-mono text-primary select-all">
+        <code className="block rounded-lg bg-background border border-border px-3 py-2 text-xs font-mono text-primary select-all">
           {typeof window !== 'undefined' ? window.location.origin : ''}/api/opds
         </code>
       </div>

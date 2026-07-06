@@ -9,6 +9,8 @@
     --foreground: 222.2 84% 4.9%;
     --card: 0 0% 100%;
     --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
     --primary: 221.2 83.2% 53.3%;
     --primary-foreground: 210 40% 98%;
     --secondary: 210 40% 96.1%;
@@ -26,32 +28,87 @@
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
+    --background: 222.2 47% 5%;
     --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
+    --card: 222.2 47% 7%;
     --card-foreground: 210 40% 98%;
+    --popover: 222.2 47% 7%;
+    --popover-foreground: 210 40% 98%;
     --primary: 217.2 91.2% 59.8%;
     --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
+    --secondary: 217 16% 14%;
     --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
+    --muted: 217 16% 14%;
     --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
+    --accent: 217 16% 14%;
     --accent-foreground: 210 40% 98%;
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
+    /* Container/outline tokens — kept low-saturation (16% vs. the previous
+       32.6%) and on a tight lightness scale so cards/dividers don't read as
+       bright blue outlines against the deep navy background. The previous
+       palette's 32.6% saturation produced a sharp colored edge that
+       visually outweighed the card content. Bumped from 18% → 22% so card
+       outlines read more clearly against the 7% card background. */
+    --border: 217 16% 22%;
+    --input: 217 16% 22%;
     --ring: 224.3 76.3% 48%;
   }
 }
 
 @layer base {
-  * { @apply border-border; }
   body { @apply bg-background text-foreground; }
+}
+
+/* Override Tailwind Preflight's hard-coded border-color (gray-200). Preflight
+   emits `*, ::after, ::before { border-color: rgb(229, 231, 235) }` and that
+   rule lands AFTER our @layer base border-border apply — so without this
+   unlayered override, every bare `.border` (TabsList, Card, Dialog panel,
+   Tooltip, Toast, etc.) renders a light-gray outline in dark mode.
+   Unlayered CSS outranks anything inside @layer base in the cascade. */
+*, ::before, ::after {
+  border-color: hsl(var(--border));
 }
 
 /* Smooth scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { @apply bg-muted; }
 ::-webkit-scrollbar-thumb { @apply bg-muted-foreground/40 rounded-full; }
+
+/* Reduced-motion honour (UI Polish §5.7).
+   ThemeProvider sets `data-motion="reduced"` on <html> when the user
+   prefers reduced motion (live-tracked). We use that attribute as the
+   kill-switch for every animated surface — animate-in/out from
+   tailwindcss-animate, Tailwind's animate-* utilities, and any explicit
+   transition-* on hover/focus state. Note this is additive on top of
+   any framework-level handling (Radix primitives already disable their
+   own slide animations under the media query). */
+[data-motion="reduced"] *,
+[data-motion="reduced"] *::before,
+[data-motion="reduced"] *::after {
+  animation-duration: 0.001ms !important;
+  animation-delay: 0ms !important;
+  transition-duration: 0.001ms !important;
+  transition-delay: 0ms !important;
+}
+/* Tailwind's animate-* utilities animate indefinitely — pausing them
+   is enough; do not let them keep ticking under reduced motion. */
+[data-motion="reduced"] .animate-spin,
+[data-motion="reduced"] .animate-pulse,
+[data-motion="reduced"] .animate-ping {
+  animation: none !important;
+}
+
+/* Forced-colours honour (Windows High Contrast etc.). The attribute is
+   set/removed by ThemeProvider as the media query changes. We restore
+   visible focus rings + readable borders that the default token palette
+   hides behind coloured fills, and add a system-colour border on
+   dialog/sheet panels so the panel edge is always visible. */
+[data-forced-colors="active"] :focus-visible {
+  outline: 2px solid Highlight !important;
+  outline-offset: 2px !important;
+}
+[data-forced-colors="active"] [role="dialog"],
+[data-forced-colors="active"] [role="alertdialog"] {
+  border: 1px solid CanvasText !important;
+}

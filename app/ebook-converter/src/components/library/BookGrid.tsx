@@ -10,7 +10,12 @@ import { cn, formatDate } from '@/lib/utils';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Card } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
+import { useToast } from '@/components/ui/toast';
 import { EmptyState, LoadingSkeleton } from '@/components/layout/EmptyState';
+import { ErrorState } from '@/components/layout/ErrorState';
 
 type ViewMode = 'grid' | 'compact' | 'list';
 
@@ -52,6 +57,7 @@ function BookListRow({
   onDelete: (id: string) => void;
   onUpdate: (b: BookSummary) => void;
 }) {
+  const toast = useToast();
   const coverUrl = `/api/library/${book.id}/cover`;
   const starRating = book.rating ? Math.round(book.rating / 2) : 0;
 
@@ -64,14 +70,20 @@ function BookListRow({
     onUpdate(updated);
   };
 
-  const handleDelete = async () => {
-    if (!confirm(`Remove "${book.title}"?`)) return;
-    await fetch(`/api/library/${book.id}`, { method: 'DELETE' });
-    onDelete(book.id);
+  const handleDelete = () => {
+    toast.confirm({
+      title: `Remove "${book.title}"?`,
+      confirmLabel: 'Remove',
+      destructive: true,
+      onConfirm: async () => {
+        await fetch(`/api/library/${book.id}`, { method: 'DELETE' });
+        onDelete(book.id);
+      },
+    });
   };
 
   return (
-    <div className="flex items-center gap-3 rounded-xl border bg-card p-3 hover:bg-muted/30 transition-colors group">
+    <Card className="flex items-center gap-3 rounded-xl border border-border p-3 hover:bg-muted/30 transition-colors group">
       {/* Cover */}
       <div className="h-16 w-11 shrink-0 overflow-hidden rounded bg-muted">
         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -92,7 +104,7 @@ function BookListRow({
           </p>
         )}
         <div className="flex items-center flex-wrap gap-1.5 mt-1">
-          <Badge className="border text-[9px] px-1.5 h-4 py-0">{book.language.toUpperCase()}</Badge>
+          <Badge className="border border-border text-[9px] px-1.5 h-4 py-0">{book.language.toUpperCase()}</Badge>
           <span className={cn('rounded-full px-1.5 py-0.5 text-[9px] font-medium', STATUS_COLOR[book.readStatus] ?? STATUS_COLOR.unread)}>
             {book.readStatus}
           </span>
@@ -129,14 +141,14 @@ function BookListRow({
           <BookOpen className="h-3 w-3" /> Read
         </Link>
         <a href={`/api/library/${book.id}/download`} download
-          className="flex h-8 w-8 items-center justify-center rounded-md border hover:bg-muted transition-colors">
+          className="flex h-8 w-8 items-center justify-center rounded-md border border-border hover:bg-muted transition-colors">
           <Download className="h-3.5 w-3.5" />
         </a>
         <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-destructive hover:bg-destructive/10" onClick={handleDelete}>
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -148,20 +160,27 @@ export function BookGrid() {
   const [readStatus, setReadStatus] = useState('');
   const [isFavorite, setIsFavorite] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
 
   useEffect(() => { setViewMode(loadViewMode()); }, []);
 
   const fetchBooks = useCallback(async () => {
     setLoading(true);
-    const params = new URLSearchParams();
-    if (search) params.set('search', search);
-    if (lang)   params.set('language', lang);
-    if (readStatus) params.set('readStatus', readStatus);
-    if (isFavorite) params.set('isFavorite', 'true');
-    const res = await fetch(`/api/library?${params}`);
-    if (res.ok) setBooks(await res.json());
-    setLoading(false);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (search) params.set('search', search);
+      if (lang)   params.set('language', lang);
+      if (readStatus) params.set('readStatus', readStatus);
+      if (isFavorite) params.set('isFavorite', 'true');
+      const res = await fetch(`/api/library?${params}`);
+      if (res.ok) setBooks(await res.json());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
   }, [search, lang, readStatus, isFavorite]);
 
   useEffect(() => { void fetchBooks(); }, [fetchBooks]);
@@ -184,28 +203,34 @@ export function BookGrid() {
       <div className="flex flex-wrap gap-2 items-center">
         {/* Search */}
         <div className="relative flex-1 min-w-40">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <input
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+          <Input
             type="search" placeholder="Search title, author, series…"
             value={search} onChange={(e) => setSearch(e.target.value)}
-            className="h-9 w-full rounded-md border bg-background pl-9 pr-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring ring-offset-background"
+            className="pl-9"
           />
         </div>
 
-        {/* Language */}
-        <select value={lang} onChange={(e) => setLang(e.target.value)}
-          className="h-9 rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring ring-offset-background">
-          <option value="">All languages</option>
-          <option value="vi">Vietnamese</option>
-          <option value="en">English</option>
-          <option value="mixed">Mixed</option>
-        </select>
+        {/* Language — Radix Select reserves "" for "clear selection / placeholder",
+            so the "All languages" sentinel is "all" instead. We translate back to
+            the empty string when sending to the API and when filtering locally. */}
+        <Select value={lang || 'all'} onValueChange={(v) => setLang(v === 'all' ? '' : v)}>
+          <SelectTrigger className="w-[160px]">
+            <SelectValue placeholder="All languages" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All languages</SelectItem>
+            <SelectItem value="vi">Vietnamese</SelectItem>
+            <SelectItem value="en">English</SelectItem>
+            <SelectItem value="mixed">Mixed</SelectItem>
+          </SelectContent>
+        </Select>
 
         {/* Status tabs */}
-        <div className="flex rounded-md border overflow-hidden">
+        <div className="flex rounded-md border border-border overflow-hidden">
           {READ_STATUS_OPTS.map((opt) => (
             <button key={opt.value} onClick={() => setReadStatus(opt.value)}
-              className={cn('px-3 h-9 text-xs font-medium transition-colors border-r last:border-r-0',
+              className={cn('px-3 h-9 text-xs font-medium transition-colors border-r border-border last:border-r-0',
                 readStatus === opt.value ? 'bg-primary text-primary-foreground' : 'bg-background hover:bg-muted',
               )}>{opt.label}</button>
           ))}
@@ -214,7 +239,7 @@ export function BookGrid() {
         {/* Favorites */}
         <button
           onClick={() => setIsFavorite((v) => !v)}
-          className={cn('h-9 px-3 rounded-md border flex items-center gap-1.5 text-xs font-medium transition-colors',
+          className={cn('h-9 px-3 rounded-md border border-border flex items-center gap-1.5 text-xs font-medium transition-colors',
             isFavorite ? 'bg-rose-500/10 border-rose-500/30 text-rose-600 dark:text-rose-400' : 'bg-background hover:bg-muted',
           )}
         >
@@ -223,10 +248,10 @@ export function BookGrid() {
         </button>
 
         {/* View mode toggle */}
-        <div className="flex rounded-md border overflow-hidden ml-auto">
+        <div className="flex rounded-md border border-border overflow-hidden ml-auto">
           {VIEW_ICONS.map(({ id, icon: Icon, label }) => (
             <button key={id} onClick={() => setView(id)} title={label}
-              className={cn('flex h-9 w-9 items-center justify-center transition-colors border-r last:border-r-0',
+              className={cn('flex h-9 w-9 items-center justify-center transition-colors border-r border-border last:border-r-0',
                 viewMode === id ? 'bg-primary text-primary-foreground' : 'bg-background hover:bg-muted',
               )}>
               <Icon className="h-3.5 w-3.5" />
@@ -252,6 +277,13 @@ export function BookGrid() {
             ))}
           </div>
         )
+      ) : error ? (
+        <ErrorState
+          onRetry={() => void fetchBooks()}
+          message={error}
+          details={String(error)}
+          retrying={loading}
+        />
       ) : books.length === 0 ? (
         <EmptyState
           icon={<BookOpen className="h-6 w-6" />}

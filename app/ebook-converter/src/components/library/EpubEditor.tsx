@@ -19,6 +19,8 @@ import {
   Undo2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useToast } from '@/components/ui/toast';
+import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 
 interface ChapterSummary {
@@ -39,6 +41,7 @@ interface EpubEditorProps {
 }
 
 export function EpubEditor({ bookId }: EpubEditorProps) {
+  const toast = useToast();
   const [book, setBook] = useState<EditorBook | null>(null);
   const [chapters, setChapters] = useState<ChapterSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -126,7 +129,7 @@ export function EpubEditor({ bookId }: EpubEditorProps) {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="sticky top-0 z-20 border-b bg-background/95 backdrop-blur">
+      <header className="sticky top-0 z-20 border-b border-border bg-background/95 backdrop-blur">
         <div className="flex h-14 items-center gap-2 px-4">
           <Link
             href={`/library/${bookId}/read`}
@@ -142,7 +145,7 @@ export function EpubEditor({ bookId }: EpubEditorProps) {
           {savedBookId && (
             <Link
               href={`/library/${savedBookId}/read`}
-              className="inline-flex h-8 items-center justify-center rounded-md border border-input bg-background px-3 text-xs font-medium hover:bg-accent hover:text-accent-foreground"
+              className="inline-flex h-8 items-center justify-center rounded-md border border-border border-input bg-background px-3 text-xs font-medium hover:bg-accent hover:text-accent-foreground"
             >
               Open edited copy
             </Link>
@@ -155,14 +158,23 @@ export function EpubEditor({ bookId }: EpubEditorProps) {
       </header>
 
       <div className="grid min-h-[calc(100vh-3.5rem)] grid-cols-1 lg:grid-cols-[280px_1fr]">
-        <aside className="border-b bg-muted/20 lg:border-b-0 lg:border-r">
+        <aside className="border-b border-border bg-muted/20 lg:border-b-0 lg:border-r border-border">
           <div className="max-h-[42vh] overflow-auto p-2 lg:max-h-[calc(100vh-3.5rem)]">
             {chapters.map((chapter) => (
               <button
                 key={chapter.id}
                 onClick={() => {
-                  if (dirty && !confirm('Discard unsaved edits and open another chapter?')) return;
-                  void loadChapter(chapter.id);
+                  if (!dirty) {
+                    void loadChapter(chapter.id);
+                    return;
+                  }
+                  toast.confirm({
+                    title: 'Discard unsaved edits?',
+                    description: 'Open another chapter without saving?',
+                    confirmLabel: 'Discard',
+                    destructive: true,
+                    onConfirm: () => { void loadChapter(chapter.id); },
+                  });
                 }}
                 className={cn(
                   'mb-1 flex w-full items-start gap-2 rounded-md px-2 py-2 text-left text-xs transition-colors',
@@ -177,7 +189,7 @@ export function EpubEditor({ bookId }: EpubEditorProps) {
         </aside>
 
         <main className="min-w-0">
-          <div className="sticky top-14 z-10 border-b bg-background/95 px-4 py-2 backdrop-blur">
+          <div className="sticky top-14 z-10 border-b border-border bg-background/95 px-4 py-2 backdrop-blur">
             <div className="flex flex-wrap items-center gap-1">
               {tools.map(({ title: toolTitle, icon: Icon, run }) => (
                 <Button key={toolTitle} type="button" variant="ghost" size="icon" title={toolTitle} onClick={run} className="h-8 w-8">
@@ -188,7 +200,7 @@ export function EpubEditor({ bookId }: EpubEditorProps) {
               <input
                 value={title}
                 onChange={(e) => { setTitle(e.target.value); setDirty(true); }}
-                className="h-8 min-w-0 flex-1 rounded-md border bg-background px-2 text-sm font-medium"
+                className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-sm font-medium"
                 aria-label="Chapter title"
               />
             </div>
@@ -210,7 +222,7 @@ export function EpubEditor({ bookId }: EpubEditorProps) {
                   setDirty(true);
                 }}
                 dangerouslySetInnerHTML={{ __html: html }}
-                className="min-h-[70vh] rounded-lg border bg-card px-8 py-8 font-serif text-[18px] leading-8 outline-none shadow-sm focus:ring-2 focus:ring-primary/30 [&_blockquote]:mx-8 [&_blockquote]:my-6 [&_blockquote]:border-l-2 [&_blockquote]:pl-4 [&_h1]:mb-6 [&_h1]:mt-8 [&_h1]:text-center [&_h1]:text-3xl [&_h2]:mb-4 [&_h2]:mt-8 [&_h2]:text-center [&_h2]:text-2xl [&_hr]:my-8 [&_p]:my-0 [&_p]:indent-8"
+                className="min-h-[70vh] px-8 py-8 font-serif text-[18px] leading-8 outline-none shadow-sm focus:ring-2 focus:ring-primary/30 [&_blockquote]:mx-8 [&_blockquote]:my-6 [&_blockquote]:border-l-2 [&_blockquote]:pl-4 [&_h1]:mb-6 [&_h1]:mt-8 [&_h1]:text-center [&_h1]:text-3xl [&_h2]:mb-4 [&_h2]:mt-8 [&_h2]:text-center [&_h2]:text-2xl [&_hr]:my-8 [&_p]:my-0 [&_p]:indent-8"
               />
             )}
           </div>

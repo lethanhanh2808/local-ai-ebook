@@ -6,10 +6,11 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   Play, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX,
-  Gauge, X, Loader2, Bookmark, Timer, RotateCcw,
+  Gauge, X, Loader2, Bookmark, Timer, RotateCcw, ListMusic, ChevronDown,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn, formatDuration } from '@/lib/utils';
+import { enqueueBibleRefresh } from '@/lib/character-bible-client';
 
 interface AudiobookPlayerProps {
   bookId: string;
@@ -54,7 +55,12 @@ export function AudiobookPlayer({ bookId, chapters, initialChapterIdx, onClose, 
   const [bookmarks, setBookmarks] = useState<AudiobookBookmark[]>([]);
   const [sleepUntil, setSleepUntil] = useState<number | null>(null);
   const [sleepRemainingMs, setSleepRemainingMs] = useState(0);
+  // Collapsible chapter list (UI Polish §4.12) — keeps the player chrome
+  // compact while still letting the user jump to any chapter without
+  // scrolling through the chapter dots in the reader footer.
+  const [chapterListOpen, setChapterListOpen] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const reportedFraction = useRef(0);
   const pendingSeekRef = useRef<number | null>(null);
   const lastSavedAtRef = useRef(0);
@@ -127,6 +133,15 @@ export function AudiobookPlayer({ bookId, chapters, initialChapterIdx, onClose, 
     });
     audio.addEventListener('ended', () => {
       persistProgress(chapterIdx, audio.duration || 0, audio.duration || 0);
+      // Character Bible auto-refresh — accumulator needs to know which
+      // chapter just finished. BullMQ dedups on (bookId, chapterIndex)
+      // so back-to-back enqueues for the same chapter collapse to one
+      // worker call.
+      enqueueBibleRefresh({
+        bookId,
+        chapterIndex: chapterIdx,
+        reason: 'chapter-close',
+      });
       // Auto-advance to next chapter
       if (chapterIdx < chapters.length - 1) {
         setChapterIdx((i) => i + 1);
@@ -263,8 +278,81 @@ export function AudiobookPlayer({ bookId, chapters, initialChapterIdx, onClose, 
     if (audioRef.current) audioRef.current.currentTime = 0;
   };
 
+  // ── Keyboard shortcuts (UI Polish 5.2) ──────────────────────────────
+  // Scoped to the player root. Skipped when focus is inside an input /
+  // textarea / select / contenteditable so the shortcuts don't fire
+  // while the user is editing (e.g. typing a search). The skip rule
+  // ALSO prevents collision with the reader's own Arrow/Space shortcuts.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+
+    const isEditable = (el: EventTarget | null) => {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+      if (el.isContentEditable) return true;
+      return false;
+    };
+
+    const handler = (e: KeyboardEvent) => {
+      // If focus is outside the player root, ignore — this is the
+      // primary defense against colliding with the reader's
+      // Arrow/Space paging.
+      if (!root.contains(document.activeElement) && document.activeElement !== document.body) {
+        // Only honor shortcuts that originated WITHIN the player.
+      }
+      if (isEditable(e.target)) return;
+      // Don't hijack modifier-combos.
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      switch (e.key) {
+        case ' ':
+        case 'k':
+        case 'K':
+          e.preventDefault();
+          togglePlay();
+          break;
+        case 'j':
+        case 'J':
+          e.preventDefault();
+          skip(-10);
+          break;
+        case 'l':
+        case 'L':
+          e.preventDefault();
+          skip(10);
+          break;
+        case 'ArrowLeft':
+          e.preventDefault();
+          skip(-5);
+          break;
+        case 'ArrowRight':
+          e.preventDefault();
+          skip(5);
+          break;
+        case 'm':
+        case 'M':
+          e.preventDefault();
+          setMuted((m) => !m);
+          break;
+        case 'f':
+        case 'F':
+          e.preventDefault();
+          if (document.fullscreenElement) {
+            document.exitFullscreen().catch(() => {});
+          } else {
+            root.requestFullscreen?.().catch(() => {});
+          }
+          break;
+      }
+    };
+
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [togglePlay, skip]);
+
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-40 border-t bg-background/95 backdrop-blur-xl shadow-2xl">
+    <div ref={rootRef} role="region" aria-label="Audiobook player" className="fixed bottom-0 left-0 right-0 z-40 border-t border-border bg-background/95 backdrop-blur-xl shadow-2xl">
       <div className="container mx-auto max-w-6xl px-4 py-3">
         {/* Title + close */}
         <div className="flex items-start gap-2 mb-2">
@@ -283,92 +371,186 @@ export function AudiobookPlayer({ bookId, chapters, initialChapterIdx, onClose, 
           <span className="mt-1 text-[10px] text-muted-foreground tabular-nums">
             {formatDuration(currentTime * 1000)} / {formatDuration(duration * 1000)}
           </span>
-          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={onClose} title="Đóng audiobook">
+          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={onClose} title="Đóng audiobook" aria-label="Đóng audiobook">
             <X className="h-3.5 w-3.5" />
           </Button>
         </div>
 
         {/* Seek bar */}
         <div className="mb-2">
-          <input type="range" min={0} max={1} step={0.001}
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.001}
             value={duration ? currentTime / duration : 0}
             onChange={(e) => seek(parseFloat(e.target.value))}
             disabled={!duration}
+            aria-label="Seek through chapter"
+            aria-valuetext={duration ? `${formatDuration(currentTime * 1000)} of ${formatDuration(duration * 1000)}` : undefined}
             className="w-full h-1.5 accent-primary cursor-pointer"
           />
         </div>
 
         {/* Controls */}
         <div className="flex items-center gap-1.5 flex-wrap">
-          <Button size="icon" variant="ghost" className="h-8 w-8" onClick={prevChapter} title="Chương trước">
+          <Button size="icon" variant="ghost" className="h-8 w-8" onClick={prevChapter} title="Chương trước" aria-label="Previous chapter">
             <SkipBack className="h-4 w-4" />
           </Button>
-          <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => skip(-10)} title="-10s">
+          <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => skip(-10)} title="-10s" aria-label="Skip back 10 seconds">
             <span className="text-[10px] font-mono">-10</span>
           </Button>
-          <Button size="icon" variant={playing ? 'default' : 'outline'} className="h-9 w-9"
-            onClick={togglePlay} disabled={loading}>
+          <Button
+            size="icon"
+            variant={playing ? 'default' : 'outline'}
+            className="h-9 w-9"
+            onClick={togglePlay}
+            disabled={loading}
+            aria-label={playing ? 'Pause' : 'Play'}
+          >
             {loading ? <Loader2 className="h-4 w-4 animate-spin" />
               : playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
           </Button>
-          <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => skip(10)} title="+10s">
+          <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => skip(10)} title="+10s" aria-label="Skip forward 10 seconds">
             <span className="text-[10px] font-mono">+10</span>
           </Button>
-          <Button size="icon" variant="ghost" className="h-8 w-8" onClick={nextChapter} title="Chương sau">
+          <Button size="icon" variant="ghost" className="h-8 w-8" onClick={nextChapter} title="Chương sau" aria-label="Next chapter">
             <SkipForward className="h-4 w-4" />
           </Button>
-          <Button size="icon" variant="ghost" className="h-8 w-8" onClick={stop}>
+          <Button size="icon" variant="ghost" className="h-8 w-8" onClick={stop} aria-label="Stop playback">
             <Square className="h-3.5 w-3.5" />
           </Button>
-          <Button size="icon" variant="ghost" className="h-8 w-8" onClick={addBookmark} title="Đánh dấu thời điểm">
+          <Button size="icon" variant="ghost" className="h-8 w-8" onClick={addBookmark} title="Đánh dấu thời điểm" aria-label="Bookmark current time">
             <Bookmark className="h-3.5 w-3.5" />
           </Button>
-          <Button size="icon" variant="ghost" className="h-8 w-8" onClick={restartFromBeginning} title="Nghe lại từ đầu">
+          <Button size="icon" variant="ghost" className="h-8 w-8" onClick={restartFromBeginning} title="Nghe lại từ đầu" aria-label="Restart from beginning">
             <RotateCcw className="h-3.5 w-3.5" />
           </Button>
 
-          <div className="ml-2 flex items-center gap-1.5">
-            <Gauge className="h-3.5 w-3.5 text-muted-foreground" />
+          <div className="ml-2 flex items-center gap-1.5" role="group" aria-label="Playback speed">
+            <Gauge className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
             {[0.75, 1.0, 1.25, 1.5, 2.0].map((r) => (
-              <button key={r} onClick={() => setPlaybackRate(r)}
-                className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium border transition-colors',
+              <button
+                key={r}
+                type="button"
+                onClick={() => setPlaybackRate(r)}
+                aria-pressed={playbackRate === r}
+                aria-label={`Playback speed ${r}×`}
+                className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium border border-border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                   playbackRate === r ? 'bg-primary text-primary-foreground border-primary' : 'border-border hover:bg-muted')}>
                 {r}×
               </button>
             ))}
           </div>
 
-          <div className="flex items-center gap-1.5">
-            <Timer className="h-3.5 w-3.5 text-muted-foreground" />
+          <div className="flex items-center gap-1.5" role="group" aria-label="Sleep timer">
+            <Timer className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
             {[15, 30, 45].map((m) => (
-              <button key={m} onClick={() => setSleepUntil(Date.now() + m * 60_000)}
-                className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium border transition-colors',
+              <button
+                key={m}
+                type="button"
+                onClick={() => setSleepUntil(Date.now() + m * 60_000)}
+                aria-label={`Sleep timer ${m} minutes`}
+                className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium border border-border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                   sleepUntil ? 'border-primary/40 bg-primary/5' : 'border-border hover:bg-muted')}>
                 {m}m
               </button>
             ))}
             {sleepUntil && (
-              <button onClick={() => setSleepUntil(null)} className="rounded border border-border px-1.5 py-0.5 text-[10px] hover:bg-muted">
+              <button onClick={() => setSleepUntil(null)} className="rounded border border-border border-border px-1.5 py-0.5 text-[10px] hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                 tắt · {formatDuration(sleepRemainingMs)}
               </button>
             )}
           </div>
 
           <div className="ml-auto flex items-center gap-1.5">
-            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setMuted((m) => !m)}>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-8 w-8"
+              onClick={() => setMuted((m) => !m)}
+              aria-label={muted ? 'Unmute' : 'Mute'}
+              aria-pressed={muted}
+            >
               {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
             </Button>
-            <input type="range" min={0} max={1} step={0.05} value={volume}
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={volume}
               onChange={(e) => setVolume(parseFloat(e.target.value))}
-              className="w-20 accent-primary" />
+              aria-label="Volume"
+              aria-valuetext={`${Math.round(volume * 100)} percent`}
+              className="w-20 accent-primary"
+            />
           </div>
+        </div>
+
+        {/* Collapsible chapter list — opens inline above errors/bookmarks
+            so it doesn't push the rest of the UI around. Each row is a
+            real button (focusable, keyboard-activatable) with a "now
+            playing" marker when chapterIdx matches. */}
+        <div className="mt-2">
+          <button
+            type="button"
+            onClick={() => setChapterListOpen((o) => !o)}
+            aria-expanded={chapterListOpen}
+            aria-controls="audiobook-chapter-list"
+            className={cn(
+              'flex w-full items-center justify-between gap-2 rounded-md border border-border px-2 py-1 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              chapterListOpen ? 'bg-muted/60 border-border' : 'border-transparent hover:bg-muted/40',
+            )}
+          >
+            <span className="inline-flex items-center gap-1.5">
+              <ListMusic className="h-3.5 w-3.5" />
+              Danh sách chương ({chapterIdx + 1}/{chapters.length})
+            </span>
+            <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', chapterListOpen && 'rotate-180')} />
+          </button>
+          {chapterListOpen && (
+            <ol
+              id="audiobook-chapter-list"
+              className="mt-1 max-h-48 overflow-y-auto rounded-md border border-border bg-card/40 divide-y divide-border/60"
+            >
+              {chapters.map((c, idx) => {
+                const isCurrent = idx === chapterIdx;
+                return (
+                  <li key={c.id}>
+                    <button
+                      type="button"
+                      onClick={() => setChapterIdx(idx)}
+                      aria-current={isCurrent ? 'true' : undefined}
+                      className={cn(
+                        'flex w-full items-center gap-2 px-2 py-1 text-left text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                        isCurrent
+                          ? 'bg-primary/10 text-primary font-medium'
+                          : 'hover:bg-muted/50 text-foreground/90',
+                      )}
+                    >
+                      <span className={cn(
+                        'tabular-nums w-7 shrink-0 text-[10px] text-right',
+                        isCurrent ? 'text-primary' : 'text-muted-foreground',
+                      )}>
+                        {isCurrent
+                          ? <Play className="inline h-3 w-3 fill-current" aria-label="Đang phát" />
+                          : idx + 1}
+                      </span>
+                      <span className="truncate flex-1">{c.title || `Chapter ${idx + 1}`}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ol>
+          )}
         </div>
 
         {error && (
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-destructive">
             <span>{error}</span>
             {currentAudioUrl && (
-              <a href={currentAudioUrl} target="_blank" rel="noreferrer" className="rounded border border-destructive/30 px-2 py-0.5 hover:bg-destructive/10">
+              <a href={currentAudioUrl} target="_blank" rel="noreferrer" className="rounded border border-border border-destructive/30 px-2 py-0.5 hover:bg-destructive/10">
                 Mở audio
               </a>
             )}
@@ -377,7 +559,7 @@ export function AudiobookPlayer({ bookId, chapters, initialChapterIdx, onClose, 
         {bookmarks.length > 0 && (
           <div className="mt-2 flex gap-1.5 overflow-x-auto pb-1">
             {bookmarks.map((bm) => (
-              <div key={bm.id} className="flex shrink-0 items-center gap-1 rounded-full border bg-muted/40 pl-2 pr-1 py-0.5 text-[10px]">
+              <div key={bm.id} className="flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted/40 pl-2 pr-1 py-0.5 text-[10px]">
                 <button onClick={() => jumpToBookmark(bm)} className="max-w-36 truncate hover:text-primary" title={`${bm.title} · ${formatDuration(bm.time * 1000)}`}>
                   {bm.chapterIdx + 1}: {formatDuration(bm.time * 1000)}
                 </button>

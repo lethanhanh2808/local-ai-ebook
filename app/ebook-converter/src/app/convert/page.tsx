@@ -18,6 +18,9 @@ import {
   Play, Square, Check,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { useToast } from '@/components/ui/toast';
+import { cn } from '@/lib/utils';
 import { UploadZone } from '@/components/jobs/UploadZone';
 import { JobList } from '@/components/jobs/JobList';
 import { PageHeader } from '@/components/layout/PageHeader';
@@ -37,6 +40,7 @@ const SUPPORTED_FORMATS = [
 ];
 
 export default function ConvertPage() {
+  const toast = useToast();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -71,6 +75,21 @@ export default function ConvertPage() {
   }, []);
 
   useEffect(() => { void fetchJobs(); void fetchWorkerStatus(); }, [fetchJobs, fetchWorkerStatus, refreshKey]);
+
+  const stopWorker = async () => {
+    try {
+      const r = await fetch('/api/worker/stop', { method: 'POST' });
+      const data = await r.json();
+      if (data.ok) {
+        setWorkerActionMsg({ kind: 'ok', text: 'Worker đã dừng.' });
+        await fetchWorkerStatus();
+      } else {
+        setWorkerActionMsg({ kind: 'err', text: `Lỗi: ${data.error}` });
+      }
+    } catch (e) {
+      setWorkerActionMsg({ kind: 'err', text: `Lỗi: ${String(e)}` });
+    }
+  };
 
   // Poll while there are active or pending jobs. When the queue empties, do
 // one more refresh 3s later to ensure the stats settle to their final values.
@@ -158,7 +177,7 @@ export default function ConvertPage() {
         </div>
       )}
       {workerActionMsg && (
-        <div className={cn2(
+        <div className={cn(
           'flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs',
           workerActionMsg.kind === 'ok'
             ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-400'
@@ -187,20 +206,14 @@ export default function ConvertPage() {
             </span>
           )}
           <button
-            onClick={async () => {
-              if (!confirm('Dừng worker? Job đang xử lý sẽ tiếp tục chạy nhưng job mới sẽ KHÔNG được nhận.')) return;
-              try {
-                const r = await fetch('/api/worker/stop', { method: 'POST' });
-                const data = await r.json();
-                if (data.ok) {
-                  setWorkerActionMsg({ kind: 'ok', text: 'Worker đã dừng.' });
-                  await fetchWorkerStatus();
-                } else {
-                  setWorkerActionMsg({ kind: 'err', text: `Lỗi: ${data.error}` });
-                }
-              } catch (e) {
-                setWorkerActionMsg({ kind: 'err', text: `Lỗi: ${String(e)}` });
-              }
+            onClick={() => {
+              toast.confirm({
+                title: 'Dừng worker?',
+                description: 'Job đang xử lý sẽ tiếp tục chạy nhưng job mới sẽ KHÔNG được nhận.',
+                confirmLabel: 'Dừng',
+                destructive: true,
+                onConfirm: stopWorker,
+              });
             }}
             className="ml-auto text-[10px] text-muted-foreground hover:text-destructive transition-colors"
           >
@@ -210,7 +223,7 @@ export default function ConvertPage() {
       )}
 
       {/* ── Hero ──────────────────────────────────────────────────────────── */}
-      <section className="relative overflow-hidden rounded-2xl border bg-gradient-to-br from-primary/8 via-primary/3 to-transparent p-6 sm:p-8">
+      <section className="relative overflow-hidden rounded-2xl border border-border bg-gradient-to-br from-primary/8 via-primary/3 to-transparent p-6 sm:p-8">
         <div className="relative z-10 flex flex-col gap-3">
           <div className="flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-primary" />
@@ -262,7 +275,7 @@ export default function ConvertPage() {
           icon={<Zap className="h-4 w-4" />}
           actions={
             <Button size="sm" variant="ghost" onClick={fetchJobs}>
-              <Loader2 className={cn2(loading && 'animate-spin', 'h-3.5 w-3.5')} />
+              <Loader2 className={cn(loading && 'animate-spin', 'h-3.5 w-3.5')} />
             </Button>
           }
         />
@@ -307,7 +320,7 @@ export default function ConvertPage() {
           icon={<ListChecks className="h-4 w-4" />}
           actions={
             <Button size="sm" variant="ghost" onClick={() => setRefreshKey((k) => k + 1)}>
-              <Loader2 className={cn2(loading && 'animate-spin', 'h-3.5 w-3.5')} />
+              <Loader2 className={cn(loading && 'animate-spin', 'h-3.5 w-3.5')} />
             </Button>
           }
         />
@@ -317,7 +330,7 @@ export default function ConvertPage() {
       {/* ── What gets done + supported formats ─────────────────────────────── */}
       <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* AI pipeline */}
-        <div className="rounded-xl border bg-card p-5">
+        <Card className="rounded-xl border border-border p-5">
           <h3 className="text-sm font-semibold flex items-center gap-2 mb-3">
             <Wand2 className="h-4 w-4 text-primary" />
             AI pipeline
@@ -343,17 +356,17 @@ export default function ConvertPage() {
               </li>
             ))}
           </ol>
-        </div>
+        </Card>
 
         {/* Supported formats */}
-        <div className="rounded-xl border bg-card p-5">
+        <Card className="rounded-xl border border-border p-5">
           <h3 className="text-sm font-semibold flex items-center gap-2 mb-3">
             <FileText className="h-4 w-4 text-primary" />
             Định dạng hỗ trợ
           </h3>
           <div className="space-y-1.5">
             {SUPPORTED_FORMATS.map((f) => (
-              <div key={f.ext} className="flex items-center gap-3 rounded-md border bg-muted/30 px-3 py-2">
+              <div key={f.ext} className="flex items-center gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
                 <span className="rounded bg-primary/15 px-2 py-0.5 text-[10px] font-bold text-primary tabular-nums">
                   .{f.ext.toLowerCase()}
                 </span>
@@ -361,18 +374,15 @@ export default function ConvertPage() {
               </div>
             ))}
           </div>
-          <div className="mt-4 rounded-md border border-dashed bg-muted/30 p-3 text-[11px] text-muted-foreground">
+          <div className="mt-4 rounded-md border border-border border-dashed bg-muted/30 p-3 text-[11px] text-muted-foreground">
             <Sparkles className="inline h-3 w-3 mr-1 text-primary" />
             AI provider đang dùng có thể thay đổi trong{' '}
             <Link href="/settings" className="text-primary hover:underline font-medium">Cài đặt</Link>.
           </div>
-        </div>
+        </Card>
       </section>
     </div>
   );
 }
 
-// Lightweight helper to avoid a missing import noise
-function cn2(...c: Array<string | false | undefined | null>): string {
-  return c.filter(Boolean).join(' ');
-}
+// cn helper is imported from '@/lib/utils' (UI Polish 2026-07-06)

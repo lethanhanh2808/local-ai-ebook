@@ -11,7 +11,10 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
-import { cn, formatDate, STATUS_COLORS } from '@/lib/utils';
+import { useToast } from '@/components/ui/toast';
+import { Card } from '@/components/ui/card';
+import { Dialog, DialogBody } from '@/components/ui/dialog';
+import { cn, formatDate } from '@/lib/utils';
 
 export interface Job {
   id: string;
@@ -47,6 +50,15 @@ const STATUS_ICONS: Record<string, React.ReactNode> = {
   cancelled:  <XCircle className="h-3.5 w-3.5" />,
 };
 
+const STATUS_VARIANT: Record<string, 'status-queued' | 'status-active' | 'status-done' | 'status-failed' | 'status-idle'> = {
+  pending:    'status-queued',
+  queued:     'status-queued',
+  processing: 'status-active',
+  completed:  'status-done',
+  failed:     'status-failed',
+  cancelled:  'status-idle',
+};
+
 function formatDuration(ms: number): string {
   if (ms < 60000) return `${Math.round(ms / 1000)}s`;
   const m = Math.floor(ms / 60000);
@@ -73,6 +85,7 @@ interface JobCardProps {
 }
 
 export function JobCard({ job, position, onDelete, onAddedToLibrary }: JobCardProps) {
+  const toast = useToast();
   const [addingToLib, setAddingToLib] = useState(false);
   const [addedToLib, setAddedToLib] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
@@ -100,7 +113,7 @@ export function JobCard({ job, position, onDelete, onAddedToLibrary }: JobCardPr
       const res = await fetch(`/api/jobs/${job.id}/start`, { method: 'POST' });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        alert(`Không thể bắt đầu: ${data.error ?? res.statusText}`);
+        toast.error('Không thể bắt đầu', { description: data.error ?? res.statusText });
         return;
       }
       // Parent will refresh the list and the job will move to 'queued' → 'processing'
@@ -109,10 +122,18 @@ export function JobCard({ job, position, onDelete, onAddedToLibrary }: JobCardPr
     }
   };
 
-  const handleDelete = async () => {
-    if (!confirm(`Xoá job "${job.filename}"?\n\nFile input và (nếu có) file output sẽ bị xoá khỏi đĩa.`)) return;
-    await fetch(`/api/jobs/${job.id}`, { method: 'DELETE' });
-    onDelete(job.id);
+  const handleDelete = () => {
+    toast.confirm({
+      title: `Xoá job "${job.filename}"?`,
+      description: 'File input và (nếu có) file output sẽ bị xoá khỏi đĩa.',
+      confirmLabel: 'Delete',
+      destructive: true,
+      onConfirm: async () => {
+        await fetch(`/api/jobs/${job.id}`, { method: 'DELETE' });
+        onDelete(job.id);
+        toast.success('Job deleted');
+      },
+    });
   };
 
   const handleAddToLibrary = async () => {
@@ -136,20 +157,22 @@ export function JobCard({ job, position, onDelete, onAddedToLibrary }: JobCardPr
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, x: -20, height: 0 }}
       className={cn(
-        'rounded-xl border bg-card shadow-sm transition-shadow hover:shadow-md overflow-hidden',
+        // Base border (color set explicitly because this element sits inside a
+        // Card without one). Conditional classes override `border-border` for
+        // status highlights; later classes win in Tailwind's cascade.
+        'border border-border shadow-sm transition-shadow hover:shadow-md overflow-hidden',
         job.status === 'failed' && 'border-destructive/40',
-        job.status === 'completed' && 'border-green-500/20',
-        isActive && 'border-blue-500/30',
+        job.status === 'completed' && 'border-success-fg/40',
+        isActive && 'border-primary/40',
       )}
     >
       {/* Top color bar */}
       <div className={cn('h-0.5 w-full', {
-        'bg-amber-400': job.status === 'pending',
-        'bg-yellow-400': job.status === 'queued',
-        'bg-blue-500': job.status === 'processing',
-        'bg-green-500': job.status === 'completed',
-        'bg-red-500': job.status === 'failed',
-        'bg-gray-400': job.status === 'cancelled',
+        'bg-bible-pending-border': job.status === 'pending' || job.status === 'queued',
+        'bg-primary': job.status === 'processing',
+        'bg-success-fg': job.status === 'completed',
+        'bg-destructive': job.status === 'failed',
+        'bg-muted-foreground': job.status === 'cancelled',
       })} />
 
       <div className="p-4">
@@ -157,11 +180,10 @@ export function JobCard({ job, position, onDelete, onAddedToLibrary }: JobCardPr
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-start gap-2.5 min-w-0 flex-1">
             <div className={cn('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg', {
-              'bg-amber-100 text-amber-600 dark:bg-amber-900/30': job.status === 'pending',
-              'bg-yellow-100 text-yellow-600 dark:bg-yellow-900/30': job.status === 'queued',
-              'bg-blue-100 text-blue-600 dark:bg-blue-900/30': job.status === 'processing',
-              'bg-green-100 text-green-600 dark:bg-green-900/30': job.status === 'completed',
-              'bg-red-100 text-red-600 dark:bg-red-900/30': job.status === 'failed',
+              'bg-bible-pending-bg text-bible-pending-fg': job.status === 'pending' || job.status === 'queued',
+              'bg-primary/15 text-primary': job.status === 'processing',
+              'bg-success-bg text-success-fg': job.status === 'completed',
+              'bg-destructive/15 text-destructive': job.status === 'failed',
             })}>
               {STATUS_ICONS[job.status] ?? <BookOpen className="h-3.5 w-3.5" />}
             </div>
@@ -190,7 +212,7 @@ export function JobCard({ job, position, onDelete, onAddedToLibrary }: JobCardPr
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <Badge className={cn(STATUS_COLORS[job.status] ?? '', 'flex items-center gap-1 text-xs')}>
+            <Badge variant={STATUS_VARIANT[job.status] ?? 'status-idle'} className="flex items-center gap-1">
               {STATUS_ICONS[job.status]}
               <span className="capitalize">{job.status}</span>
             </Badge>
@@ -223,13 +245,13 @@ export function JobCard({ job, position, onDelete, onAddedToLibrary }: JobCardPr
               )}
               {/* AI stats during processing — real-time speed */}
               {job.aiCallCount && job.aiCallCount > 0 && (
-                <span className="flex items-center gap-1 text-blue-600 dark:text-blue-400 font-mono">
+                <span className="flex items-center gap-1 text-primary font-mono">
                   <Activity className="h-3 w-3" />
                   {job.aiCallCount} calls
                   {/* Prefer server-reported rates (more accurate). Fall back
                       to client-measured throughput if not available. */}
                   {job.aiGenerationTokensPerSecond && job.aiGenerationTokensPerSecond > 0 ? (
-                    <span className="text-emerald-600 dark:text-emerald-400">
+                    <span className="text-success-fg">
                       · gen {job.aiGenerationTokensPerSecond.toFixed(1)} tok/s
                     </span>
                   ) : job.aiTotalDurationMs && job.aiTotalDurationMs > 0 ? (
@@ -238,7 +260,7 @@ export function JobCard({ job, position, onDelete, onAddedToLibrary }: JobCardPr
                     </span>
                   ) : null}
                   {job.aiPromptTokensPerSecond && job.aiPromptTokensPerSecond > 0 && (
-                    <span className="text-amber-600 dark:text-amber-400">
+                    <span className="text-bible-pending-fg">
                       · prompt {job.aiPromptTokensPerSecond.toFixed(0)} tok/s
                     </span>
                   )}
@@ -263,11 +285,11 @@ export function JobCard({ job, position, onDelete, onAddedToLibrary }: JobCardPr
               <span className="flex items-center gap-1"><Languages className="h-3 w-3" />{job.metadata.language.toUpperCase()}</span>
             )}
             {repair && typeof repair.repairedFiles === 'number' && repair.repairedFiles > 0 && (
-              <span className="flex items-center gap-1"><Zap className="h-3 w-3 text-amber-500" />Repaired {repair.repairedFiles as number} files</span>
+              <span className="flex items-center gap-1"><Zap className="h-3 w-3 text-bible-pending-fg" />Repaired {repair.repairedFiles as number} files</span>
             )}
             {/* AI call stats */}
             {job.aiCallCount && job.aiCallCount > 0 && (
-              <span className="flex items-center gap-1 text-blue-600 dark:text-blue-400 font-mono" title={`${job.aiTotalTokens} tokens, ${job.aiTotalDurationMs}ms total`}>
+              <span className="flex items-center gap-1 text-primary font-mono" title={`${job.aiTotalTokens} tokens, ${job.aiTotalDurationMs}ms total`}>
                 <Activity className="h-3 w-3" />
                 {job.aiCallCount} AI calls
                 {job.aiTotalDurationMs && job.aiTotalDurationMs > 0 && (
@@ -281,13 +303,13 @@ export function JobCard({ job, position, onDelete, onAddedToLibrary }: JobCardPr
                 more accurate than client-measured tok/s because they exclude
                 network overhead and account for prompt-evaluation time. */}
             {job.aiGenerationTokensPerSecond && job.aiGenerationTokensPerSecond > 0 && (
-              <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-mono"
+              <span className="flex items-center gap-1 text-success-fg font-mono"
                 title="Server-reported output tokens per second (excludes network + prompt-evaluation)">
                 <Zap className="h-3 w-3" />gen {job.aiGenerationTokensPerSecond.toFixed(1)} tok/s
               </span>
             )}
             {job.aiPromptTokensPerSecond && job.aiPromptTokensPerSecond > 0 && (
-              <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400 font-mono"
+              <span className="flex items-center gap-1 text-bible-pending-fg font-mono"
                 title="Server-reported input tokens per second (prompt evaluation rate)">
                 <Zap className="h-3 w-3" />prompt {job.aiPromptTokensPerSecond.toFixed(1)} tok/s
               </span>
@@ -302,14 +324,14 @@ export function JobCard({ job, position, onDelete, onAddedToLibrary }: JobCardPr
               const warning = (job.report as { deepFormatWarning?: string } | null)?.deepFormatWarning;
               if (warning) {
                 return (
-                  <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400 font-medium" title={warning}>
+                  <span className="flex items-center gap-1 text-bible-pending-fg font-medium" title={warning}>
                     <AlertTriangle className="h-3 w-3" />Deep format failed: {warning.slice(0, 60)}{warning.length > 60 ? '…' : ''}
                   </span>
                 );
               }
               if (typeof calls === 'number' && calls > 0) {
                 return (
-                  <span className="flex items-center gap-1 text-purple-600 dark:text-purple-400 font-medium">
+                  <span className="flex items-center gap-1 text-accent-foreground font-medium">
                     <Sparkles className="h-3 w-3" />Deep format · {calls} AI calls
                   </span>
                 );
@@ -318,7 +340,7 @@ export function JobCard({ job, position, onDelete, onAddedToLibrary }: JobCardPr
             })()}
             {validation?.score !== undefined && (
               <span className="flex items-center gap-1">
-                <CheckCircle2 className="h-3 w-3 text-green-500" />Score {String(validation.score)}/100
+                <CheckCircle2 className="h-3 w-3 text-success-fg" />Score {String(validation.score)}/100
               </span>
             )}
             <span className="flex items-center gap-1">
@@ -347,7 +369,7 @@ export function JobCard({ job, position, onDelete, onAddedToLibrary }: JobCardPr
           </button>
         ) : null}
         {showDetails && (validation?.warnings as string[] | undefined)?.map((w, i) => (
-          <p key={i} className="mt-1 text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1">
+          <p key={i} className="mt-1 text-xs text-bible-pending-fg flex items-start gap-1">
             <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />{w}
           </p>
         ))}
@@ -391,7 +413,7 @@ export function JobCard({ job, position, onDelete, onAddedToLibrary }: JobCardPr
                   variant={addedToLib ? 'ghost' : 'default'}
                   onClick={handleAddToLibrary}
                   disabled={addingToLib || addedToLib}
-                  className={cn('h-7 px-2.5 text-xs gap-1', addedToLib && 'text-green-600')}
+                  className={cn('h-7 px-2.5 text-xs gap-1', addedToLib && 'text-success-fg')}
                 >
                   {addedToLib ? (
                     <><CheckCircle2 className="h-3 w-3" />In Library</>
@@ -474,76 +496,64 @@ function DebugConsole({ logPath, open, onClose }: DebugConsoleProps) {
   }, [open, fetchLogs]);
 
   return (
-    <AnimatePresence>
-      {open && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-          onClick={onClose}>
-          <motion.div
-            initial={{ y: 20, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: 20, opacity: 0 }}
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-4xl max-h-[80vh] rounded-xl border bg-card shadow-2xl flex flex-col">
-            <header className="flex items-center justify-between px-4 py-3 border-b">
-              <div className="flex items-center gap-2">
-                <Terminal className="h-4 w-4 text-primary" />
-                <h3 className="font-semibold text-sm">Debug Console</h3>
-                <span className="text-[10px] text-muted-foreground font-mono">{logPath.split('/').pop()}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    checked={autoscroll}
-                    onChange={(e) => setAutoscroll(e.target.checked)}
-                    className="h-3 w-3"
-                  />
-                  Auto-scroll
-                </label>
-                <span className="text-xs text-muted-foreground">{entries.length} entries</span>
-                <button onClick={onClose} className="text-muted-foreground hover:text-foreground p-1" title="Đóng">
-                  <XCircle className="h-4 w-4" />
-                </button>
-              </div>
-            </header>
-            <div
-              ref={tailRef}
-              className="flex-1 overflow-y-auto bg-zinc-950 text-zinc-100 font-mono text-[11px] leading-relaxed p-3"
-              style={{ minHeight: 300 }}>
-              {error && <div className="text-red-400 p-2">Error: {error}</div>}
-              {!error && entries.length === 0 && <div className="text-zinc-500 p-2">Đang tải log...</div>}
-              {entries.map((e, i) => (
-                <div key={i} className={cn('flex gap-2 hover:bg-zinc-900 px-1 -mx-1 rounded',
-                  e.level === 'error' && 'text-red-300',
-                  e.level === 'warn' && 'text-yellow-300',
-                  e.level === 'debug' && 'text-zinc-500',
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }} widthClass="max-w-4xl">
+      <div className="flex flex-col max-h-[80vh]">
+        <header className="flex items-center justify-between px-4 py-3 border-b border-border">
+          <div className="flex items-center gap-2">
+            <Terminal className="h-4 w-4 text-primary" />
+            <h3 className="font-semibold text-sm">Debug Console</h3>
+            <span className="text-[10px] text-muted-foreground font-mono">{logPath.split('/').pop()}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={autoscroll}
+                onChange={(e) => setAutoscroll(e.target.checked)}
+                className="h-3 w-3"
+              />
+              Auto-scroll
+            </label>
+            <span className="text-xs text-muted-foreground">{entries.length} entries</span>
+            <button onClick={onClose} className="text-muted-foreground hover:text-foreground p-1" title="Đóng">
+              <XCircle className="h-4 w-4" />
+            </button>
+          </div>
+        </header>
+        <DialogBody className="p-0">
+          <div
+            ref={tailRef}
+            className="overflow-y-auto bg-popover text-popover-foreground font-mono text-[11px] leading-relaxed p-3"
+            style={{ minHeight: 300, maxHeight: 'calc(80vh - 60px)' }}>
+            {error && <div className="text-destructive p-2">Error: {error}</div>}
+            {!error && entries.length === 0 && <div className="text-muted-foreground p-2">Đang tải log...</div>}
+            {entries.map((e, i) => (
+              <div key={i} className={cn('flex gap-2 hover:bg-muted px-1 -mx-1 rounded',
+                e.level === 'error' && 'text-destructive',
+                e.level === 'warn' && 'text-bible-pending-fg',
+                e.level === 'debug' && 'text-muted-foreground',
+              )}>
+                <span className="text-muted-foreground shrink-0 w-20">
+                  {new Date(e.ts).toLocaleTimeString()}
+                </span>
+                <span className={cn('shrink-0 w-16 truncate',
+                  e.stage === 'ai-call' && 'text-primary',
+                  e.stage === 'chapter-done' && 'text-success-fg',
+                  e.level === 'error' && 'text-destructive',
                 )}>
-                  <span className="text-zinc-500 shrink-0 w-20">
-                    {new Date(e.ts).toLocaleTimeString()}
+                  [{e.stage}]
+                </span>
+                <span className="flex-1 break-all">{e.message}</span>
+                {e.meta && (
+                  <span className="text-muted-foreground text-[10px] shrink-0">
+                    {JSON.stringify(e.meta)}
                   </span>
-                  <span className={cn('shrink-0 w-16 truncate',
-                    e.stage === 'ai-call' && 'text-blue-300',
-                    e.stage === 'chapter-done' && 'text-green-300',
-                    e.level === 'error' && 'text-red-400',
-                  )}>
-                    [{e.stage}]
-                  </span>
-                  <span className="flex-1 break-all">{e.message}</span>
-                  {e.meta && (
-                    <span className="text-zinc-500 text-[10px] shrink-0">
-                      {JSON.stringify(e.meta)}
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+                )}
+              </div>
+            ))}
+          </div>
+        </DialogBody>
+      </div>
+    </Dialog>
   );
 }

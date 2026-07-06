@@ -8,7 +8,9 @@ import {
   Filter, LayoutList, Clock, Zap, Play,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useToast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
+import { ErrorState } from '@/components/layout/ErrorState';
 
 type Filter = 'all' | 'pending' | 'active' | 'completed' | 'failed';
 
@@ -25,8 +27,10 @@ interface JobListProps {
 }
 
 export function JobList({ refreshTrigger }: JobListProps) {
+  const toast = useToast();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>('all');
   const [autoClean, setAutoClean] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -35,8 +39,9 @@ export function JobList({ refreshTrigger }: JobListProps) {
 
   const fetchJobs = useCallback(async () => {
     try {
+      setError(null);
       const res = await fetch('/api/jobs');
-      if (!res.ok) return;
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as Job[];
       setJobs(data);
 
@@ -53,6 +58,8 @@ export function JobList({ refreshTrigger }: JobListProps) {
           setJobs((prev) => prev.filter((j) => !toDelete.some((d) => d.id === j.id)));
         }
       }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
@@ -95,19 +102,33 @@ export function JobList({ refreshTrigger }: JobListProps) {
   const queuedJobs = jobs.filter((j) => j.status === 'queued');
   const pendingJobs = jobs.filter((j) => j.status === 'pending');
 
-  const startAllPending = async () => {
+  const startAllPending = () => {
     if (pendingJobs.length === 0) return;
-    if (!confirm(`Bắt đầu ${pendingJobs.length} job đang chờ?`)) return;
-    for (const j of pendingJobs) {
-      await fetch(`/api/jobs/${j.id}/start`, { method: 'POST' });
-    }
+    toast.confirm({
+      title: `Bắt đầu ${pendingJobs.length} job đang chờ?`,
+      confirmLabel: 'Start all',
+      onConfirm: async () => {
+        for (const j of pendingJobs) {
+          await fetch(`/api/jobs/${j.id}/start`, { method: 'POST' });
+        }
+        toast.success(`Started ${pendingJobs.length} jobs`);
+      },
+    });
   };
 
-  const clearCompleted = async () => {
-    if (!confirm(`Xoá ${completedCount} job đã hoàn thành?`)) return;
-    for (const j of jobs.filter((j) => j.status === 'completed' || j.status === 'failed')) {
-      await fetch(`/api/jobs/${j.id}`, { method: 'DELETE' });
-    }
+  const clearCompleted = () => {
+    toast.confirm({
+      title: `Xoá ${completedCount} job đã hoàn thành?`,
+      confirmLabel: 'Clear',
+      destructive: true,
+      onConfirm: async () => {
+        const targets = jobs.filter((j) => j.status === 'completed' || j.status === 'failed');
+        for (const j of targets) {
+          await fetch(`/api/jobs/${j.id}`, { method: 'DELETE' });
+        }
+        toast.success(`Cleared ${targets.length} jobs`);
+      },
+    });
   };
 
   if (loading) {
@@ -115,6 +136,17 @@ export function JobList({ refreshTrigger }: JobListProps) {
       <div className="flex justify-center py-12">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
       </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <ErrorState
+        onRetry={() => void fetchJobs()}
+        message={error}
+        details={String(error)}
+        retrying={loading}
+      />
     );
   }
 
@@ -137,7 +169,7 @@ export function JobList({ refreshTrigger }: JobListProps) {
                   key={opt.value}
                   onClick={() => setFilter(opt.value)}
                   className={cn(
-                    'flex items-center gap-1.5 px-3 h-8 text-xs font-medium border-r last:border-r-0 transition-colors',
+                    'flex items-center gap-1.5 px-3 h-8 text-xs font-medium border-r border-border last:border-r-0 transition-colors',
                     filter === opt.value ? 'bg-primary text-primary-foreground' : 'bg-background hover:bg-muted text-muted-foreground',
                   )}
                 >

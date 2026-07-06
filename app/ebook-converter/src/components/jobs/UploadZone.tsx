@@ -6,6 +6,8 @@ import { useDropzone } from 'react-dropzone';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Upload, FileText, Loader2, Sparkles, ChevronDown, ChevronUp, ShieldOff, Wand2, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 
 const ACCEPTED_TYPES = {
@@ -105,7 +107,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
         {...getRootProps()}
         className={cn(
           'relative flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed',
-          'transition-all duration-200 outline-none',
+          'transition-all duration-200 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
           isDragActive
             ? 'border-primary bg-primary/5 scale-[1.01]'
             : 'border-border hover:border-primary/50 hover:bg-muted/40',
@@ -149,20 +151,13 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
       </div>
 
       {/* Auto-start toggle */}
-      <div className="rounded-xl border bg-card overflow-hidden">
+      <Card className="rounded-xl border overflow-hidden">
         <label className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none">
-          <div
-            onClick={(e) => { e.preventDefault(); setAutoStart((v) => !v); }}
-            className={cn(
-              'relative w-9 h-5 rounded-full transition-colors duration-200 shrink-0',
-              autoStart ? 'bg-primary' : 'bg-muted-foreground/30',
-            )}
-          >
-            <div className={cn(
-              'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200',
-              autoStart ? 'translate-x-4' : 'translate-x-0',
-            )} />
-          </div>
+          <Switch
+            checked={autoStart}
+            onCheckedChange={setAutoStart}
+            label="Auto-start conversion"
+          />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5">
               <Zap className="h-4 w-4 text-primary" />
@@ -176,10 +171,10 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
             </p>
           </div>
         </label>
-      </div>
+      </Card>
 
       {/* AI Enhancement Options */}
-      <div className="rounded-xl border bg-card overflow-hidden divide-y">
+      <Card className="rounded-xl border overflow-hidden divide-y divide-border">
         {/* Light AI enhance (fast) */}
         <label className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none">
           <div
@@ -253,17 +248,17 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
                   onChange={(e) => setAiPrompt(e.target.value)}
                   placeholder="vd: 'Bỏ qua các đoạn recap. Giữ nguyên tên riêng Nhật/Hán-Việt.'"
                   rows={3}
-                  className="mt-2 w-full rounded-md border bg-background px-3 py-2 text-xs font-mono outline-none focus-visible:ring-2 focus-visible:ring-ring resize-y"
+                  className="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 text-xs font-mono outline-none focus-visible:ring-2 focus-visible:ring-ring resize-y"
                 />
               )}
             </AnimatePresence>
           </div>
         )}
-      </div>
+      </Card>
 
       {/* (Legacy single-toggle kept for back-compat with old saved state — see below) */}
       {false && (
-      <div className="rounded-xl border bg-card overflow-hidden">
+      <Card className="rounded-xl border overflow-hidden">
         <label className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none">
           <div
             onClick={(e) => { e.preventDefault(); setAiEnhance((v) => !v); if (aiEnhance) setShowPrompt(false); }}
@@ -307,7 +302,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
               exit={{ height: 0, opacity: 0 }}
               className="overflow-hidden"
             >
-              <div className="px-4 pb-3 border-t">
+              <div className="px-4 pb-3 border-t border-border">
                 <label className="block text-xs font-medium mb-1.5 mt-2 text-muted-foreground">
                   Custom AI instructions (optional)
                 </label>
@@ -316,7 +311,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
                   onChange={(e) => setAiPrompt(e.target.value)}
                   placeholder="e.g. Translate chapter titles to English. Fix dialogue format. Ensure proper paragraph breaks."
                   rows={3}
-                  className="w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none resize-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none resize-none focus-visible:ring-2 focus-visible:ring-ring"
                 />
                 <p className="text-[10px] text-muted-foreground mt-1">
                   Leave blank to use default enhancement (formatting, broken image removal, Vietnamese text cleanup)
@@ -325,11 +320,11 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
             </motion.div>
           )}
         </AnimatePresence>
-      </div>
+      </Card>
       )}
 
       {/* AI Watermark Cleanup */}
-      <div className="rounded-xl border bg-card overflow-hidden">
+      <Card className="rounded-xl border overflow-hidden">
         <label className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none">
           <div
             onClick={(e) => { e.preventDefault(); setAiWatermarkClean((v) => !v); }}
@@ -354,7 +349,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
             </p>
           </div>
         </label>
-      </div>
+      </Card>
 
       <AnimatePresence>
         {error && (

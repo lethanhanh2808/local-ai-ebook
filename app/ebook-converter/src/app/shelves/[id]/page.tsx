@@ -8,6 +8,11 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Card } from '@/components/ui/card';
+import { useToast } from '@/components/ui/toast';
+import { Dialog, DialogBody, DialogFooter } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { PageHeader } from '@/components/layout/PageHeader';
 import { cn } from '@/lib/utils';
 
 interface ShelfBook {
@@ -75,7 +80,7 @@ function StatusPill({ bookId, current, onChange }: { bookId: string; current: st
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 top-full z-20 mt-1 min-w-[110px] rounded-lg border bg-popover shadow-lg overflow-hidden">
+          <div className="absolute left-0 top-full z-20 mt-1 min-w-[110px] rounded-lg border border-border bg-popover text-popover-foreground shadow-lg overflow-hidden">
             {Object.keys(STATUS_LABELS).map((s) => (
               <button key={s} onClick={() => set(s)}
                 className={cn('w-full px-3 py-1.5 text-left text-xs hover:bg-muted transition-colors',
@@ -92,6 +97,7 @@ function StatusPill({ bookId, current, onChange }: { bookId: string; current: st
 
 export default function ShelfDetailPage({ params }: { params: { id: string } }) {
   const { id } = params;
+  const toast = useToast();
   const [shelf, setShelf] = useState<Shelf | null>(null);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -130,12 +136,18 @@ export default function ShelfDetailPage({ params }: { params: { id: string } }) 
     await fetchShelf();
   };
 
-  const handleRemove = async (bookId: string) => {
-    if (!confirm('Remove this book from the shelf?')) return;
-    setRemoving(bookId);
-    await fetch(`/api/shelves/${id}/books/${bookId}`, { method: 'DELETE' });
-    setRemoving(null);
-    setShelf((s) => s ? { ...s, books: s.books.filter((b) => b.id !== bookId) } : s);
+  const handleRemove = (bookId: string) => {
+    toast.confirm({
+      title: 'Remove this book from the shelf?',
+      confirmLabel: 'Remove',
+      destructive: true,
+      onConfirm: async () => {
+        setRemoving(bookId);
+        await fetch(`/api/shelves/${id}/books/${bookId}`, { method: 'DELETE' });
+        setRemoving(null);
+        setShelf((s) => s ? { ...s, books: s.books.filter((b) => b.id !== bookId) } : s);
+      },
+    });
   };
 
   const handleStatusChange = (bookId: string, status: string) => {
@@ -191,20 +203,21 @@ export default function ShelfDetailPage({ params }: { params: { id: string } }) 
 
       {/* Header */}
       <div>
-        <Link href="/shelves" className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="h-3.5 w-3.5" /> All shelves
-        </Link>
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold flex items-center gap-2">
-              <BookMarked className="h-6 w-6 text-primary" />{shelf.name}
-            </h1>
-            {shelf.description && <p className="mt-1 text-sm text-muted-foreground">{shelf.description}</p>}
-          </div>
-          <Button onClick={openAddModal} size="sm" className="shrink-0 gap-1.5">
-            <Plus className="h-4 w-4" /> Add Books
-          </Button>
-        </div>
+        <PageHeader
+          title={shelf.name}
+          description={shelf.description ?? undefined}
+          icon={<BookMarked className="h-5 w-5" />}
+          breadcrumbs={[
+            { label: 'Library', href: '/library' },
+            { label: 'Shelves', href: '/shelves' },
+            { label: shelf.name },
+          ]}
+          actions={
+            <Button onClick={openAddModal} size="sm" className="shrink-0 gap-1.5">
+              <Plus className="h-4 w-4" /> Add Books
+            </Button>
+          }
+        />
       </div>
 
       {/* Stats bar */}
@@ -216,7 +229,7 @@ export default function ShelfDetailPage({ params }: { params: { id: string } }) 
             { label: 'Finished', value: statusCounts.read ?? 0, color: 'text-green-600' },
             { label: 'Avg. progress', value: `${avgProgress}%`, color: '' },
           ].map(({ label, value, color }) => (
-            <div key={label} className="rounded-xl border bg-card p-4 text-center">
+            <div key={label} className="p-4 text-center">
               <p className={cn('text-2xl font-bold', color)}>{value}</p>
               <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
             </div>
@@ -287,11 +300,11 @@ export default function ShelfDetailPage({ params }: { params: { id: string } }) 
                   </div>
                 )}
                 {book.readProgress > 0 && (
-                  <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/20">
+                  <div className="absolute bottom-0 left-0 right-0 h-1 bg-foreground/15">
                     <div className="h-full bg-primary" style={{ width: `${book.readProgress}%` }} />
                   </div>
                 )}
-                <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                <div className="absolute inset-0 bg-modal-overlay opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                   <Link href={`/library/${book.id}/read`}
                     className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[11px] font-medium text-primary-foreground hover:bg-primary/90">
                     <BookOpen className="h-3 w-3" /> Read
@@ -315,7 +328,7 @@ export default function ShelfDetailPage({ params }: { params: { id: string } }) 
       ) : (
         <div className="space-y-1.5">
           {displayBooks.map((book) => (
-            <div key={book.id} className="group flex items-center gap-3 rounded-xl border bg-card p-3 hover:bg-muted/30 transition-colors">
+            <div key={book.id} className="group flex items-center gap-3 p-3 hover:bg-muted/30 transition-colors">
               <div className="h-14 w-10 shrink-0 overflow-hidden rounded bg-muted">
                 {book.coverPath ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -360,51 +373,41 @@ export default function ShelfDetailPage({ params }: { params: { id: string } }) 
       )}
 
       {/* Add books modal */}
-      {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/50" onClick={() => setShowAddModal(false)} />
-          <div className="relative z-10 w-full max-w-lg rounded-xl border bg-background shadow-2xl">
-            <div className="flex items-center justify-between border-b px-4 py-3">
-              <h2 className="font-semibold">Add Books to Shelf</h2>
-              <Button variant="ghost" size="icon" onClick={() => setShowAddModal(false)}>
-                <X className="h-4 w-4" />
-              </Button>
+      <Dialog open={showAddModal} onOpenChange={setShowAddModal} widthClass="max-w-lg" title="Add Books to Shelf">
+        <DialogBody>
+          <div className="space-y-3">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+              <Input autoFocus type="search" placeholder="Search library…" value={bookSearch}
+                onChange={(e) => setBookSearch(e.target.value)} className="pl-9" />
             </div>
-            <div className="p-4">
-              <div className="relative mb-3">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <input autoFocus type="search" placeholder="Search library…" value={bookSearch}
-                  onChange={(e) => setBookSearch(e.target.value)}
-                  className="h-9 w-full rounded-md border bg-background pl-9 pr-3 text-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring" />
-              </div>
-              <div className="max-h-80 overflow-y-auto space-y-1">
-                {filteredLib.length === 0 ? (
-                  <p className="py-8 text-center text-sm text-muted-foreground">
-                    {allBooks.length === 0 ? 'Loading…' : 'No books to add.'}
-                  </p>
-                ) : filteredLib.map((book) => (
-                  <div key={book.id} className="flex items-center gap-3 rounded-lg p-2 hover:bg-muted/50">
-                    <div className="h-10 w-7 shrink-0 overflow-hidden rounded bg-muted">
-                      {book.coverPath && (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={`/api/library/${book.id}/cover`} alt={book.title} className="h-full w-full object-cover" />
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{book.title}</p>
-                      <p className="text-xs text-muted-foreground truncate">{book.author}</p>
-                    </div>
-                    <Button size="sm" variant="outline" className="shrink-0 text-xs"
-                      onClick={() => handleAdd(book.id)} disabled={adding === book.id}>
-                      {adding === book.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
-                    </Button>
+            <div className="max-h-80 overflow-y-auto space-y-1">
+              {filteredLib.length === 0 ? (
+                <p className="py-8 text-center text-sm text-muted-foreground">
+                  {allBooks.length === 0 ? 'Loading…' : 'No books to add.'}
+                </p>
+              ) : filteredLib.map((book) => (
+                <div key={book.id} className="flex items-center gap-3 rounded-lg p-2 hover:bg-muted/50">
+                  <div className="h-10 w-7 shrink-0 overflow-hidden rounded bg-muted">
+                    {book.coverPath && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={`/api/library/${book.id}/cover`} alt={book.title} className="h-full w-full object-cover" />
+                    )}
                   </div>
-                ))}
-              </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{book.title}</p>
+                    <p className="text-xs text-muted-foreground truncate">{book.author}</p>
+                  </div>
+                  <Button size="sm" variant="outline" className="shrink-0 text-xs"
+                    onClick={() => handleAdd(book.id)} disabled={adding === book.id}>
+                    {adding === book.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+                  </Button>
+                </div>
+              ))}
             </div>
           </div>
-        </div>
-      )}
+        </DialogBody>
+      </Dialog>
     </div>
   );
 }

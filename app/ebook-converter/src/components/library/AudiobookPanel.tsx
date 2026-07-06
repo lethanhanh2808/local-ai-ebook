@@ -8,6 +8,8 @@ import {
   CheckCircle2, AlertTriangle, Wand2, Square, Volume2, ListMusic,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { useToast } from '@/components/ui/toast';
 import { cn, formatDuration } from '@/lib/utils';
 import { AudiobookPlayer } from './AudiobookPlayer';
 
@@ -44,6 +46,7 @@ interface Props {
 }
 
 export function AudiobookPanel({ bookId, onChapterAudioReady }: Props) {
+  const toast = useToast();
   const [book, setBook] = useState<Book | null>(null);
   const [summary, setSummary] = useState<AudiobookSummary | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
@@ -99,29 +102,42 @@ export function AudiobookPanel({ bookId, onChapterAudioReady }: Props) {
     } finally { setStarting(false); }
   };
 
-  const handleStop = async () => {
-    if (!confirm('Dừng đang tạo? Chương đang chạy sẽ hoàn thành, các chương sau sẽ không tạo.')) return;
-    setStopping(true);
-    try {
-      await fetch(`/api/library/${bookId}/audiobook`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'stop' }),
-      });
-      await fetchStatus();
-    } finally { setStopping(false); }
+  const handleStop = () => {
+    toast.confirm({
+      title: 'Dừng đang tạo?',
+      description: 'Chương đang chạy sẽ hoàn thành, các chương sau sẽ không tạo.',
+      confirmLabel: 'Dừng',
+      destructive: true,
+      onConfirm: async () => {
+        setStopping(true);
+        try {
+          await fetch(`/api/library/${bookId}/audiobook`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'stop' }),
+          });
+          await fetchStatus();
+        } finally { setStopping(false); }
+      },
+    });
   };
 
-  const handleReset = async () => {
-    if (!confirm('Xoá toàn bộ audio đã tạo?')) return;
-    setResetting(true);
-    await fetch(`/api/library/${bookId}/audiobook`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'reset' }),
+  const handleReset = () => {
+    toast.confirm({
+      title: 'Xoá toàn bộ audio đã tạo?',
+      confirmLabel: 'Xoá hết',
+      destructive: true,
+      onConfirm: async () => {
+        setResetting(true);
+        await fetch(`/api/library/${bookId}/audiobook`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'reset' }),
+        });
+        await fetchStatus();
+        setResetting(false);
+      },
     });
-    await fetchStatus();
-    setResetting(false);
   };
 
   const handleRegenOne = async (chapterFile: string) => {
@@ -154,7 +170,7 @@ export function AudiobookPanel({ bookId, onChapterAudioReady }: Props) {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-xl border bg-card p-4">
+      <Card className="rounded-xl border border-border p-4">
         <div className="flex items-center justify-between gap-3 mb-3">
           <h3 className="text-sm font-semibold flex items-center gap-1.5">
             <Headphones className="h-4 w-4 text-primary" />Audiobook đọc trước
@@ -249,13 +265,13 @@ export function AudiobookPanel({ bookId, onChapterAudioReady }: Props) {
             </Button>
           )}
         </div>
-      </div>
+      </Card>
 
       {/* Chapter list */}
       {chapters.length > 0 && (
-        <div className="rounded-xl border bg-card">
-          <div className="px-4 py-2 border-b text-xs font-semibold text-muted-foreground">Danh sách chương</div>
-          <div className="max-h-80 overflow-y-auto divide-y">
+        <Card className="rounded-xl border border-border">
+          <div className="px-4 py-2 border-b border-border text-xs font-semibold text-muted-foreground">Danh sách chương</div>
+          <div className="max-h-80 overflow-y-auto divide-y divide-border">
             {chapters.map((c, idx) => (
               <div key={c.id} className="flex items-center gap-3 px-3 py-2 text-xs hover:bg-muted/30">
                 <span className="text-muted-foreground w-6 shrink-0 text-right">{idx + 1}</span>
@@ -289,7 +305,7 @@ export function AudiobookPanel({ bookId, onChapterAudioReady }: Props) {
               </div>
             ))}
           </div>
-        </div>
+        </Card>
       )}
 
       {/* Full continuous audiobook player */}
