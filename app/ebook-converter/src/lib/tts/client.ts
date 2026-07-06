@@ -19,10 +19,10 @@ export interface SynthesizeOptions {
 
 export async function synthesizeTTS(opts: SynthesizeOptions): Promise<{ audio: Buffer; backend: string }> {
   const isVi = (opts.language ?? '').toLowerCase().startsWith('vi') || hasVietnameseDiacritics(opts.text);
-  // Vietnamese → VieNeu (voice presets + cloning); non-Vietnamese with a
-  // reference voice goes to MOSS-Nano; otherwise let the unified server route.
-  let backend = isVi ? 'vieneu' : undefined;
-  if (opts.voiceRefPath && !isVi) backend = 'moss-nano';
+  // 2026-07-06: only VieNeu runs locally — Piper + MOSS-Nano removed.
+  // Pin backend='vieneu' for Vietnamese; let the server pick otherwise (it
+  // defaults to vieneu anyway when no other backends are registered).
+  const backend: string | undefined = isVi ? 'vieneu' : undefined;
   const expressiveness = Math.min(1.0, Math.max(0.2, opts.expressiveness ?? 0.667));
 
   const r = await fetch(`${UNIFIED_TTS_URL}/synthesize`, {
