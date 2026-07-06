@@ -1,0 +1,145 @@
+/* src/app/theme.css
+ *
+ * Semantic color tokens for ad-hoc Tailwind palette utilities that lack
+ * dark-mode variants (or use raw hex/RGB) in three components:
+ *   - CharacterBible  (source badges, pending banner, modal overlay)
+ *   - CharacterDetection (gender / age / tone / role / "already-in-db" badges)
+ *   - VoicePanel       (default-voice star, auto-assign success toast)
+ *
+ * Design goals:
+ *   - Each variable is exposed as a Tailwind color via tailwind.config.js
+ *     so component JSX can use bg-token / text-token / border-token.
+ *   - Light + dark variants defined once here. Adding a new variant is a
+ *     single-file change.
+ *   - Names are semantic ("badge-gender-female") not literal ("pink"), so
+ *     dark mode can swap hue without renaming the class.
+ *   - Also covers the previously raw "bg-black/50" modal overlay.
+ *
+ * NOTE: PostCSS processes each .css file independently. globals.css
+ * declares @tailwind base; components; utilities; — but theme.css is a
+ * separate processed file, so it must redeclare `@tailwind base` for the
+ * `@layer base` block below to compile. Otherwise webpack fails with:
+ *   Syntax error: `@layer base` is used but no matching
+ *   `@tailwind base` directive is present.
+ */
+@tailwind base;
+
+@layer base {
+  :root {
+    /* Modal overlay — was bg-black/50, repeated in CharacterBible (×2). */
+    --modal-overlay: 0 0% 0%;
+
+    /* Bible pending badge + banner (amber in light). */
+    --bible-pending-bg: 48 96% 89%;          /* amber-100 */
+    --bible-pending-fg: 26 83% 14%;         /* amber-900 */
+    --bible-pending-border: 41 96% 60%;     /* amber-300 */
+
+    /* Bible source badges. */
+    --bible-source-user-bg: 152 81% 96%;     /* emerald-50 */
+    --bible-source-user-fg: 158 64% 30%;    /* emerald-700 */
+    --bible-source-user-border: 159 84% 60%;/* emerald-300 */
+
+    --bible-source-mixed-bg: 199 95% 94%;    /* sky-50 */
+    --bible-source-mixed-fg: 203 80% 36%;   /* sky-700 */
+    --bible-source-mixed-border: 199 92% 60%; /* sky-300 */
+
+    --bible-source-llm-bg: 210 20% 98%;     /* zinc-50 */
+    --bible-source-llm-fg: 240 5% 35%;      /* zinc-700 */
+    --bible-source-llm-border: 216 12% 84%; /* zinc-300 */
+
+    /* Detection badges — semantic naming (not "pink"/"blue") so dark mode
+       can swap hue freely without renaming the class. */
+    --badge-gender-female-bg: 327 86% 95%;   /* pink-500/15 in light */
+    --badge-gender-female-fg: 333 81% 36%;   /* pink-700 */
+    --badge-gender-male-bg: 213 94% 92%;     /* blue-500/15 in light */
+    --badge-gender-male-fg: 217 91% 40%;     /* blue-700 */
+    --badge-age-bg: 215 14% 92%;             /* slate-500/15 */
+    --badge-age-fg: 215 16% 35%;             /* slate-700 */
+    --badge-tone-bg: 38 92% 90%;             /* amber-500/15 */
+    --badge-tone-fg: 32 95% 32%;             /* amber-700 */
+    --badge-role-main-bg: 250 92% 95%;       /* violet-500/15 */
+    --badge-role-main-fg: 258 73% 42%;       /* violet-700 */
+    --badge-role-supporting-bg: 189 94% 93%; /* cyan-500/15 */
+    --badge-role-supporting-fg: 191 91% 30%; /* cyan-700 */
+    --badge-role-minor-bg: 24 6% 90%;        /* stone-500/15 */
+    --badge-role-minor-fg: 25 5% 30%;        /* stone-700 */
+    --badge-role-crowd-bg: 24 6% 93%;        /* stone-400/10 */
+    --badge-role-crowd-fg: 25 5% 45%;        /* stone-600 */
+    --badge-exists-bg: 142 71% 87%;          /* green-500/15 */
+    --badge-exists-fg: 142 71% 30%;          /* green-700 */
+
+    /* Voice panel — default-voice star + auto-assign success toast. */
+    --star-active: 38 92% 50%;               /* amber-400 */
+    --success-bg: 142 71% 92%;               /* green-50 */
+    --success-fg: 142 71% 30%;               /* green-700 */
+
+    /* Reader paper / ink surfaces (UI Polish 2026-07-06).
+       Replaces hardcoded hex literals in EbookReader (paper / sepia /
+       dark / high-contrast themes). Light values chosen for an off-white
+       reading background that doesn't fatigue the eye; ink is a warm
+       dark slate for AA contrast against paper. */
+    --reader-paper:        36 33% 97%;       /* warm off-white #F8F5F0 */
+    --reader-paper-soft:   36 20% 93%;       /* light beige for UI accents */
+    --reader-ink:          24 12% 14%;       /* deep warm gray #2C2620 */
+    --reader-ink-soft:     24 8% 38%;        /* muted ink for secondary text */
+    --reader-accent:       24 25% 55%;       /* warm brown for highlights */
+    --reader-accent-soft:  24 25% 55%;       /* 22% alpha variant — applied at use site */
+    --reader-highlight:    48 96% 80%;       /* amber-200 selection */
+    --reader-divider:      36 16% 86%;       /* soft divider */
+  }
+
+  .dark {
+    --modal-overlay: 0 0% 0%;
+
+    --bible-pending-bg: 26 83% 14%;          /* amber-950/30 */
+    --bible-pending-fg: 38 92% 80%;         /* amber-200 */
+    --bible-pending-border: 38 92% 30%;     /* amber-700/40 */
+
+    --bible-source-user-bg: 158 64% 14%;    /* emerald-950/30 */
+    --bible-source-user-fg: 158 84% 70%;    /* emerald-300 */
+    --bible-source-user-border: 158 64% 30%;/* emerald-700/40 */
+
+    --bible-source-mixed-bg: 203 80% 14%;   /* sky-950/30 */
+    --bible-source-mixed-fg: 199 92% 75%;   /* sky-300 */
+    --bible-source-mixed-border: 203 80% 30%; /* sky-700/40 */
+
+    --bible-source-llm-bg: 240 5% 14%;      /* zinc-800 */
+    --bible-source-llm-fg: 240 5% 75%;      /* zinc-300 */
+    --bible-source-llm-border: 240 5% 30%;  /* zinc-700 */
+
+    --badge-gender-female-bg: 333 81% 18%;  /* pink-950/40 */
+    --badge-gender-female-fg: 327 86% 80%;
+    --badge-gender-male-bg: 217 91% 18%;    /* blue-950/40 */
+    --badge-gender-male-fg: 213 94% 75%;
+    --badge-age-bg: 215 16% 18%;            /* slate-950/40 */
+    --badge-age-fg: 215 14% 70%;
+    --badge-tone-bg: 32 95% 16%;            /* amber-950/40 */
+    --badge-tone-fg: 38 92% 70%;
+    --badge-role-main-bg: 258 73% 18%;      /* violet-950/40 */
+    --badge-role-main-fg: 250 92% 80%;
+    --badge-role-supporting-bg: 191 91% 14%;/* cyan-950/40 */
+    --badge-role-supporting-fg: 189 94% 75%;
+    --badge-role-minor-bg: 25 5% 18%;       /* stone-950/40 */
+    --badge-role-minor-fg: 24 6% 70%;
+    --badge-role-crowd-bg: 24 6% 22%;
+    --badge-role-crowd-fg: 24 6% 65%;
+    --badge-exists-bg: 142 71% 18%;         /* green-950/40 */
+    --badge-exists-fg: 142 71% 60%;
+
+    --star-active: 38 92% 60%;               /* amber-300 */
+    --success-bg: 142 71% 14%;               /* green-950/30 */
+    --success-fg: 142 71% 60%;               /* green-400 */
+
+    /* Reader paper / ink — dark variants (UI Polish 2026-07-06).
+       Paper is a deep slate (not pure black) to avoid OLED smearing;
+       ink is near-white but slightly warm for AA contrast on paper. */
+    --reader-paper:        222 32% 9%;       /* #12122a-ish deep navy */
+    --reader-paper-soft:   222 24% 14%;      /* slightly lighter surface */
+    --reader-ink:          210 25% 92%;      /* near-white for body */
+    --reader-ink-soft:     215 16% 70%;      /* muted ink for secondary */
+    --reader-accent:       38 80% 65%;       /* warm amber accent */
+    --reader-accent-soft:  38 80% 65%;       /* 22% alpha variant — applied at use site */
+    --reader-highlight:    38 60% 30%;       /* dim amber (alpha applied at use site) */
+    --reader-divider:      217 16% 22%;      /* slate divider */
+  }
+}
