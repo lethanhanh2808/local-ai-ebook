@@ -7,6 +7,7 @@ import fs from 'fs';
 import { getBook } from '@/lib/db/books';
 import { getVoice, updateVoice, deleteVoice } from '@/lib/db/voices';
 import { setBookAudiobookStatus } from '@/lib/db/audiobook';
+import { BUILTIN_VIENEU_NAMES } from '@/lib/tts/vieneu-voices';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -58,11 +59,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
 
   // Pick the right backend based on whether we have a reference audio (cloned
   // voice) or just a built-in VieNeu voice name.
-  //   - Built-in VieNeu voice (e.g. "Thái Sơn", "Đức Trí"): pass the
+  //   - Built-in VieNeu voice (e.g. "Thái Sơn", "Minh Đức"): pass the
   //     builtinName (NOT voice.name) to the unified server — VieNeu only
   //     recognises the 10 preset names. For common-pool voices the user's
-  //     display name is "Giọng chung #1..4" but the underlying preset is
-  //     "Mỹ Duyên"/"Gia Bảo"/"Trúc Ly"/"Đức Trí".
+  //     display name is "Giọng chung #1..4" but the underlying preset is one
+  //     of the COMMON_POOL_BUILTINS surfaced from vieneu-voices.ts.
   //   - Custom cloned voice (has refAudioPath): pass `reference_path` for
   //     voice cloning. Backend = vieneu (cloning) or moss-nano (non-VI).
   // The previous version hardcoded `piper` for Vietnamese — but Piper has
@@ -70,10 +71,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
   const isVi = (book.language ?? 'vi') === 'vi';
   const hasRef = !!voice.refAudioPath && fs.existsSync(voice.refAudioPath);
   const backend = isVi ? 'vieneu' : 'moss-nano';
-  const BUILTIN_VIENEU = new Set([
-    'Ngọc Lan', 'Gia Bảo', 'Thái Sơn', 'Đức Trí', 'Mỹ Duyên',
-    'Trúc Ly', 'Xuân Vĩnh', 'Trọng Hữu', 'Bình An', 'Ngọc Linh',
-  ]);
+  const BUILTIN_VIENEU = new Set(BUILTIN_VIENEU_NAMES);
   const payload: Record<string, unknown> = {
     text,
     backend,
@@ -84,7 +82,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     payload['reference_path'] = voice.refAudioPath;
   } else {
     // Built-in VieNeu voice — resolve the preset name. The display name
-    // may differ from the preset (e.g. "Giọng chung #2" → "Gia Bảo"),
+    // may differ from the preset (e.g. "Giọng chung #2" → "Thanh Bình"),
     // so prefer builtinName when set, then fall back to display name
     // only if it IS a builtin preset.
     const preset = voice.builtinName
@@ -115,7 +113,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     }
     const audio = await r.arrayBuffer();
     // Sanitize the voice name for headers (HTTP requires Latin-1).
-    // Vietnamese names like "Đức Trí" (with diacritics) crash Node's HTTP layer.
+    // Vietnamese names like "Nguyễn Ngọc Ngạn" (with diacritics) crash Node's HTTP layer.
     const voiceHeader = encodeURIComponent(voice.name);
     return new NextResponse(audio, {
       headers: {

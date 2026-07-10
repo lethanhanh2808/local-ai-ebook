@@ -277,6 +277,226 @@ function normalizeId(value: string) {
   return id || 'chapter';
 }
 
+/**
+ * Strip CSS properties and rules that crash or freeze the Neoreader renderer
+ * on Onyx Boox (and also improve reliability on Kobo Aura, Nook GlowLight,
+ * and older Kindles). The symptom these properties cause on Onyx Boox is
+ * "chapter shows 2 pages, then nothing" — Neoreader stops laying out the
+ * document after hitting one of the offending rules.
+ *
+ * What gets stripped:
+ *  • All `@keyframes` rule blocks (CSS animations crash the page-count calc).
+ *  • All `animation` / `animation-*` properties (rule + declarations).
+ *  • All `transition` / `transition-*` properties.
+ *  • All `filter:` declarations containing `blur(` (GPU-heavy on e-ink).
+ *  • All `text-shadow:` declarations (multi-layer shadows trip the rasterizer).
+ *  • All `box-shadow:` declarations (similar rasterizer issues).
+ *  • All `hyphens:` / `-webkit-hyphens:` / `-ms-hyphens:` declarations
+ *    (Android WebView on Boox partially supports hyphenation and sometimes
+ *    drops content past the hyphenation boundary).
+ *  • All `initial-letter:` / `-webkit-initial-letter:` declarations
+ *    (drop-cap fallback that Onyx Boox can't render reliably).
+ *  • All `position: fixed` declarations on `body::before` / `body::after` /
+ *    `html::before` / `html::after` (full-screen decorative backgrounds).
+ *  • All `mix-blend-mode:` declarations (rasterizer bugs).
+ *  • All `backdrop-filter:` declarations.
+ *  • `column-count`, `column-gap`, `column-rule` declarations
+ *    (Boox doesn't paginate columns and renders only the first one).
+ *  • Empty `::before` / `::after` rules with decorative content like
+ *    `radial-gradient`, `linear-gradient`, animated `content:`.
+ *
+ * What is PRESERVED (these are reader-safe):
+ *  • `@font-face` rules (Boox handles font embedding fine).
+ *  • `page-break-*` and `break-*` properties (pagination hints).
+ *  • `font-family`, `font-size`, `font-style`, `font-weight`, `line-height`.
+ *  • `color`, `background`, `background-color`.
+ *  • `margin`, `padding`, `border` (non-shadowed).
+ *  • `text-align`, `text-indent`, `text-transform`.
+ *  • `display`, `position` (other than `fixed` on pseudo-elements).
+ *
+ * @param css Source stylesheet content
+ * @returns Sanitized CSS safe for Onyx Boox / Kobo / older Kindle
+ */
+export function stripHeavyCss(css: string): string {
+  if (!css) return '';
+  let out = css;
+
+  // 1. Drop every @keyframes block (the whole { ... } that follows).
+  //    We have to balance braces because the keyframe body can contain
+  //    nested braces via percentage selectors like 0%, 50% { ... } — but
+  //    each percentage selector block is also balanced, so we just count.
+  out = out.replace(/@(-webkit-|-moz-|-o-|-ms-)?keyframes\s+[^{]*\{[\s\S]*?\}\s*\}/g, '');
+
+  // 2. Drop whole rules that target ONLY decorative pseudo-elements with
+  //    heavy content (so we don't accidentally strip the user's actual
+  //    styling on ::before/::after that does something useful).
+  //    Heuristic: rule is decorative if its body contains `radial-gradient`,
+  //    `linear-gradient`, `conic-gradient`, `blur(`, or `filter:`.
+  out = out.replace(
+    /[^{}]*::?(?:before|after)[^{}]*\{[^{}]*(?:radial-gradient|linear-gradient|conic-gradient|blur\()[^{}]*\}/gi,
+    '',
+  );
+
+  // 3. Strip dangerous declarations from remaining rules.
+  //    Each pattern matches "prop: value;" inside a rule body. We use a
+  //    multi-property match so a rule like `h1 { color: red; text-shadow:
+  //    0 0 8px blue; page-break-before: always; }` keeps color + page-break
+  //    but drops the shadow.
+  const PROP_PATTERNS: Array<{ name: string; re: RegExp }> = [
+    // Animations & transitions
+    { name: 'animation',        re: /\banimation\s*:[^;}]*;?/gi },
+    { name: 'animation-name',   re: /\banimation-name\s*:[^;}]*;?/gi },
+    { name: 'animation-duration', re: /\banimation-duration\s*:[^;}]*;?/gi },
+    { name: 'animation-delay',  re: /\banimation-delay\s*:[^;}]*;?/gi },
+    { name: 'animation-iteration-count', re: /\banimation-iteration-count\s*:[^;}]*;?/gi },
+    { name: 'animation-direction', re: /\banimation-direction\s*:[^;}]*;?/gi },
+    { name: 'animation-timing-function', re: /\banimation-timing-function\s*:[^;}]*;?/gi },
+    { name: 'animation-fill-mode', re: /\banimation-fill-mode\s*:[^;}]*;?/gi },
+    { name: 'animation-play-state', re: /\banimation-play-state\s*:[^;}]*;?/gi },
+    { name: 'transition',       re: /\btransition\s*:[^;}]*;?/gi },
+    { name: 'transition-property', re: /\btransition-property\s*:[^;}]*;?/gi },
+    { name: 'transition-duration', re: /\btransition-duration\s*:[^;}]*;?/gi },
+    { name: 'transition-delay', re: /\btransition-delay\s*:[^;}]*;?/gi },
+    { name: 'transition-timing-function', re: /\btransition-timing-function\s*:[^;}]*;?/gi },
+    // Heavy visual effects
+    { name: 'text-shadow',      re: /\btext-shadow\s*:[^;}]*;?/gi },
+    { name: 'box-shadow',       re: /\bbox-shadow\s*:[^;}]*;?/gi },
+    { name: 'filter',           re: /\bfilter\s*:[^;}]*;?/gi },
+    { name: 'backdrop-filter',  re: /\bbackdrop-filter\s*:[^;}]*;?/gi },
+    { name: 'mix-blend-mode',   re: /\bmix-blend-mode\s*:[^;}]*;?/gi },
+    // Hyphenation (Android WebView drops content past the hyphen boundary)
+    { name: 'hyphens',          re: /\b(?:(?:-webkit-|-moz-|-ms-)?hyphens)\s*:[^;}]*;?/gi },
+    { name: 'initial-letter',   re: /\b(?:(?:-webkit-|-moz-)?initial-letter)\s*:[^;}]*;?/gi },
+    // Column layout (Boox renders only first column)
+    { name: 'column-count',     re: /\bcolumn-count\s*:[^;}]*;?/gi },
+    { name: 'column-gap',       re: /\bcolumn-gap\s*:[^;}]*;?/gi },
+    { name: 'column-rule',      re: /\bcolumn-rule\s*:[^;}]*;?/gi },
+    { name: 'column-width',     re: /\bcolumn-width\s*:[^;}]*;?/gi },
+    { name: 'column-fill',      re: /\bcolumn-fill\s*:[^;}]*;?/gi },
+  ];
+  for (const { re } of PROP_PATTERNS) out = out.replace(re, '');
+
+  // 4. Strip `position: fixed` on body::before / body::after / html::before
+  //    / html::after specifically — but preserve fixed-position on real
+  //    elements (rare in EPUB but harmless).
+  out = out.replace(
+    /(body|html)::(before|after)\s*\{([^}]*)\}/gi,
+    (_match, _elem, _pseudo, body) => {
+      const cleaned = body.replace(/\bposition\s*:[^;}]*;?/gi, '');
+      return `${_elem}::${_pseudo} {${cleaned}}`;
+    },
+  );
+
+  // 5. Tidy up empty rules left behind (so we don't ship `h1 { }` blocks
+  //    that confuse some parsers).
+  out = out.replace(/[^{}]*\{\s*\}/g, '');
+
+  // 6. Collapse runs of blank lines / whitespace so the file is smaller.
+  out = out.replace(/\n\s*\n\s*\n+/g, '\n\n').trim();
+
+  return out;
+}
+
+/**
+ * Minimal, e-ink-safe chapter CSS used in `readerFriendly` mode. Designed
+ * to render correctly on Onyx Boox (Neoreader), Kobo Aura, Nook GlowLight,
+ * Kindle Paperwhite, and re-flow cleanly to fit any screen width.
+ *
+ * Differences from `STANDARD_CSS`:
+ *  • No `@font-face` references (Boox handles system fonts reliably; custom
+ *    fonts sometimes fail to embed and cause the renderer to bail).
+ *  • No `text-shadow`, `box-shadow`, `filter`, or `text-transform`.
+ *  • No `hyphens` (Boox drops content past the hyphen boundary).
+ *  • No CSS variables (older Kobo firmware misparses `:root { --var: }`).
+ *  • No `column-*` layout (Boox only renders first column).
+ *  • Uses rem-free sizing so the user's device font-scale setting works.
+ */
+export const READER_FRIENDLY_CSS = `/* Reader-friendly stylesheet for Onyx Boox / Kobo / older Kindle.
+   Intentionally minimal — every property was chosen because it survives
+   Neoreader's CSS parser and reflow engine. */
+
+@charset "UTF-8";
+@namespace epub "http://www.idpf.org/2007/ops";
+
+html { margin: 0; padding: 0; }
+body {
+  margin: 0;
+  padding: 0 5%;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1em;
+  line-height: 1.6;
+  color: #000;
+  background: #fff;
+}
+
+/* Paragraphs — no hyphenation, no text-shadow, no float drop caps. */
+p {
+  margin: 0 0 0.8em 0;
+  text-indent: 1.2em;
+  text-align: justify;
+}
+
+/* Headings — no text-transform, no shadow, no page-break-before on the
+   very first heading (Boox skips the first heading if it has
+   page-break-before: always and the chapter has only one). */
+h1, h2, h3, h4, h5, h6 {
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: bold;
+  text-align: center;
+  margin: 1.5em 0 1em;
+  page-break-after: avoid;
+  break-after: avoid;
+}
+h1 { font-size: 1.4em; }
+h2 { font-size: 1.2em; }
+h3 { font-size: 1.1em; }
+
+section > h1:first-child,
+body > h1:first-child {
+  page-break-before: avoid;
+  break-before: avoid;
+  margin-top: 1em;
+}
+
+/* Images — bound to viewport, no decorative filters. */
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 1em auto;
+}
+
+/* Quotes, signatures, verses — simplified, no decorative pseudos. */
+blockquote {
+  margin: 1em 1.5em;
+  padding-left: 1em;
+  border-left: 2px solid #888;
+  font-style: italic;
+}
+.signature, .verse {
+  text-align: center;
+  font-style: italic;
+  margin: 1em 0;
+}
+
+/* System boxes, dividers — no animations, no gradients. */
+.system {
+  margin: 1em 0;
+  padding: 0.8em;
+  border: 1px solid #888;
+  font-family: "Courier New", monospace;
+  font-size: 0.95em;
+}
+.divider {
+  text-align: center;
+  margin: 1.5em 0;
+}
+
+/* Navigation block (TOC) */
+nav[epub|type~="toc"] ol { list-style: none; padding-left: 1em; }
+nav[epub|type~="toc"] a { text-decoration: none; }
+`;
+
 function escapeXml(s: string) {
   return s
     .replace(/&/g, '&amp;')

@@ -65,11 +65,14 @@ export async function generateBookCover(opts: {
   const c3 = hashColor(title + author, 120);
   const accent = hashColor(author + title, 30);
 
-  // Title wrap
+  // Title wrap — bottom 25-30% typography band (matches AI cover layout).
+  // The decorative circles fill the middle as the "main subject" and the
+  // title overlays the lower third. Same anchor as ai-generate-cover.ts:
+  // titleStartY = round(H * 0.66).
   const titleLines = wrapText(title, title.length > 20 ? 18 : 22);
   const titleFontSize = titleLines.length > 3 ? 36 : titleLines.length > 2 ? 42 : 48;
   const titleLineHeight = titleFontSize * 1.2;
-  const titleY = 280 - (titleLines.length - 1) * titleLineHeight / 2;
+  const titleY = Math.round(H * 0.66);
 
   // Series badge
   const seriesBadge = series
@@ -138,6 +141,17 @@ export async function generateBookCover(opts: {
 
   <!-- Dark overlay for readability -->
   <rect width="${W}" height="${H}" fill="url(#overlay)"/>
+
+  <!-- Bottom typography legibility cushion — extended upward from
+       H-200..H to H-300..H so the title block at H*0.66 sits inside the
+       darkened band. (matches ai-generate-cover.ts bottomFade) -->
+  <defs>
+    <linearGradient id="bottomCushion" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="rgba(0,0,0,0)"/>
+      <stop offset="100%" stop-color="rgba(0,0,0,0.55)"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="${H - 300}" width="${W}" height="300" fill="url(#bottomCushion)"/>
 
   <!-- Top decorative line -->
   <line x1="40" y1="140" x2="${W - 40}" y2="140" stroke="${hex(accent)}" stroke-width="2" opacity="0.6"/>

@@ -110,9 +110,18 @@ export async function POST(req: NextRequest) {
       const formEnhance = formData.get('aiEnhance');
       const formWatermark = formData.get('aiWatermarkClean');
       const formDeep = formData.get('deepFormat');
+      const formReaderFriendly = formData.get('readerFriendly');
       const aiEnhance = formEnhance !== null ? formEnhance === 'true' : settings.defaultAiEnhance;
       const aiWatermarkClean = formWatermark !== null ? formWatermark === 'true' : settings.defaultAiWatermarkClean;
       const deepFormat = formDeep !== null ? formDeep === 'true' : settings.defaultDeepFormat;
+      // Reader-friendly defaults to true: most web-novel source EPUBs ship
+      // with CSS that crashes Neoreader after the first 1–2 pages. We use
+      // `?? true` instead of `settings.defaultReaderFriendly` so that an
+      // older Settings row (where the column was added via ALTER TABLE
+      // without backfilling the existing singleton) still produces the
+      // intended safe default. Users who want the original heavy styling
+      // can turn it off in /settings.
+      const readerFriendly = formReaderFriendly !== null ? formReaderFriendly === 'true' : (settings.defaultReaderFriendly ?? true);
       const aiPrompt = (formData.get('aiPrompt') as string | null)?.trim() || undefined;
 
       // Persist the user's actual choices back to settings (so next upload uses
@@ -122,13 +131,14 @@ export async function POST(req: NextRequest) {
       if (formEnhance !== null) persist.defaultAiEnhance = aiEnhance;
       if (formWatermark !== null) persist.defaultAiWatermarkClean = aiWatermarkClean;
       if (formDeep !== null) persist.defaultDeepFormat = deepFormat;
+      if (formReaderFriendly !== null) persist.defaultReaderFriendly = readerFriendly;
       if (Object.keys(persist).length > 0) {
         await updateSettings(persist).catch(() => { /* best-effort */ });
       }
 
       await queue.add(
         'convert',
-        { jobId, inputPath: savePath, originalExt: ext, filename: originalName, aiEnhance, aiWatermarkClean, deepFormat, aiPrompt },
+        { jobId, inputPath: savePath, originalExt: ext, filename: originalName, aiEnhance, aiWatermarkClean, deepFormat, readerFriendly, aiPrompt },
         { jobId },
       );
     }

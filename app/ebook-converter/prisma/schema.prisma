@@ -46,6 +46,11 @@ model Job {
 model Book {
   id                   String               @id @default(uuid())
   title                String
+  // Optional Vietnamese title override — used by the cover generator so
+  // bìa sách prints the Vietnamese title even when the imported `title`
+  // is the original-language title (e.g. Chinese for translated tu tiểu
+  // thuyệt). Falls back to `title` when null.
+  titleVi              String?
   author               String
   language             String               @default("vi")
   description          String?
@@ -153,10 +158,125 @@ model Character {
 
   book  Book   @relation(fields: [bookId], references: [id], onDelete: Cascade)
   voice Voice? @relation(fields: [voiceId], references: [id], onDelete: SetNull)
+  // Inverse relations — Character Bible (see below). Owned by CharacterProfile
+  // (1:1), CharacterChapterAppearance (1:N). CharacterRelationship has its
+  // own (bookId, fromCharId, toCharId) keys and doesn't need Character refs.
+
+  profile         CharacterProfile?
+  appearances     CharacterChapterAppearance[]
 
   @@unique([bookId, name])
   @@index([bookId])
   @@index([bookId, role])
+}
+
+// ── Character Bible (LLM-driven character knowledge base) ──────────────────
+// Per-character profile. Free-text fields tracked by source ('llm' /
+// 'user' / 'mixed') so the merge pipeline can preserve user-locked fields
+// without overwriting them with LLM outputs. See src/lib/db/character-bible.ts.
+model CharacterProfile {
+  characterId       String   @id
+  description       String?
+  personality       String?
+  speechStyle       String?
+  // One-paragraph physical-appearance description (gender, age, hair/eye
+  // colour + style, distinguishing clothing/jewelry/weapon, posture). Used
+  // as a visual anchor when generating chapter illustrations so a
+  // character wears the same robe / has the same hair across chapters.
+  // Extracted by the LLM during character detection; user-editable.
+  // "unspecified" if the text gives no physical detail.
+  visualDescription String?
+  // Same JSON shape as fieldSources above; tracks whether visualDescription
+  // was set by the LLM or hand-edited by the user.
+  visualSource      String?  @default("llm")
+  fieldSources String? // JSON: { description?: 'llm'|'user', personality?: 'llm'|'user', speechStyle?: 'llm'|'user', visualDescription?: 'llm'|'user' }
+  source       String   @default("llm") // 'llm' | 'user' | 'mixed'
+  version      Int      @default(1)
+  updatedAt    DateTime @updatedAt
+
+  character    Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+}
+
+// Directed graph edges between two characters (e.g. parent / sibling /
+// ally / rival). Composite-unique on (bookId, from, to, relationship) so
+// duplicate upserts collapse.
+model CharacterRelationship {
+  id            String   @id @default(uuid())
+  bookId        String
+  fromCharId    String
+  toCharId      String
+  relationship  String
+  notes         String?
+  source        String   @default("llm") // 'llm' | 'user' | 'mixed'
+  asOfChapterIdx Int?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([bookId, fromCharId, toCharId, relationship])
+  @@index([bookId])
+}
+
+// Per-character per-chapter occurrence count. Composite-unique on
+// (characterId, chapterIndex) so duplicate upserts collapse and the
+// mentions counter can be incremented atomically.
+model CharacterChapterAppearance {
+  id            String   @id @default(uuid())
+  characterId   String
+  chapterIndex  Int
+  mentions      Int      @default(1)
+  analyzedAt    DateTime @default(now())
+
+  character     Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@unique([characterId, chapterIndex])
+  @@index([characterId])
+}
+
+// User-review queue for conflicting Character Bible patches. Status:
+// 'pending' (initial, awaiting user), 'applied' (merged), 'rejected'
+// (dismissed), 'stale' (chapter gone or reordered).
+model PendingBibleDiff {
+  id        String   @id @default(uuid())
+  bookId    String
+  patch     String   // JSON: BibleDiffPatch — full LLM proposal
+  status    String   @default("pending") // pending | applied | rejected | stale
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([bookId, status])
+}
+
+// ── Bible refresh idempotency log ───────────────────────────────────────────
+// One row per (bookId, chapterIndex). Lets the bible pipeline short-circuit
+// "already-completed" refreshes without re-running the LLM. See
+// src/lib/ai/character-bible.ts::writeRefreshLog.
+model BibleRefreshLog {
+  bookId        String
+  chapterIndex  Int
+  version       Int      @default(1)
+  status        String   @default("applied") // applied | failed | skipped | conflict
+  appliedCount  Int      @default(0)
+  queuedCount   Int      @default(0)
+  conflictCount Int      @default(0)
+  durationMs    Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@id([bookId, chapterIndex])
+  @@index([bookId])
+}
+
+// ── Conversation-state seed (parser carry-over across chapters) ────────────
+// One row per book. `payload` is a JSON snapshot of the last chapter's
+// conversation graph (who was on-screen, what they said last). The parser
+// reads + extends this for the next chapter so attributes stay coherent
+// across long runs. See src/lib/db/conversation-state.ts.
+model BookConversationState {
+  bookId           String   @id
+  lastChapterIndex Int
+  payload          String   // JSON: ConversationStateSnapshot
+  parserVersion    String
+  updatedAt        DateTime @updatedAt
 }
 
 // One row per chapter of a book. Tracks pre-generated audio for fast playback.
@@ -218,7 +338,13 @@ model Settings {
   aiApiKey      String? // encrypted-at-rest API key (MiniMax, OpenAI, ...)
   aiBaseUrl     String? // optional override for OpenAI-compatible endpoints
   aiModel       String  @default("default") // model identifier
-  aiMaxTokens   Int     @default(8192)
+  // Upper bound on response tokens per AI call.
+  //   Chapter-enhancement uses this to cap the output budget — too high
+  //   and the local OMLX model balloons the KV cache past the 12 GB RAM
+  //   ceiling (memory_guard_tier abort), which crashes the entire book
+  //   conversion. Lowering this is the user-facing knob to fix OOM.
+  //   Default 4096 ≈ safe for a 9B-class 4-bit model on Apple Silicon.
+  aiMaxTokens   Int     @default(4096)
   aiTemperature Float   @default(0.2)
 
   // ── TTS provider ──────────────────────────────────────────────────────────
@@ -232,13 +358,28 @@ model Settings {
   // Slower than defaultAiEnhance but produces much nicer-looking novels.
   defaultDeepFormat       Boolean @default(false)
   defaultLanguage         String  @default("vi")
+  // Strip heavy CSS (animations, blur, text-shadow, hyphens, fixed-position
+  // decorative pseudos) + use minimal stylesheet so the output renders
+  // correctly on Onyx Boox (Neoreader), Kobo Aura, and older Kindles.
+  // Default true: most web-novel source EPUBs ship with CSS that crashes
+  // those devices' renderers after the first 1–2 pages.
+  defaultReaderFriendly   Boolean @default(true)
+
+  // ── AI enhancement runtime tuning (live-readable from settings page) ──
+  // Number of chapter-enhancement LLM calls in flight per batch.
+  // Read fresh from this column each batch in chapter-enhancer.ts, so
+  // changing the value from the settings page takes effect on the
+  // NEXT batch of the currently-running job (no worker restart needed).
+  // Bound between 1 and 16 — higher values saturate Apple Silicon KV
+  // cache on a 9B 4Bit model and slow overall throughput.
+  aiEnhanceConcurrency     Int    @default(3)
 
   // ── Image generation (chapter illustrations + AI covers) ────────────────
   imageProvider   String  @default("none") // none | openai | minimax | custom
   imageApiKey     String? // separate from text API key
   imageBaseUrl    String? // for custom image endpoints
   imageModel      String  @default("dall-e-3") // model id
-  imageStyle      String  @default("ink") // ink | sketch | watercolor | manga | none
+  imageStyle      String  @default("bw-anime") // bw-anime | bw-manga | bw-ink | bw-sketch | ink | sketch | watercolor | manga | none
   // Maximum chapters to auto-illustrate per book. Set to 0 to disable.
   imageMaxPerBook Int     @default(6)
 
@@ -256,6 +397,37 @@ model Settings {
 
   updatedAt DateTime @updatedAt
   createdAt DateTime @default(now())
+}
+
+// ── Watermark memory (cross-book learning) ──────────────────────────────────
+// Persistent catalog of phrases that have been seen & stripped from one or
+// more books. The conversion pipeline reads this BEFORE running its own
+// regex scan, so phrases flagged in a previous conversion are stripped
+// instantly on the next book that contains them — no re-detection cost.
+// Phrases can also be added/removed manually from /settings (Watermarks tab)
+// to pre-seed the memory before any uploads, or to remove false-positives
+// the auto-detector picked up (e.g. legitimate repeating phrases).
+model WatermarkMemory {
+  id           String   @id @default(uuid())
+  // The phrase to strip. Stored verbatim (case-insensitive equality on read).
+  phrase       String   @unique
+  // Where this phrase came from: 'auto' (detected by regex on a prior job),
+  // 'user' (manually added in /settings), or 'imported' (seeded by an
+  // initial script). Drives the UI badge color.
+  source       String   @default("auto") // auto | user | imported
+  // Total number of books this phrase has been stripped from. Helps the UI
+  // sort by "most common watermark". On every successful strip we do
+  // `increment hitCount`, lastSeenAt=now.
+  hitCount     Int      @default(1)
+  lastSeenAt   DateTime @default(now())
+  firstSeenAt  DateTime @default(now())
+  // When this row was first created (alias of firstSeenAt but kept distinct
+  // so audit logs don't tie creation time to detection history).
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([hitCount])
+  @@index([source])
 }
 
 // ── AI-generated chapter illustrations ─────────────────────────────────────

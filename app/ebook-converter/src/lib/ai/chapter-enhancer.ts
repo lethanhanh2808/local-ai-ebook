@@ -3,8 +3,35 @@
 // Processes chapters in parallel (configurable concurrency).
 import { chatWithStats } from './';  // unified AI client (routes by settings.aiProvider)
 import { stripIntroducedEmoji } from './emoji-stripper';
+import { getSettings } from '../db/settings';
 
+// Defaults — overridable from the Settings singleton row in the DB.
+// Reading from DB per-batch means the user can change concurrency from
+// the settings page and the value takes effect on the NEXT batch of the
+// currently-running job (no worker restart required).
 const DEFAULT_CONCURRENCY = parseInt(process.env.AI_ENHANCE_CONCURRENCY ?? '3', 10);
+const CONCURRENCY_MIN = 1;
+const CONCURRENCY_MAX = 16;
+
+/** Read the current AI-enhance concurrency from Settings (with safe fallback).
+ *  Cache for ~2 s so we don't hammer Prisma inside the inner batch loop. */
+let _concurrencyCache: { value: number; expires: number } | null = null;
+async function readConcurrency(): Promise<number> {
+  const now = Date.now();
+  if (_concurrencyCache && _concurrencyCache.expires > now) return _concurrencyCache.value;
+  try {
+    const s = await getSettings();
+    const v = Number(s.aiEnhanceConcurrency ?? DEFAULT_CONCURRENCY);
+    const clamped = Math.min(CONCURRENCY_MAX, Math.max(CONCURRENCY_MIN, Number.isFinite(v) ? v : DEFAULT_CONCURRENCY));
+    _concurrencyCache = { value: clamped, expires: now + 2000 };
+    return clamped;
+  } catch {
+    return DEFAULT_CONCURRENCY;
+  }
+}
+
+/** Test/admin helper: drop the in-memory cache so the next call re-reads DB. */
+export function invalidateConcurrencyCache(): void { _concurrencyCache = null; }
 
 const DEFAULT_SYSTEM_PROMPT = `You are a conservative EPUB body-fragment cleanup tool.
 
@@ -61,16 +88,34 @@ export async function enhanceChapter(
   const settings = await getSettings();
   const start = Date.now();
 
+  // Cap response tokens tightly. The local OMLX model uses KV-cache RAM
+  // proportional to (prompt_tokens + max_response_tokens), and an 8192
+  // ceiling on a long Vietnamese-novel chapter blows past the 12 GB
+  // memory_guard_tier limit (18 GB observed in practice → OOM abort).
+  // The user's settings.aiMaxTokens is the tunable knob. Default is 4096
+  // in the schema; chapter-enhancer additionally clamps to a 2× input-
+  // token budget so very long inputs give a proportionally longer (but
+  // still bounded) output.
+  const inputTokenBudget = Math.ceil(bodyHtml.length / 4);
+  const safeMaxTokens = Math.min(
+    settings.aiMaxTokens,
+    Math.max(1024, inputTokenBudget * 2),
+  );
+
   try {
-    console.log(`[chapter-enhancer] Enhancing chapter (${bodyHtml.length} chars) using model=${settings.aiModel}…`);
+    console.log(`[chapter-enhancer] Enhancing chapter (${bodyHtml.length} chars, ~${inputTokenBudget} input tokens) using model=${settings.aiModel} (max_tokens=${safeMaxTokens})…`);
     const result = await chatWithStats({
       model: settings.aiModel,
       messages: [
         { role: 'system', content: buildSystemPrompt(customPrompt, language) },
-        { role: 'user', content: `SOURCE_HTML_BODY_FRAGMENT:\n${bodyHtml.slice(0, 12000)}` }, // truncate very large chapters
+        // Truncate at 8000 chars (~2000 tokens) — was 12000 but OOM-prone.
+        // Enhancement beyond this rarely changes user-visible readability
+        // (the script just fixes encoding artifacts + boilerplate); longer
+        // chapters still get cleaned, just only on their first 8000 chars.
+        { role: 'user', content: `SOURCE_HTML_BODY_FRAGMENT:\n${bodyHtml.slice(0, 8000)}` },
       ],
       temperature: 0.1,
-      max_tokens: 8192,
+      max_tokens: safeMaxTokens,
       enable_thinking: false,
     });
 
@@ -108,22 +153,35 @@ export async function enhanceChaptersParallel(
   const total = chapters.length;
   let done = 0;
 
-  // Process in batches of DEFAULT_CONCURRENCY
-  for (let i = 0; i < chapters.length; i += DEFAULT_CONCURRENCY) {
-    const batch = chapters.slice(i, i + DEFAULT_CONCURRENCY);
+  // Read concurrency fresh from Settings at the start of each batch so the
+  // user can dial it up/down from the settings page mid-job. The 2-second
+  // cache above prevents a Prisma hit per LLM call inside the batch.
+  const { getSettings: _getSettings } = await import('@/lib/db/settings');
+  const _settings = await _getSettings();
+  const settingsMaxTokens = _settings.aiMaxTokens;
+  for (let i = 0; i < chapters.length; ) {
+    const concurrency = await readConcurrency();
+    const batch = chapters.slice(i, i + concurrency);
     await Promise.all(
       batch.map(async ({ id, bodyHtml }, idxInBatch) => {
         const start = Date.now();
         try {
+          // Same OOM-safe cap as single-chapter enhanceChapter: bound
+          // max_tokens to settings.aiMaxTokens AND a 2× input-token budget.
+          const inputTokenBudget = Math.ceil(bodyHtml.length / 4);
+          const safeMaxTokens = Math.min(
+            settingsMaxTokens,
+            Math.max(1024, inputTokenBudget * 2),
+          );
           const { text, tokens, promptTokens, completionTokens, durationMs, model, server } =
             await chatWithStats({
             model: undefined, // read from settings inside chatWithStats
             messages: [
               { role: 'system', content: buildSystemPrompt(customPrompt, language) },
-              { role: 'user', content: `SOURCE_HTML_BODY_FRAGMENT:\n${bodyHtml.slice(0, 12000)}` },
+              { role: 'user', content: `SOURCE_HTML_BODY_FRAGMENT:\n${bodyHtml.slice(0, 8000)}` },
             ],
             temperature: 0.1,
-            max_tokens: 8192,
+            max_tokens: safeMaxTokens,
             enable_thinking: false,
           });
           const cleaned = cleanAiHtml(text, bodyHtml);
@@ -152,6 +210,9 @@ export async function enhanceChaptersParallel(
         await onChapterDone?.(globalIndex, total, id);
       }),
     );
+    // Advance by the actual batch size we used (which may have changed
+    // mid-loop if the user dialed concurrency up or down from settings).
+    i += batch.length;
   }
 
   return results;

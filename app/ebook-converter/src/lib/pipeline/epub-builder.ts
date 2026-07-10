@@ -22,6 +22,10 @@ export interface EpubBuildInput {
   coverImagePath?: string;
   chapters: ChapterEntry[];
   fontPaths?: Record<string, string>; // font basename → local fs path
+  /** Override the bundled stylesheet. Defaults to STANDARD_CSS. Used by
+   *  the `readerFriendly` mode to swap in READER_FRIENDLY_CSS — a minimal
+   *  stylesheet that's safe for Onyx Boox / Kobo / older Kindle. */
+  customCss?: string;
 }
 
 interface TocNode {
@@ -71,7 +75,7 @@ export async function buildEpub(input: EpubBuildInput, outputPath: string): Prom
   );
 
   // ── CSS ─────────────────────────────────────────────────────────────────
-  addText('EPUB/css/style.css', STANDARD_CSS);
+  addText('EPUB/css/style.css', input.customCss ?? STANDARD_CSS);
 
   // ── Fonts ───────────────────────────────────────────────────────────────
   const fontManifestItems: string[] = [];

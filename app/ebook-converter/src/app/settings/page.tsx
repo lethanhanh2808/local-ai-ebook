@@ -13,7 +13,8 @@ import {
   Settings as SettingsIcon, Cpu, KeyRound, Sparkles, Volume2,
   Eye, EyeOff, Loader2, Save, Check, AlertCircle, RefreshCw,
   Mic, Languages, Wand2, ShieldOff, ExternalLink,
-  Cloud, Server, Wrench, Trash2, Image as ImageIcon, Zap, Activity,
+  Cloud, Server, Wrench, Trash2, Image as ImageIcon, Zap, Activity, Smartphone,
+  Plus, Database, Bookmark,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -37,6 +38,7 @@ interface Settings {
   defaultAiEnhance: boolean;
   defaultAiWatermarkClean: boolean;
   defaultDeepFormat: boolean;
+  defaultReaderFriendly: boolean;
   defaultLanguage: string;
   theme: string;
   updatedAt: string;
@@ -52,6 +54,17 @@ interface Settings {
   // Worker performance tuning
   workerConcurrency: number;
   workerChapterConcurrency: number;
+  // Live AI-enhancement chapter concurrency (no restart needed)
+  aiEnhanceConcurrency: number;
+}
+
+interface WatermarkRow {
+  id: string;
+  phrase: string;
+  source: 'auto' | 'user' | 'imported';
+  hitCount: number;
+  lastSeenAt: string;
+  firstSeenAt: string;
 }
 
 const AI_PROVIDERS = [
@@ -143,11 +156,13 @@ export default function SettingsPage() {
         defaultAiEnhance: settings.defaultAiEnhance,
         defaultAiWatermarkClean: settings.defaultAiWatermarkClean,
         defaultDeepFormat: settings.defaultDeepFormat,
+        defaultReaderFriendly: settings.defaultReaderFriendly,
         defaultLanguage: settings.defaultLanguage,
         theme: settings.theme,
         imageProvider: settings.imageProvider,
         workerConcurrency: settings.workerConcurrency,
         workerChapterConcurrency: settings.workerChapterConcurrency,
+        aiEnhanceConcurrency: settings.aiEnhanceConcurrency ?? 3,
         imageBaseUrl: settings.imageBaseUrl,
         imageModel: settings.imageModel,
         imageStyle: settings.imageStyle,
@@ -282,6 +297,9 @@ export default function SettingsPage() {
           </TabsTrigger>
           <TabsTrigger value="conversion" className="gap-1.5">
             <Wand2 className="h-3.5 w-3.5" /> Conversion
+          </TabsTrigger>
+          <TabsTrigger value="watermarks" className="gap-1.5">
+            <ShieldOff className="h-3.5 w-3.5" /> Watermarks
           </TabsTrigger>
           <TabsTrigger value="image" className="gap-1.5">
             <ImageIcon className="h-3.5 w-3.5" /> Image generation
@@ -469,7 +487,7 @@ export default function SettingsPage() {
                     <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                     <div className="flex-1 min-w-0">
                       <p className="font-semibold">{testResult.error}</p>
-                      {(testResult.error?.includes('401') || testResult.error?.toLowerCase().includes('api key') || testResult.error?.toLowerCase().includes('authorized')) && (
+                      {(testResult.error?.includes('401') || testResult.error?.toLowerCase().includes('api key') || testResult.error?.toLowerCase().includes('authorized')) && settings.aiProvider === 'minimax-cloud' && (
                         <div className="mt-1.5 text-[10px] text-muted-foreground space-y-0.5">
                           <p>→ API key bị MiniMax từ chối. Vui lòng kiểm tra:</p>
                           <ul className="list-disc list-inside pl-2 space-y-0.5">
@@ -566,6 +584,32 @@ export default function SettingsPage() {
 
           <Card className="p-5 space-y-4">
             <h2 className="text-sm font-semibold flex items-center gap-2">
+              <Zap className="h-4 w-4 text-primary" /> AI enhancement
+              <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-normal">
+                (live — no restart)
+              </span>
+            </h2>
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-medium">Parallel chapter LLM calls</label>
+                <span className="text-xs font-mono text-muted-foreground">{settings.aiEnhanceConcurrency}</span>
+              </div>
+              <input type="range" min={1} max={16} step={1}
+                value={settings.aiEnhanceConcurrency}
+                onChange={(e) => update('aiEnhanceConcurrency', parseInt(e.target.value, 10) || 3)}
+                className="w-full" />
+              <div className="flex justify-between text-[10px] text-muted-foreground">
+                <span>1 (an toàn)</span><span>4 (cân bằng)</span><span>8 (nhanh)</span><span>16 (tối đa)</span>
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                Số chapter AI-enhance chạy đồng thời. Thay đổi có hiệu lực NGAY trên batch kế tiếp của job đang chạy
+                (không cần restart worker). Tăng nếu API cloud nhanh; giảm nếu model local (Apple Silicon KV cache bão hoà).
+              </p>
+            </div>
+          </Card>
+
+          <Card className="p-5 space-y-4">
+            <h2 className="text-sm font-semibold flex items-center gap-2">
               <Wand2 className="h-4 w-4 text-primary" /> Conversion defaults
             </h2>
             <div className="space-y-2">
@@ -577,11 +621,25 @@ export default function SettingsPage() {
                 onChange={(v) => update('defaultAiEnhance', v)}
               />
               <ToggleRow
+                icon={<Wand2 className="h-4 w-4 text-amber-600 dark:text-amber-400" />}
+                label="Deep format (Vietnamese novel)"
+                description="Dùng LLM re-format từng chương cho tiểu thuyết Việt — gộp/tách đoạn văn, định dạng hội thoại (nháy cong), ngắt cảnh bằng &lt;hr/&gt;. Chậm (~2-5 phút/chương)."
+                checked={settings.defaultDeepFormat}
+                onChange={(v) => update('defaultDeepFormat', v)}
+              />
+              <ToggleRow
                 icon={<ShieldOff className="h-4 w-4" />}
                 label="AI watermark cleaning"
-                description="Tự động phát hiện & loại bỏ quảng cáo / watermark cuối chương."
+                description="Tự động phát hiện & loại bỏ quảng cáo / watermark cuối chương (có memory để lần sau detect nhanh hơn)."
                 checked={settings.defaultAiWatermarkClean}
                 onChange={(v) => update('defaultAiWatermarkClean', v)}
+              />
+              <ToggleRow
+                icon={<Smartphone className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />}
+                label="Reader-friendly (Onyx Boox / Kobo / Kindle)"
+                description="Mặc định BẬT. Strip CSS nặng (animation, blur, text-shadow, hyphens) + dùng stylesheet tối giản để EPUB render đúng trên máy đọc e-ink. Tắt nếu muốn giữ styling gốc của sách."
+                checked={settings.defaultReaderFriendly}
+                onChange={(v) => update('defaultReaderFriendly', v)}
               />
             </div>
 
@@ -602,6 +660,11 @@ export default function SettingsPage() {
               </Select>
             </div>
           </Card>
+        </TabsContent>
+
+        {/* ── Watermarks tab (cross-book learning) ────────────────────────── */}
+        <TabsContent value="watermarks" className="space-y-4 outline-none">
+          <WatermarkMemoryPanel />
         </TabsContent>
 
         {/* ── Image generation tab ────────────────────────────────────────── */}
@@ -707,13 +770,26 @@ export default function SettingsPage() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="ink">Ink wash (水墨画) — epic / tu tiểu thuyết</SelectItem>
-                        <SelectItem value="manga">Manga / manhua — web novel</SelectItem>
-                        <SelectItem value="sketch">Pencil sketch — literary</SelectItem>
-                        <SelectItem value="watercolor">Watercolor — romance / slice-of-life</SelectItem>
+                        {/* B&W family — preferred for novels; covers + chapter
+                            illustrations stay in the same visual language and
+                            character consistency (per-chapter seed anchoring)
+                            is easier when the provider has no colour to guess. */}
+                        <SelectItem value="bw-anime">Anime line-art (Đen trắng) — RECOMMENDED for novels</SelectItem>
+                        <SelectItem value="bw-manga">Manga / manhua (Đen trắng)</SelectItem>
+                        <SelectItem value="bw-ink">Ink-wash line drawing (Đen trắng, 水墨)</SelectItem>
+                        <SelectItem value="bw-sketch">Pencil sketch (Đen trắng)</SelectItem>
+                        {/* Legacy / coloured alternatives */}
+                        <SelectItem value="ink">Ink wash (legacy)</SelectItem>
+                        <SelectItem value="manga">Manga (legacy)</SelectItem>
+                        <SelectItem value="sketch">Pencil sketch (legacy)</SelectItem>
+                        <SelectItem value="watercolor">Watercolor — softened colour</SelectItem>
                         <SelectItem value="none">Provider default (no style guide)</SelectItem>
                       </SelectContent>
                     </Select>
+                    <p className="text-[10px] text-muted-foreground">
+                      Default is black-and-white anime line-art — keeps cover + chapters visually cohesive.
+                      Same character regenerates with matching look via per-chapter seed anchoring.
+                    </p>
                   </div>
 
                   <div className="space-y-1.5">
@@ -810,6 +886,231 @@ function ModelField({
       )}
       {helpText && <p className="text-[10px] text-muted-foreground">{helpText}</p>}
     </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * WatermarkMemoryPanel — list + manage remembered watermark phrases.
+ *
+ * The conversion pipeline auto-records every phrase it strips (source=auto).
+ * Users can also pre-seed known publisher footers (source=user). Both are
+ * stripped on the next conversion without re-running the frequency scan,
+ * so book #2 with the same footer finishes the watermark step in O(10–50)
+ * regex passes instead of O(chapters × blocks).
+ * ──────────────────────────────────────────────────────────────────────── */
+function WatermarkMemoryPanel() {
+  const [rows, setRows] = useState<WatermarkRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [newPhrase, setNewPhrase] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [filter, setFilter] = useState<'all' | 'auto' | 'user'>('all');
+  const [error, setError] = useState<string | null>(null);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch('/api/watermarks');
+      const data = await r.json();
+      if (!r.ok) { setError(data.error ?? `HTTP ${r.status}`); setRows([]); }
+      else { setRows(data.phrases ?? []); setError(null); }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void reload(); }, [reload]);
+
+  const addPhrase = async () => {
+    const p = newPhrase.trim();
+    if (p.length < 4) { setError('Phrase phải ≥ 4 ký tự'); return; }
+    setAdding(true); setError(null);
+    try {
+      const r = await fetch('/api/watermarks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phrase: p }),
+      });
+      const data = await r.json();
+      if (!r.ok) { setError(data.error ?? `HTTP ${r.status}`); return; }
+      setNewPhrase('');
+      await reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const delPhrase = async (phrase: string) => {
+    if (!confirm(`Xoá phrase khỏi memory?\n\n"${phrase}"`)) return;
+    setError(null);
+    try {
+      const r = await fetch(`/api/watermarks/${encodeURIComponent(phrase)}`, { method: 'DELETE' });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        setError(data.error ?? `HTTP ${r.status}`);
+        return;
+      }
+      await reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const filtered = filter === 'all' ? rows : rows.filter((r) => r.source === filter);
+  const totalAuto = rows.filter((r) => r.source === 'auto').length;
+  const totalUser = rows.filter((r) => r.source === 'user').length;
+
+  return (
+    <>
+      <Card className="p-5 space-y-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex-1 min-w-0">
+            <h2 className="text-sm font-semibold flex items-center gap-2">
+              <Database className="h-4 w-4 text-primary" /> Watermark Memory
+              <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-normal flex items-center gap-1">
+                <Bookmark className="h-3 w-3" /> cross-book learning
+              </span>
+            </h2>
+            <p className="text-[11px] text-muted-foreground mt-1.5 leading-relaxed">
+              Phrase đã phát hiện & loại bỏ ở lần convert trước sẽ được lưu lại. Book kế tiếp có cùng footer
+              sẽ bị strip ngay khi convert — không cần chạy lại frequency scan. Tổng cộng{' '}
+              <span className="font-semibold text-foreground">{rows.length}</span> phrase
+              {rows.length !== 1 ? 's' : ''} ({totalAuto} auto · {totalUser} user).
+            </p>
+          </div>
+          <Button size="sm" variant="outline" onClick={reload} title="Tải lại">
+            <RefreshCw className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+
+        {/* Add new phrase */}
+        <div className="space-y-1.5 pt-2 border-t border-border">
+          <label className="text-xs font-medium flex items-center gap-1.5">
+            <Plus className="h-3 w-3" />
+            Thêm phrase thủ công (vd: footer nhà xuất bản)
+          </label>
+          <div className="flex gap-2">
+            <Input
+              type="text"
+              value={newPhrase}
+              onChange={(e) => setNewPhrase(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') addPhrase(); }}
+              placeholder="vd: www.example-ebook.com"
+              className="flex-1 font-mono text-xs"
+              disabled={adding}
+              maxLength={200}
+            />
+            <Button size="sm" onClick={addPhrase} disabled={adding || newPhrase.trim().length < 4}>
+              {adding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+              Thêm
+            </Button>
+          </div>
+          <p className="text-[10px] text-muted-foreground">
+            Phrase sẽ bị strip ở mọi conversion từ giờ trở đi. Min 4 chars, max 200.
+          </p>
+        </div>
+
+        {error && (
+          <div className="rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive flex items-start gap-1.5">
+            <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {/* Filter chips */}
+        <div className="flex items-center gap-1.5 text-[10px]">
+          <span className="text-muted-foreground mr-1">Lọc:</span>
+          {(['all', 'auto', 'user'] as const).map((f) => (
+            <button
+              key={f}
+              type="button"
+              onClick={() => setFilter(f)}
+              className={cn('rounded-full px-2.5 py-0.5 font-semibold border transition-colors',
+                filter === f
+                  ? 'border-primary bg-primary text-primary-foreground'
+                  : 'border-border bg-background hover:bg-muted/40')}>
+              {f === 'all' ? `Tất cả (${rows.length})` : f === 'auto' ? `Auto (${totalAuto})` : `User (${totalUser})`}
+            </button>
+          ))}
+        </div>
+
+        {/* List */}
+        <div className="rounded-lg border border-border divide-y divide-border max-h-[420px] overflow-y-auto">
+          {loading ? (
+            <div className="p-6 text-center text-xs text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin mx-auto mb-1" />
+              Đang tải…
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="p-6 text-center text-xs text-muted-foreground">
+              {rows.length === 0 ? (
+                <>
+                  <Database className="h-6 w-6 mx-auto mb-1 opacity-40" />
+                  Chưa có phrase nào trong memory. Bật "AI Watermark Cleanup" khi convert, hoặc thêm phrase thủ công ở trên.
+                </>
+              ) : (
+                <>Không có phrase {filter} nào.</>
+              )}
+            </div>
+          ) : (
+            filtered.map((row) => (
+              <div key={row.id} className="flex items-start gap-2 px-3 py-2 hover:bg-muted/30 transition-colors">
+                <span className={cn('shrink-0 mt-0.5 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold',
+                  row.source === 'auto' ? 'bg-primary/15 text-primary' :
+                  row.source === 'user' ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400' :
+                  'bg-muted text-muted-foreground',
+                )}>
+                  {row.source}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-mono break-words whitespace-pre-wrap">
+                    {row.phrase}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    seen in <span className="font-semibold">{row.hitCount}</span> book{row.hitCount !== 1 ? 's' : ''}
+                    {' · last '}
+                    {new Date(row.lastSeenAt).toLocaleDateString()}
+                  </p>
+                </div>
+                <Button size="sm" variant="ghost"
+                  onClick={() => delPhrase(row.phrase)}
+                  className="shrink-0 text-destructive hover:bg-destructive/10"
+                  title="Xoá khỏi memory">
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ))
+          )}
+        </div>
+      </Card>
+
+      <Card className="p-5 space-y-3">
+        <h3 className="text-xs font-semibold flex items-center gap-1.5">
+          <ShieldOff className="h-3.5 w-3.5 text-primary" /> Cách hoạt động
+        </h3>
+        <ol className="text-[11px] text-muted-foreground space-y-1 list-decimal list-inside pl-1">
+          <li>
+            <span className="font-semibold text-foreground">Memory read trước</span> — mỗi conversion load memory,
+            strip thẳng các phrase đã biết. Chi phí: 0 LLM call, ~1ms cho 50 phrase.
+          </li>
+          <li>
+            <span className="font-semibold text-foreground">Detection bình thường</span> — frequency scan chạy trên
+            những phrase <em>chưa</em> có trong memory, tìm watermark mới.
+          </li>
+          <li>
+            <span className="font-semibold text-foreground">Auto-record</span> — phrase mới phát hiện được ghi vào DB
+            kèm hitCount. Book kế tiếp cùng footer sẽ được strip ở bước (1).
+          </li>
+          <li>
+            <span className="font-semibold text-foreground">User pre-seed</span> — thêm phrase thủ công ở trên nếu bạn
+            biết trước footer nhà xuất bản.
+          </li>
+        </ol>
+      </Card>
+    </>
   );
 }
 

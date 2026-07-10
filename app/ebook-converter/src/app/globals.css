@@ -25,6 +25,25 @@
     --input: 214.3 31.8% 91.4%;
     --ring: 221.2 83.2% 53.3%;
     --radius: 0.5rem;
+    /* Modal backdrop dim (formerly in orphaned theme.css). Exposed as
+       the `modal-overlay` Tailwind color in tailwind.config.js so
+       `bg-modal-overlay` / `bg-modal-overlay/50` actually paints
+       against the reader instead of being fully transparent. The
+       `<alpha-value>` slot is supported by Tailwind's color extension
+       so per-call opacity tweaks (e.g. `bg-modal-overlay/30`) work. */
+    --modal-overlay: 0 0% 0%;
+
+    /* Reader paper / ink surfaces (UI Polish 2026-07-06, then re-homed
+       here 2026-07-08). Originally lived in src/app/theme.css, but that
+       file is not imported by the app shell — so every `bg-[hsl(var(--reader-paper))]`
+       call in EbookReader/panels resolved to no fill (transparent modal!).
+       Mirrors the read-aloud rendering surface so light/dark/sepia themes
+       get a non-transparent panel background instead of a clear window onto
+       the reader behind them. */
+    --reader-paper:        36 33% 97%;       /* warm off-white #F8F5F0 */
+    --reader-ink:          24 12% 14%;       /* deep warm gray #2C2620 */
+    --reader-ink-soft:     24 8% 38%;        /* muted ink for secondary text */
+    --reader-divider:      36 16% 86%;       /* soft divider */
   }
 
   .dark {
@@ -53,6 +72,15 @@
     --border: 217 16% 22%;
     --input: 217 16% 22%;
     --ring: 224.3 76.3% 48%;
+    --modal-overlay: 0 0% 0%;
+
+    /* Reader paper / ink — dark variant. Paper is a deep slate (not pure
+       black) to avoid OLED smearing; ink is near-white but slightly
+       warm for AA contrast on paper. */
+    --reader-paper:        222 32% 9%;       /* #12122a-ish deep navy */
+    --reader-ink:          210 25% 92%;      /* near-white for body */
+    --reader-ink-soft:     215 16% 70%;      /* muted ink for secondary */
+    --reader-divider:      217 16% 22%;      /* slate divider */
   }
 }
 

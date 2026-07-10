@@ -91,10 +91,21 @@ async function rawChat(opts: ChatOptions, s: Settings): Promise<ChatResult> {
   const { baseUrl, apiKey, model } = endpointFor(s);
   const t0 = Date.now();
 
-  // For OMLX (local) we delegate to the existing client — it handles the
-  // optional env-driven base URL and the thinking-disable hack, and now also
+  // For OMLX (local) we ALWAYS delegate to the existing client — it
+  // handles the env-driven base URL (OMLX_BASE_URL, defaults to
+  // http://127.0.0.1:8080/v1) and the optional thinking-disable hack, and
   // streams + extracts usage to give us real token counts.
-  if (s.aiProvider === 'omlx-local' && !s.aiBaseUrl) {
+  //
+  // We intentionally IGNORE `s.aiBaseUrl` here. If the user previously
+  // selected a cloud provider (minimax/openai/custom) and switched back
+  // to omlx-local without clearing the DB-stored baseUrl, the previous
+  // `&& !s.aiBaseUrl` guard fell through to the generic API-key-required
+  // branch and produced a misleading "omlx-local requires an API key"
+  // error (when omlx itself uses the env-driven OMLX_API_KEY / 'local'
+  // dummy). Routing through the client for the omlx-local provider
+  // regardless of DB fields fixes that round-trip staleness — the env
+  // vars are the single source of truth for omlx's URL + key.
+  if (s.aiProvider === 'omlx-local') {
     // CRITICAL: pass the resolved model name explicitly. Without this, the
     // omlx-client falls back to process.env.OMLX_MODEL when opts.model is
     // undefined (the common case in chapter-enhancer / chapter-formatter),
@@ -214,8 +225,33 @@ export async function chatJSON<T>(opts: ChatOptions): Promise<T> {
       },
     ],
   });
+  // Strip ```json fences defensively; emit a structured JsonChatError on
+  // parse failure so callers (refreshBible, parseBiblePatches) can present
+  // the raw model output to the user instead of a generic SyntaxError.
   const cleaned = raw.replace(/^```(?:json)?\n?/m, '').replace(/```$/m, '').trim();
-  return JSON.parse(cleaned) as T;
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch (err) {
+    throw new JsonChatError(
+      `chatJSON parse failed: ${err instanceof Error ? err.message : String(err)}`,
+      cleaned,
+      opts,
+    );
+  }
+}
+
+/** Thrown by chatJSON() when the model returns unparseable output.
+ *  Carries the raw text so callers can present it (truncated) in the UI,
+ *  and the original ChatOptions for log correlation. */
+export class JsonChatError extends Error {
+  readonly raw: string;
+  readonly opts: ChatOptions;
+  constructor(message: string, raw: string, opts: ChatOptions) {
+    super(`${message}\n--- raw output (first 4 KB) ---\n${raw.slice(0, 4096)}`);
+    this.name = 'JsonChatError';
+    this.raw = raw;
+    this.opts = opts;
+  }
 }
 
 // Re-export message / options types and omlx helpers for back-compat

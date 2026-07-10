@@ -24,6 +24,7 @@ import {
   getDefaultVoice,
   listCharacters,
 } from '../lib/db/voices';
+import { BUILTIN_VIENEU_NAMES } from '../lib/tts/vieneu-voices';
 import {
   ensureChapterRow,
   updateChapter,
@@ -266,10 +267,7 @@ async function generateOneChapter(bookId: string, chapterFile: string, backend: 
     isBuiltinVieNeu?: boolean;
   }> = {};
 
-  const BUILTIN_VIENEU = new Set([
-    'Ngọc Lan', 'Gia Bảo', 'Thái Sơn', 'Đức Trí', 'Mỹ Duyên',
-    'Trúc Ly', 'Xuân Vĩnh', 'Trọng Hữu', 'Bình An', 'Ngọc Linh',
-  ]);
+  const BUILTIN_VIENEU = new Set(BUILTIN_VIENEU_NAMES);
 
   for (const v of voices) {
     const builtinName = v.builtinName ?? (BUILTIN_VIENEU.has(v.name) ? v.name : null);

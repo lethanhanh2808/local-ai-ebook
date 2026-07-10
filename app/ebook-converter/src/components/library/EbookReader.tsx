@@ -21,11 +21,14 @@ import {
   Columns, ScrollText, Wand2, Check, Loader2, Trash2,
   Volume2, VolumeX, Play, Pause, Square, Headphones,
   Mic, Bug, Terminal, Clipboard, Copy, Activity, CheckCircle2, AlertCircle,
-  Eye, Filter, ArrowUpDown, User, ChevronDown, MoreVertical,
+  Eye, Filter, ArrowUpDown, User, ChevronDown, MoreVertical, Info, Images,
 } from 'lucide-react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
+import { VIENEU_TTS_VOICES, VIENEU_VOICE_GENDER } from '@/lib/tts/vieneu-voices';
+import { detectEmotion } from '@/lib/tts/detect-emotion';
 import { VoicePanel } from './VoicePanel';
+import { IllustrationsGallery } from './IllustrationsGallery';
 import { ServiceHealth } from '@/components/status/ServiceHealth';
 import { enqueueBibleRefresh } from '@/lib/character-bible-client';
 
@@ -209,6 +212,55 @@ function loadSettings(): ReaderSettings {
 }
 function saveSettings(s: ReaderSettings) {
   try { localStorage.setItem('epub-reader-settings', JSON.stringify(s)); } catch { /**/ }
+}
+
+// ── TTS settings (read-aloud sliders/toggles) ──────────────────────────────
+// Persisted to localStorage so the user doesn't lose their slider positions
+// on page reload. Keyed under `epub-reader-tts-v1` (versioned so a future
+// schema change can migrate cleanly without wiping the older values).
+interface TtsSettings {
+  speed:             number;  // 0.5 – 2.5 (VieNeu TTS speed parameter)
+  noise:             number;  // 0.2 – 1.0 (expressiveness / noise_scale)
+  useAI:             boolean; // AI-driven emotion detection on/off
+  emotionIntensity:  number;  // 0.0 – 1.0 (how hard emotion deltas push)
+  voice:             string;  // builtin name from BUILTIN_VIENEU_NAMES
+  continuousPlay:    boolean; // auto-advance to next chapter
+  paragraphGap:      number;  // ms; 0 = no extra silence between paragraphs
+}
+const DEFAULT_TTS_SETTINGS: TtsSettings = {
+  speed: 1.0,
+  noise: 0.667,
+  useAI: false,
+  emotionIntensity: 0.6,  // see comment on `ttsEmotionIntensity` useState
+  voice: 'Xuân Vĩnh',
+  continuousPlay: false,
+  paragraphGap: 0,
+};
+function loadTtsSettings(): TtsSettings {
+  try {
+    const r = localStorage.getItem('epub-reader-tts-v1');
+    if (r) {
+      const parsed = JSON.parse(r) as Partial<TtsSettings>;
+      // Merge rather than replace so new fields added to DEFAULT_TTS_SETTINGS
+      // get their default without wiping the user's other choices. Each
+      // value is independently typed-checked at the call site (the
+      // individual useState<number>(...) etc. throws on bad type — but we
+      // validate numeric ranges here so a stray string doesn't slip in).
+      const merged: TtsSettings = { ...DEFAULT_TTS_SETTINGS, ...parsed };
+      if (typeof merged.speed            !== 'number') merged.speed            = DEFAULT_TTS_SETTINGS.speed;
+      if (typeof merged.noise            !== 'number') merged.noise            = DEFAULT_TTS_SETTINGS.noise;
+      if (typeof merged.useAI            !== 'boolean') merged.useAI            = DEFAULT_TTS_SETTINGS.useAI;
+      if (typeof merged.emotionIntensity !== 'number') merged.emotionIntensity = DEFAULT_TTS_SETTINGS.emotionIntensity;
+      if (typeof merged.voice            !== 'string') merged.voice            = DEFAULT_TTS_SETTINGS.voice;
+      if (typeof merged.continuousPlay   !== 'boolean') merged.continuousPlay   = DEFAULT_TTS_SETTINGS.continuousPlay;
+      if (typeof merged.paragraphGap     !== 'number') merged.paragraphGap     = DEFAULT_TTS_SETTINGS.paragraphGap;
+      return merged;
+    }
+  } catch { /* corrupted JSON — fall through to defaults */ }
+  return DEFAULT_TTS_SETTINGS;
+}
+function saveTtsSettings(s: TtsSettings) {
+  try { localStorage.setItem('epub-reader-tts-v1', JSON.stringify(s)); } catch { /**/ }
 }
 function loadBookmarks(id: string): number[] {
   try { const r = localStorage.getItem(`epub-bm-${id}`); return r ? JSON.parse(r) : []; } catch { return []; }
@@ -1004,6 +1056,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   const [settings, setSettings]   = useState<ReaderSettings>(DEFAULT_SETTINGS);
   const [tocOpen, setTocOpen]     = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [galleryOpen, setGalleryOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const [tocSearch, setTocSearch] = useState('');
   const [jumpInput, setJumpInput] = useState('');
@@ -1092,18 +1145,9 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   }
 
   // ── Vietnamese Voice built-in voices (VieNeu-TTS under the hood, 48 kHz) ─────
-  const VIENEU_VOICES: TtsVoice[] = [
-    { id: 'Ngọc Linh', name: 'Ngọc Linh (Nữ — trẻ, trong trẻo)' },
-    { id: 'Ngọc Lan', name: 'Ngọc Lan (Nữ — trưởng thành, ấm áp)' },
-    { id: 'Mỹ Duyên', name: 'Mỹ Duyên (Nữ — chín chắn, truyền cảm)' },
-    { id: 'Trúc Ly',  name: 'Trúc Ly (Nữ — nhẹ nhàng, thủ thỉ)' },
-    { id: 'Bình An',  name: 'Bình An (Nam — trung niên, bình tĩnh)' },
-    { id: 'Thái Sơn', name: 'Thái Sơn (Nam — trẻ, khí thế)' },
-    { id: 'Đức Trí',  name: 'Đức Trí (Nam — chín chắn, quyền lực)' },
-    { id: 'Xuân Vĩnh',name: 'Xuân Vĩnh (Nam — trầm, trưởng thành)' },
-    { id: 'Trọng Hữu',name: 'Trọng Hữu (Nam — trầm ấm, thủ thỉ)' },
-    { id: 'Gia Bảo',  name: 'Gia Bảo (Nam — trẻ, năng động)' },
-  ];
+  // Source: `src/lib/tts/vieneu-voices.ts` — synced from the upstream catalog
+  // at `app/tts-service/VieNeu-TTS/src/vieneu/assets/voices_v3_turbo.json`.
+  const VIENEU_VOICES: TtsVoice[] = VIENEU_TTS_VOICES.map((v) => ({ id: v.id, name: v.name }));
 
   // Default voice (centre of the spectrum — easy to listen to)
   const [ttsState, setTtsState]           = useState<TtsState>('idle');
@@ -1114,7 +1158,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   const [ttsParagraphs, setTtsParagraphs] = useState<string[]>([]);
   const [ttsIndex, setTtsIndex]           = useState(0);
   const [ttsSpeed, setTtsSpeed]           = useState(1.0);
-  const [ttsVoice, setTtsVoice]           = useState<string>('Bình An');
+  const [ttsVoice, setTtsVoice]           = useState<string>('Xuân Vĩnh');
   const [ttsNoise, setTtsNoise]           = useState(0.667);  // expressiveness
   // Extra silence between paragraphs (ms). 0 = no extra gap, just use the
   // TTS model's natural trailing silence (~200ms). User-controlled via the
@@ -1486,70 +1530,136 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   const [ttsCurrentSpeaker, setTtsCurrentSpeaker] = useState<string | null>(null);
   const [ttsSettingsOpen, setTtsSettingsOpen] = useState(false);
   const [ttsUseAI, setTtsUseAI]           = useState(false);
+  // Strength of auto-emotion deltas applied by detectEmotion(). 1.0 = full
+  // strength (legacy behaviour — dramatic swings on every detected keyword),
+  // 0.0 = detection still happens but no speed/noise deltas are applied (flat
+  // base speed + base expressiveness, only the label is shown).
+  // Default 0.6 was chosen after user feedback that the legacy 1.0 felt "too
+  // much" — most readers prefer a gentle hint over full dramatic swings.
+  // Session-only (matches ttsSpeed/ttsNoise).
+  const [ttsEmotionIntensity, setTtsEmotionIntensity] = useState(0.6);
+  const ttsEmotionIntensityRef = useRef(1.0);
+  useEffect(() => { ttsEmotionIntensityRef.current = ttsEmotionIntensity; }, [ttsEmotionIntensity]);
   const [ttsEmotionLabel, setTtsEmotionLabel] = useState('');
   const audioRef    = useRef<HTMLAudioElement | null>(null);
+  // Holds the pre-decoded next-paragraph audio so voice-change transitions
+  // are gapless. While paragraph N plays, we kick off a background task
+  // that fetches paragraph N+1's blob (cached usually) and decodes it
+  // into an HTMLAudioElement on this ref. When N ends, speakParagraph
+  // pops the preloaded element off the ref and just calls .play() —
+  // no fetch, no new Audio(), no load(), no decode latency.
+  // Especially important on voice changes: the prefetch cache key
+  // (which includes character + voice) is different per paragraph, so
+  // without this warm-up the first appearance of a new voice has to
+  // pay the full fetch+create+load+decode cost mid-transition.
+  const nextAudioBufferRef = useRef<{
+    audio: HTMLAudioElement;
+    url: string;
+    idx: number;
+    chapterId: string;
+  } | null>(null);
   const ttsAbortRef = useRef(false);
   const ttsRunIdRef = useRef(0);
   const ttsAudioFinishRef = useRef<(() => void) | null>(null);
   const ttsStateRef = useRef<TtsState>('idle');
+  // S5 fix (2026-07-08): written by speakParagraph's finish() with the
+  // reason it ended ('ended' | 'manual' | 'error' | 'play-rejected'). The
+  // startTts loop reads it after each iteration; a streak of consecutive
+  // 'play-rejected' results (e.g. tab lost focus → every audio.play() is
+  // blocked) trips a halt so we don't skip an entire chapter silently.
+  const ttsLastFinishReasonRef = useRef<string>('ended');
+  // Counter — incremented on each consecutive play-rejected finish,
+  // reset to 0 on any other finish reason. When it reaches the threshold
+  // below, the run halts and surfaces the "tab mất focus?" chip.
+  const consecutivePlayRejectsRef = useRef(0);
+  const MAX_CONSECUTIVE_PLAY_REJECTS = 3;
+  // S4 fix (2026-07-08): tracks the current voice-generation. Bumped on
+  // every ttsVoice change so the prefetch cache (keyed by voice) can be
+  // dropped wholesale — old voice blobs become garbage the moment the user
+  // picks a new default. Without this, switching voices N times in a 200-
+  // paragraph chapter leaks N+1 blob fetches per paragraph (≈40 MB).
+  const ttsVoiceGenRef = useRef(0);
+  const ttsVoiceAtChangeRef = useRef<string>('Xuân Vĩnh');
   const [voiceControlSupported, setVoiceControlSupported] = useState(false);
   const [voiceControlOn, setVoiceControlOn] = useState(false);
   const voiceControlOnRef = useRef(false);
   const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
   const voiceCommandHandlerRef = useRef<(text: string) => void>(() => {});
+  // Tracks wall-clock of the last successfully-matched voice command so
+  // we can drop duplicate / near-simultaneous transcripts. The browser
+  // sometimes re-emits the same final result, and noise bursts can fire
+  // several transcripts in a row — without a cooldown, the same command
+  // (or a confusing stack of them) fires twice in 200ms.
+  const lastVoiceCommandAtRef = useRef<number>(0);
+  const VOICE_COMMAND_COOLDOWN_MS = 1500;
   const [voiceCommandText, setVoiceCommandText] = useState('');
   const [voiceCommandError, setVoiceCommandError] = useState('');
   // ── Voice preview state (the 10 default Vietnamese Voice voices) ───────────────
   const [previewingVoice, setPreviewingVoice] = useState<string | null>(null);
   const voicePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
 
-  // ── Heuristic emotion detection (instant, no AI needed) ──────────────────
-  // Maps Vietnamese text patterns → TTS parameter adjustments.
-  // Covers the most common novel genres: xianxia action, romance, drama, slice-of-life.
-  interface EmotionResult { label: string; emoji: string; speed: number; noiseScale: number; emotion: string; }
-
-  function detectEmotion(text: string, baseSpeed: number, baseNoise: number): EmotionResult {
-    const t = text.toLowerCase();
-    const exclaims = (text.match(/!/g) ?? []).length;
-    const ellipses = (text.match(/\.\.\.|…/g) ?? []).length;
-    const clamp    = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
-
-    // ⚡ Action / battle / cultivation breakthrough
-    if (/kiếm|đao|thương|chiến|tấn công|bùng nổ|cuộn trào|huyết mạch|linh lực|chân khí|đánh|giết|chém|đâm|phá cảnh|huyết chiến|giao chiến|công kích|đại chiến|hủy diệt/.test(t))
-      return { label: 'hành động', emoji: '⚡', emotion: 'excited', speed: clamp(baseSpeed * 1.22, 0.5, 2.5), noiseScale: clamp(baseNoise + 0.26, 0.3, 0.95) };
-
-    // 😤 Angry / betrayal
-    if (/phản bội|căm hận|thù hận|tức giận|giận dữ|phẫn nộ|không tha thứ|kẻ thù|nghịch nhân|hét lên|gầm lên|thét/.test(t) || exclaims >= 3)
-      return { label: 'tức giận', emoji: '😤', emotion: 'angry', speed: clamp(baseSpeed * 1.18, 0.5, 2.5), noiseScale: clamp(baseNoise + 0.22, 0.3, 0.95) };
-
-    // 💧 Sad / grief
-    if (/nước mắt|khóc|rơi lệ|sầu|buồn|thất vọng|đau lòng|mất đi|ra đi|không trở về|vĩnh biệt|cô đơn|cô quạnh|tiếc nuối|hối hận/.test(t))
-      return { label: 'buồn', emoji: '💧', emotion: 'sad', speed: clamp(baseSpeed * 0.80, 0.5, 2.5), noiseScale: clamp(baseNoise - 0.25, 0.25, 0.95) };
-
-    // 💕 Romantic / tender
-    // "nụ cười" / "mỉm cười" (a smile / gentle smile) are intentionally
-    // OMITTED — they appear in narration all the time ("cô ấy có một nụ
-    // cười dịu dàng") without any romance implication. Including them used
-    // to mark every paragraph containing a smile as "lãng mạn" → "[cười]"
-    // marker injected into nearly every sentence.
-    if (/tim đập|yêu nhau|ngại ngùng|e thẹn|má đỏ|ôm lấy|vòng tay|ánh mắt ấm|nhìn nhau|yêu thương|đôi ta|nắm tay|hôn|hôn nhau|trao nhau|nụ hôn/.test(t))
-      return { label: 'lãng mạn', emoji: '💕', emotion: 'romantic', speed: clamp(baseSpeed * 0.88, 0.5, 2.5), noiseScale: clamp(baseNoise - 0.12, 0.25, 0.95) };
-
-    // 😰 Tense / suspense
-    if (/nguy hiểm|căng thẳng|hồi hộp|bóng tối|im lặng đột|tiến lại|vây quanh|rùng mình|phục kích|kẻ địch xuất/.test(t) || ellipses >= 2)
-      return { label: 'căng thẳng', emoji: '😰', emotion: 'tense', speed: clamp(baseSpeed * 1.07, 0.5, 2.5), noiseScale: clamp(baseNoise + 0.10, 0.3, 0.95) };
-
-    // 🍃 Calm / peaceful
-    if (/yên tĩnh|bình yên|thanh thản|nhẹ nhàng|thư thái|gió thổi nhẹ|ánh trăng|bình thản|thong thả|an bình/.test(t))
-      return { label: 'bình yên', emoji: '🍃', emotion: 'calm', speed: clamp(baseSpeed * 0.90, 0.5, 2.5), noiseScale: clamp(baseNoise - 0.18, 0.25, 0.95) };
-
-    return { label: '', emoji: '', emotion: 'neutral', speed: baseSpeed, noiseScale: baseNoise };
-  }
+  // detectEmotion() is defined in `src/lib/tts/detect-emotion.ts` — pure
+  // function, no React, unit-tested in src/tests/detect-emotion.test.ts.
 
   useEffect(() => {
     const s = loadSettings();
     setSettings(s);
   }, []);
+
+  // ── Persisted TTS settings (read-aloud sliders/toggles) ─────────────
+  // On mount: hydrate from localStorage so the user's chosen speed / voice /
+  // intensity / etc. survive a page reload. We load in a post-mount
+  // useEffect (not in the lazy useState init) so the server-rendered
+  // markup uses the same default values as the client first paint — avoids
+  // a React hydration mismatch warning.
+  //
+  // We deliberately do NOT persist session-only values:
+  //   - ttsState / ttsIndex / ttsParagraphs / ttsEmotionLabel: would put
+  //     the user back into a mid-playback state on reload — confusing.
+  //   - previewingVoice / voicePreviewAudio: ephemeral UI.
+  useEffect(() => {
+    const ts = loadTtsSettings();
+    setTtsSpeed(ts.speed);
+    setTtsNoise(ts.noise);
+    setTtsUseAI(ts.useAI);
+    setTtsEmotionIntensity(ts.emotionIntensity);
+    setTtsVoice(ts.voice);
+    setTtsContinuousPlay(ts.continuousPlay);
+    setTtsParagraphGap(ts.paragraphGap);
+  }, []);
+  useEffect(() => {
+    saveTtsSettings({
+      speed:             ttsSpeed,
+      noise:             ttsNoise,
+      useAI:             ttsUseAI,
+      emotionIntensity:  ttsEmotionIntensity,
+      voice:             ttsVoice,
+      continuousPlay:    ttsContinuousPlay,
+      paragraphGap:      ttsParagraphGap,
+    });
+  }, [ttsSpeed, ttsNoise, ttsUseAI, ttsEmotionIntensity, ttsVoice, ttsContinuousPlay, ttsParagraphGap]);
+
+  // S4 fix (2026-07-08): when the user picks a new default voice, every
+  // prefetch entry under the old voice is now garbage. Wipe the whole
+  // cache so we don't leak a full set of blob URLs per voice switch. The
+  // next paragraph triggers a fresh fetch (~200ms over a warm TTS server,
+  // ~1s cold), which is fine — voice switching mid-playback is rare and
+  // the next paragraph is almost always still ~tens of seconds away.
+  // Also clear any pre-decoded "next" audio buffer for the same reason.
+  useEffect(() => {
+    const prev = ttsVoiceAtChangeRef.current;
+    if (prev !== ttsVoice) {
+      ttsVoiceAtChangeRef.current = ttsVoice;
+      ttsVoiceGenRef.current += 1;
+      const dropped = prefetchCacheRef.current.size;
+      prefetchCacheRef.current.clear();
+      prefetchChapterTouchedAtRef.current.clear();
+      clearNextAudioBuffer();
+      ttsDebug('ttsVoice changed — prefetch cache cleared', {
+        from: prev, to: ttsVoice, gen: ttsVoiceGenRef.current, chaptersDropped: dropped,
+      });
+    }
+  }, [ttsVoice]);
 
   useEffect(() => {
     setVoiceControlSupported(!!getSpeechRecognitionCtor());
@@ -1615,12 +1725,13 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); handleNext(); }
       else if (e.key === 'ArrowLeft') { e.preventDefault(); handlePrev(); }
       else if (e.key === 'Escape') {
-        setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); setVoiceDebugOpen(false);
+        setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); setGalleryOpen(false); setVoiceDebugOpen(false);
         if (analysisModal) closeAnalysisModal();
         setShortcutsOpen(false);
       }
       else if (e.key === 'b' || e.key === 'B') toggleBookmark();
       else if (e.key === 't' || e.key === 'T') setTocOpen((o) => !o);
+      else if (e.key === 'g' || e.key === 'G') setGalleryOpen((o) => !o);
       // '?' (Shift+/) opens the keyboard shortcuts overlay. Held in any
       // text-input context is ignored by the earlier tag check.
       else if (e.key === '?' || (e.shiftKey && e.key === '/')) setShortcutsOpen(true);
@@ -1929,6 +2040,9 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     const chapterTitle = chapters[currentIdx]?.title ?? chapterId ?? '?';
     if (!chapterId || analysisInFlight) return;
     setAnalysisInFlight(true);
+    // Wall-clock start — used to synthesize `durationMs` when the server
+    // returns JSON (no streaming) so the modal can still show a real total.
+    const pipelineStartMs = Date.now();
     const progressText = mode === 'full-llm'
       ? 'Đang chạy Full LLM (tất cả đoạn qua LLM)…'
       : mode === 'local-only'
@@ -2004,12 +2118,21 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         return;
       }
 
-      // Read the SSE stream line by line. Each `data: <json>` block has a
-      // JSON event object — `log` for a status line, `result` for the final
-      // stats payload, `error` for a fatal abort.
-      const reader = r.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
+      // Read the response. The endpoint has shipped in two shapes across the
+      // project history:
+      //   • JSON mode    — Content-Type: application/json. The body IS the
+      //     final result object (one big JSON blob, no streaming). The
+      //     modal renders "running…" then snaps to done when this lands.
+      //   • SSE mode     — Content-Type: text/event-stream. Each `data: <json>`
+      //     block carries a `log` / `result` / `error` event so the pipeline
+      //     can stream progress lines into the modal log live.
+      // Detect from the Content-Type header and branch. Falling through to
+      // the JSON branch is critical — without it the SSE parser sees a raw
+      // JSON blob with no `data:` prefix, never finds a result event, and
+      // the modal dies with "No result event received" even though the
+      // server succeeded (the symptom that prompted this fix).
+      const ctype = r.headers.get('content-type') ?? '';
+      const isSSE = ctype.includes('text/event-stream');
       let resultData: {
         attribution?: AttributionMap;
         layers?: { parser: AttributionMap; regex: AttributionMap; local: AttributionMap; llm: AttributionMap };
@@ -2052,52 +2175,126 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
           meta: (evt.meta && typeof evt.meta === 'object') ? evt.meta as Record<string, unknown> : null,
         };
       };
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        // SSE messages are separated by "\n\n"; within each message, lines
-        // starting with "data:" carry the payload.
-        let sep: number;
-        while ((sep = buffer.indexOf('\n\n')) !== -1) {
-          const raw = buffer.slice(0, sep);
-          buffer = buffer.slice(sep + 2);
+      // Branch on the wire format. Both branches populate `resultData`
+      // (below as a known-shape object) so the post-loop code is shared.
+      if (isSSE) {
+        // ── SSE branch — walk the event stream, parsing `log` / `result` /
+        // `error` payloads as they arrive. Each `data: <json>` block is a
+        // structured event; messages are separated by an empty line.
+        const reader = r.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let sep: number;
+          while ((sep = buffer.indexOf('\n\n')) !== -1) {
+            const raw = buffer.slice(0, sep);
+            buffer = buffer.slice(sep + 2);
+            let payload = '';
+            for (const line of raw.split('\n')) {
+              if (line.startsWith('data:')) payload += line.slice(5).trimStart();
+            }
+            if (!payload) continue;
+            let evt: { type: string;[k: string]: unknown };
+            try { evt = JSON.parse(payload); } catch { continue; }
+            if (evt.type === 'log') {
+              const logLine = buildLogLine(evt);
+              appendLog(logLine);
+              // Optimistic "what's running" hint in the toolbar progress line.
+              // (VnCoreNLP removed 2026-07-05 — filter only on LLM / oMLX now.)
+              if (typeof window !== 'undefined' && /\bLLM\b|\boMLX\b/.test(logLine.text)) {
+                setAnalysisProgress(`Đang chạy: ${logLine.text}`);
+              }
+            } else if (evt.type === 'result') {
+              resultData = evt as unknown as typeof resultData;
+            } else if (evt.type === 'error') {
+              pushModal({ failed: true, running: false, errorMsg: String(evt.message ?? 'Unknown error') });
+              setAnalysisProgress('Full analysis lỗi: ' + (evt.message ?? '?'));
+            }
+          }
+        }
+        // Drain trailing buffer (no trailing \n\n at end-of-stream is possible).
+        if (buffer.trim()) {
           let payload = '';
-          for (const line of raw.split('\n')) {
+          for (const line of buffer.split('\n')) {
             if (line.startsWith('data:')) payload += line.slice(5).trimStart();
           }
-          if (!payload) continue;
-          let evt: { type: string;[k: string]: unknown };
-          try { evt = JSON.parse(payload); } catch { continue; }
-          if (evt.type === 'log') {
-            const logLine = buildLogLine(evt);
-            appendLog(logLine);
-            // Optimistic "what's running" hint in the toolbar progress line.
-            // (VnCoreNLP removed 2026-07-05 — filter only on LLM / oMLX now.)
-            if (typeof window !== 'undefined' && /\bLLM\b|\boMLX\b/.test(logLine.text)) {
-              setAnalysisProgress(`Đang chạy: ${logLine.text}`);
-            }
-          } else if (evt.type === 'result') {
-            resultData = evt as unknown as typeof resultData;
-          } else if (evt.type === 'error') {
-            pushModal({ failed: true, running: false, errorMsg: String(evt.message ?? 'Unknown error') });
-            setAnalysisProgress('Full analysis lỗi: ' + (evt.message ?? '?'));
+          if (payload) {
+            try {
+              const evt = JSON.parse(payload);
+              if (evt.type === 'result') resultData = evt;
+              else if (evt.type === 'log') appendLog(buildLogLine(evt));
+              else if (evt.type === 'error') pushModal({ failed: true, running: false, errorMsg: String(evt.message ?? 'Unknown error') });
+            } catch { /* ignore */ }
           }
         }
-      }
-      // Drain trailing buffer (no trailing \n\n at end-of-stream is possible).
-      if (buffer.trim()) {
-        let payload = '';
-        for (const line of buffer.split('\n')) {
-          if (line.startsWith('data:')) payload += line.slice(5).trimStart();
-        }
-        if (payload) {
-          try {
-            const evt = JSON.parse(payload);
-            if (evt.type === 'result') resultData = evt;
-            else if (evt.type === 'log') appendLog(buildLogLine(evt));
-            else if (evt.type === 'error') pushModal({ failed: true, running: false, errorMsg: String(evt.message ?? 'Unknown error') });
-          } catch { /* ignore */ }
+      } else {
+        // ── JSON branch — the server ships the whole result in one shot.
+        // The endpoint returns the bare attribution+stats payload; we
+        // synthesize the streaming-only fields (`layers`, `mode`,
+        // `durationMs`, `paragraphTexts`) locally and emit a single
+        // "log trống" entry so the modal log isn't completely empty for a
+        // run that took 0 visible ticks (long-running runs already show
+        // the granular progress via the SSE branch above).
+        try {
+          const json = await r.json() as {
+            attribution?: AttributionMap;
+            omlxReachable?: boolean;
+            chapter?: { chapterIndex: number; chapterId: string; file: string };
+            stats?: { parserHits?: number; regexHits?: number; llmHits?: number; conversationHits?: number; sourceDrift?: number; defaults?: number; totalParagraphs?: number; llmFailures?: number; llmRequested?: number };
+            // Future-proofed — the SSE result event carries these too; if
+            // the server starts emitting them in JSON mode we pick them up.
+            layers?: { parser: AttributionMap; regex: AttributionMap; local: AttributionMap; llm: AttributionMap };
+            paragraphTexts?: Record<string, string>;
+            mode?: AnalyzeMode;
+            durationMs?: number;
+            llmDurationMs?: number;
+          };
+          resultData = {
+            attribution: json.attribution,
+            chapter: json.chapter,
+            omlxReachable: json.omlxReachable,
+            // Synthesize the per-layer breakdown as empty — the JSON
+            // endpoint doesn't ship it, but the modal will still render
+            // the merged attribution result. The voice-debug panel's
+            // per-evidence chips will just show empty in this branch.
+            layers: json.layers ?? { parser: {}, regex: {}, local: {}, llm: {} },
+            paragraphTexts: json.paragraphTexts,
+            mode: json.mode ?? mode,
+            durationMs: json.durationMs ?? Math.max(0, Date.now() - pipelineStartMs),
+            llmDurationMs: json.llmDurationMs ?? 0,
+            stats: json.stats ? {
+              parserHits:        json.stats.parserHits        ?? 0,
+              regexHits:         json.stats.regexHits         ?? 0,
+              llmHits:           json.stats.llmHits           ?? 0,
+              conversationHits:  json.stats.conversationHits  ?? 0,
+              sourceDrift:       json.stats.sourceDrift       ?? 0,
+              defaults:          json.stats.defaults          ?? 0,
+              totalParagraphs:   json.stats.totalParagraphs   ?? 0,
+              llmFailures:       json.stats.llmFailures       ?? 0,
+              llmRequested:      json.stats.llmRequested      ?? 0,
+            } : undefined,
+          };
+          // The JSON endpoint doesn't stream per-step events, so plant a
+          // synthetic "done" log entry so the modal's log panel isn't
+          // empty when the run completes. The headline number is the most
+          // useful summary a user wants to scan after a full analysis.
+          if (resultData.stats) {
+            const total = (resultData.stats.parserHits ?? 0)
+                        + (resultData.stats.regexHits ?? 0)
+                        + (resultData.stats.llmHits ?? 0)
+                        + (resultData.stats.conversationHits ?? 0);
+            appendLog({
+              text: `Pipeline xong — ${resultData.stats.totalParagraphs} đoạn, ${total} đã gán, ${resultData.stats.defaults} voice mặc định (${Math.round((resultData.durationMs ?? 0) / 100) / 10}s)`,
+              phase: 'stat',
+            });
+          }
+        } catch (e) {
+          pushModal({ failed: true, running: false, errorMsg: 'Không đọc được JSON: ' + (e instanceof Error ? e.message : String(e)) });
+          setAnalysisProgress('Full analysis lỗi: response không phải JSON');
+          return;
         }
       }
 
@@ -2328,11 +2525,13 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   // Mirror of VIENEU_GENDER in audiobook_generator.py — keep in sync.
   // Gender is inferred from the character's voice builtin name. Cloned
   // voices fall back to "unknown" (pronoun resolution skips them).
+  // Source: `src/lib/tts/vieneu-voices.ts` (Python-side mirror in
+  // `app/tts-service/audiobook_generator.py:580-602` is intentionally left
+  // for a separate sync to that reference project).
   const VOICE_GENDER: Record<string, 'female' | 'male' | 'unknown'> = {
-    'Ngọc Linh': 'female', 'Ngọc Lan': 'female', 'Mỹ Duyên': 'female',
-    'Trúc Ly': 'female',
-    'Bình An': 'male', 'Gia Bảo': 'male', 'Đức Trí': 'male',
-    'Thái Sơn': 'male', 'Trọng Hữu': 'male', 'Xuân Vĩnh': 'male',
+    ...Object.fromEntries(
+      Object.entries(VIENEU_VOICE_GENDER).map(([k, v]) => [k, v as 'female' | 'male' | 'unknown']),
+    ),
   };
 
   /** Build canonical-name → gender map from ttsCharacterMap (name/alias → voice name). */
@@ -2805,9 +3004,47 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   }
 
   /**
+   * Maximum number of chapters we'll keep materialized in the prefetch
+   * cache before LRU-evicting the least-recently-touched one. Bounds
+   * memory during long playback sessions / whole-book pre-generation.
+   * 3 chapters ≈ 200-500 blobs ≈ 30-100 MB (each WAV ~150-300 KB).
+   */
+  const PREFETCH_CACHE_MAX_CHAPTERS = 3;
+  /** Track when each chapter was last hit (Promise OR blob access). */
+  const prefetchChapterTouchedAtRef = useRef<Map<string, number>>(new Map());
+
+  function touchChapter(chapterId: string) {
+    prefetchChapterTouchedAtRef.current.set(chapterId, Date.now());
+  }
+
+  /**
+   * LRU-evict the oldest chapter(s) until we're under PREFETCH_CACHE_MAX_CHAPTERS.
+   * Drops the Promise map for that chapter; in-flight requests still resolve
+   * but their results won't be memoized. Trade-off: tiny chance of a duplicate
+   * fetch on the evicted chapter if it gets re-requested. Memory bounded is
+   * worth it.
+   */
+  function evictPrefetchIfOverLimit() {
+    const cache = prefetchCacheRef.current;
+    if (cache.size <= PREFETCH_CACHE_MAX_CHAPTERS) return;
+    const touched = prefetchChapterTouchedAtRef.current;
+    const sorted = [...cache.keys()].sort((a, b) => (touched.get(a) ?? 0) - (touched.get(b) ?? 0));
+    while (cache.size > PREFETCH_CACHE_MAX_CHAPTERS && sorted.length > 0) {
+      const evict = sorted.shift()!;
+      cache.delete(evict);
+      touched.delete(evict);
+      ttsDebug('prefetchCache: LRU-evicted chapter', { chapterId: evict });
+    }
+  }
+
+  /**
    * Start (or return cached) a TTS fetch for a paragraph.
    * Same request is deduped so calling this N times for the same paragraph
    * only triggers 1 network call.
+   *
+   * Resilience: transient network errors get one automatic retry (250 ms
+   * backoff) before the rejection propagates. Reduces cold-cache hiccups
+   * when the unified TTS server briefly returns 502/503 under load.
    */
   function prefetchParagraph(
     chapterId: string,
@@ -2820,17 +3057,24 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   ): Promise<Blob> {
     // Stable dedup key — include speed/voice so different settings don't collide.
     const key = `${idx}::${character ?? '_'}::${speed.toFixed(2)}::${ttsVoice}::${emotion}::${expressiveness.toFixed(2)}`;
+    touchChapter(chapterId);
     let chapterMap = prefetchCacheRef.current.get(chapterId);
     if (!chapterMap) {
       chapterMap = new Map();
       prefetchCacheRef.current.set(chapterId, chapterMap);
+      evictPrefetchIfOverLimit();
     }
     const existing = chapterMap.get(key) as Promise<Blob> | undefined;
-    if (existing) return existing;
+    if (existing) {
+      touchChapter(chapterId);
+      return existing;
+    }
 
     const fetchStart = performance.now();
-    const promise = (async () => {
-      ttsDebug('POST /api/tts', { idx, character, emotion, voice: ttsVoice, speed });
+    const MAX_ATTEMPTS = 2;
+    const RETRY_BACKOFF_MS = 250;
+    const attempt = async (attemptNo: number): Promise<Blob> => {
+      ttsDebug('POST /api/tts', { idx, character, emotion, voice: ttsVoice, speed, attempt: attemptNo });
       const resp = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2852,6 +3096,12 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         // the status number, which is opaque.
         let detail = '';
         try { detail = await resp.text(); } catch { /* ignore */ }
+        const transient = resp.status >= 500 || resp.status === 429;
+        if (transient && attemptNo < MAX_ATTEMPTS) {
+          ttsDebug('POST /api/tts transient failure — retrying', { idx, status: resp.status, attemptNo });
+          await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+          return attempt(attemptNo + 1);
+        }
         ttsWarn('POST /api/tts non-OK', {
           idx, status: resp.status,
           body: detail.slice(0, 300),
@@ -2865,13 +3115,15 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         bytes: blob.size, type: blob.type,
         backend: resp.headers.get('X-TTS-Backend'),
         voiceUsed: resp.headers.get('X-Voice-Used'),
+        attempt: attemptNo,
       });
       // Clear any previous warning chip (an OK POST means the path works now).
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('tts:ok'));
       }
       return blob;
-    })().catch((err) => {
+    };
+    const promise = attempt(1).catch((err) => {
       // Remove failed entry so we can retry
       chapterMap!.delete(key);
       throw err;
@@ -2949,7 +3201,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
           const idx = i + j;
           const sp = detectSpeaker(paragraphs[idx], idx);
           const emo = ttsUseAI
-            ? detectEmotion(paragraphs[idx], ttsSpeed, ttsNoise)
+            ? detectEmotion(paragraphs[idx], ttsSpeed, ttsNoise, ttsEmotionIntensityRef.current)
             : { speed: ttsSpeed, noiseScale: ttsNoise, label: '', emoji: '', emotion: 'neutral' };
           return prefetchParagraph(ch.id, paragraphs, idx, emo.speed, sp.name, emo.emotion, emo.noiseScale)
             .then(() => { done++; setPregenStatus({ chapterId: ch.id, done, total: paragraphs.length }); })
@@ -2980,16 +3232,43 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     // Apple Silicon) we need a deep lookahead — 5 paragraphs ≈ 10s of
     // buffered audio (each para is ~2s). Server handles them in its own
     // queue (CONCURRENCY=2 in pregenerateChapter for pre-chapter; for
-    // same-chapter prefetch we just throw all at the wall — OMLX/VieNeu
-    // queue them automatically).
-    for (let j = 1; j <= 5; j++) {
+    // same-chapter prefetch we cap to 3 in-flight via a tiny semaphore
+    // so we don't DDOS the unified TTS server if the loop fires fast).
+    const LOOKAHEAD_PARAGRAPHS = 5;
+    const MAX_INFLIGHT_PREFETCH = 3;
+    let inflight = 0;
+    const waitQueue: Array<() => void> = [];
+    const withSlot = async <T,>(fn: () => Promise<T>): Promise<T> => {
+      if (inflight >= MAX_INFLIGHT_PREFETCH) {
+        await new Promise<void>((r) => waitQueue.push(r));
+      }
+      inflight++;
+      try {
+        return await fn();
+      } finally {
+        inflight--;
+        const next = waitQueue.shift();
+        if (next) next();
+      }
+    };
+    for (let j = 1; j <= LOOKAHEAD_PARAGRAPHS; j++) {
       const nextIdx = idx + j;
       if (nextIdx < paragraphs.length) {
-        const nextSp = detectSpeaker(paragraphs[nextIdx]);
+        // B3 fix (2026-07-08): pass the paragraph index to detectSpeaker
+        // so the Tier-1 server-side attribution map (chapterAttributionRef)
+        // is consulted. Without the index, every eager prefetch fell
+        // through to Tier-2 local regex and may have resolved a different
+        // character (or none). That produced two cache entries per
+        // paragraph — one from the lookahead with the wrong character,
+        // one from the eventual speakParagraph call with the right one —
+        // and forced a re-fetch on the playback thread.
+        const nextSp = detectSpeaker(paragraphs[nextIdx], nextIdx);
         const nextEmo = ttsUseAI
-          ? detectEmotion(paragraphs[nextIdx], ttsSpeed, ttsNoise)
+          ? detectEmotion(paragraphs[nextIdx], ttsSpeed, ttsNoise, ttsEmotionIntensityRef.current)
           : { speed: ttsSpeed, noiseScale: ttsNoise, label: '', emoji: '', emotion: 'neutral' };
-        prefetchParagraph(chapterId, paragraphs, nextIdx, nextEmo.speed, nextSp.name, nextEmo.emotion, nextEmo.noiseScale).catch((e) => {
+        withSlot(() =>
+          prefetchParagraph(chapterId, paragraphs, nextIdx, nextEmo.speed, nextSp.name, nextEmo.emotion, nextEmo.noiseScale),
+        ).catch((e) => {
           ttsWarn('eager prefetch failed', { nextIdx, err: String(e) });
         });
       }
@@ -3007,9 +3286,49 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       throw e;
     }
     ttsDebug('prefetch ok', { idx, bytes: blob.size, ms: Math.round(performance.now() - ttsStart) });
+    // If a previous call already pre-decoded this paragraph's audio
+    // (warmUpNextAudio ran while the previous paragraph was playing),
+    // consume it now to skip the new-Audio + load + decode latency.
+    // This is what makes voice changes seamless: the new voice's WAV
+    // was decoded into HTMLAudioElement.readyState >= HAVE_ENOUGH_DATA
+    // before the previous paragraph finished.
+    const preloaded = nextAudioBufferRef.current;
+    let url: string;
+    let audio: HTMLAudioElement;
+    if (preloaded && preloaded.idx === idx && preloaded.chapterId === chapterId) {
+      nextAudioBufferRef.current = null;
+      url = preloaded.url;
+      audio = preloaded.audio;
+      ttsDebug('speakParagraph: using preloaded audio', { idx, chapterId });
+    } else {
+      url = URL.createObjectURL(blob);
+      audio = new Audio(url);
+      // preload="auto" tells the browser to fetch the entire blob metadata +
+      // body right away. Default is "metadata" which only fetches duration,
+      // deferring the body fetch until .play() — produces a noticeable
+      // stutter on slower connections. Explicit `audio.load()` kicks off
+      // the fetch synchronously rather than waiting for play(). Together
+      // they eliminate the ~50-200ms first-frame stall on cold cache.
+      audio.preload = 'auto';
+      try { audio.load(); } catch { /* Safari throws if src was just set; safe to ignore */ }
+      // Wait for decode to finish so the upcoming .play() returns
+      // instantly. Without this, the first frame still triggers the
+      // decoder on the playback thread and produces a small stutter
+      // that the user hears as "delay" between paragraphs.
+      await new Promise<void>((resolve) => {
+        if (audio.readyState >= 4) return resolve();
+        const done = () => {
+          audio.removeEventListener('canplaythrough', done);
+          audio.removeEventListener('error', done);
+          resolve();
+        };
+        audio.addEventListener('canplaythrough', done, { once: true });
+        audio.addEventListener('error', done, { once: true });
+        setTimeout(resolve, 2000); // safety net — never block the loop forever
+      });
+      ttsDebug('speakParagraph: audio decoded', { idx, readyState: audio.readyState });
+    }
     return new Promise((resolve) => {
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
       audioRef.current = audio;
       let settled = false;
       const finish = (reason: string) => {
@@ -3018,6 +3337,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         ttsAudioFinishRef.current = null;
         if (audioRef.current === audio) audioRef.current = null;
         URL.revokeObjectURL(url);
+        ttsLastFinishReasonRef.current = reason;
         ttsDebug('audio finished', { idx, reason });
         if (ttsParagraphGap > 0 && !ttsAbortRef.current) {
           setTimeout(resolve, ttsParagraphGap);
@@ -3032,7 +3352,20 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         finish('error');
       };
       audio.play().then(
-        () => ttsDebug('audio.play() resolved', { idx }),
+        () => {
+          ttsDebug('audio.play() resolved', { idx });
+          // Now that this paragraph is actually playing, kick off the
+          // warm-up for the NEXT paragraph. It runs in the background
+          // for the remaining duration of this clip, so by the time
+          // `finish()` fires (natural onended), the next Audio element
+          // is fully decoded and ready for an instant .play() — which
+          // is what eliminates the inter-paragraph gap, including on
+          // voice changes (the prefetch key is voice-aware).
+          const nextIdx = idx + 1;
+          if (nextIdx < paragraphs.length && !ttsAbortRef.current) {
+            void warmUpNextAudio(chapterId, paragraphs, nextIdx);
+          }
+        },
         (err) => {
           // Autoplay rejection, decoder error, missing user gesture, etc.
           // Before the fix this was `finish` with no reason → silent skip
@@ -3072,7 +3405,90 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       audio.load();
     }
     audioRef.current = null;
+    // If we're aborting the run (called from stopTts / restartTtsAt /
+    // changeChapterByVoice), the pre-decoded "next" audio is for a run
+    // that's about to die — discard it. The natural onended path inside
+    // speakParagraph's `finish()` does NOT call this helper, so the
+    // preloaded next audio stays intact for the upcoming iteration.
+    clearNextAudioBuffer();
     ttsAudioFinishRef.current?.();
+  }
+
+  // Tear down the pre-decoded next audio buffer. Safe to call multiple
+  // times; idempotent.
+  function clearNextAudioBuffer() {
+    const buf = nextAudioBufferRef.current;
+    if (!buf) return;
+    nextAudioBufferRef.current = null;
+    try {
+      buf.audio.pause();
+      buf.audio.removeAttribute('src');
+      buf.audio.load();
+    } catch { /* ignore */ }
+    try { URL.revokeObjectURL(buf.url); } catch { /* ignore */ }
+  }
+
+  // Pre-decode the audio for paragraph `idx` (fire and forget). When
+  // done, the result lives on `nextAudioBufferRef` and the next call to
+  // speakParagraph(idx) will pick it up and skip the per-paragraph
+  // fetch + new Audio() + load() + decode dance.
+  //
+  // The fetched blob itself is the SAME one the prefetch cache would
+  // produce — we piggyback on prefetchParagraph so the cache stays
+  // consistent and the parallel eager prefetch at the top of
+  // speakParagraph keeps working for paragraphs further out.
+  async function warmUpNextAudio(
+    chapterId: string,
+    paragraphs: string[],
+    idx: number,
+  ): Promise<void> {
+    if (idx >= paragraphs.length) return;
+    if (ttsAbortRef.current) return;
+    // Already warm for this exact paragraph + chapter? Keep it.
+    const cur = nextAudioBufferRef.current;
+    if (cur && cur.idx === idx && cur.chapterId === chapterId) return;
+    // Stale (different idx / chapter from a previous iteration). Drop it.
+    clearNextAudioBuffer();
+
+    try {
+      const nextSp = detectSpeaker(paragraphs[idx], idx);
+      const nextEmo = ttsUseAI
+        ? detectEmotion(paragraphs[idx], ttsSpeed, ttsNoise, ttsEmotionIntensityRef.current)
+        : { speed: ttsSpeed, noiseScale: ttsNoise, label: '', emoji: '', emotion: 'neutral' };
+      const blob = await prefetchParagraph(
+        chapterId, paragraphs, idx, nextEmo.speed, nextSp.name,
+        nextEmo.emotion, nextEmo.noiseScale,
+      );
+      if (ttsAbortRef.current) return;
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.preload = 'auto';
+      try { audio.load(); } catch { /* Safari safety — same as speakParagraph */ }
+      // Await decode so .play() is instant when speakParagraph picks it up.
+      // Without this, .play() would still trigger the decode on the main
+      // playback thread and reintroduce the gap we're trying to eliminate.
+      await new Promise<void>((resolve) => {
+        if (audio.readyState >= 4) return resolve();
+        const done = () => {
+          audio.removeEventListener('canplaythrough', done);
+          audio.removeEventListener('error', done);
+          resolve();
+        };
+        audio.addEventListener('canplaythrough', done, { once: true });
+        audio.addEventListener('error', done, { once: true });
+        setTimeout(resolve, 2000); // safety net — never block forever
+      });
+      if (ttsAbortRef.current) {
+        try { URL.revokeObjectURL(url); } catch { /* ignore */ }
+        return;
+      }
+      nextAudioBufferRef.current = { audio, url, idx, chapterId };
+      ttsDebug('warmUpNextAudio ready', { idx, chapterId });
+    } catch (e) {
+      // Non-fatal — speakParagraph will fall back to the existing
+      // fetch-then-play path. Logged for visibility.
+      ttsWarn('warmUpNextAudio failed', { idx, chapterId, err: String(e) });
+    }
   }
 
   async function startTts(fromIndex = 0) {
@@ -3117,6 +3533,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     });
 
     ttsAbortRef.current = false;
+    consecutivePlayRejectsRef.current = 0;  // S5: reset streak counter
     ttsStateRef.current = 'loading';
     setTtsState('loading');
     // Cancel any voice-preview still playing so it doesn't overlap
@@ -3165,7 +3582,15 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
 
     ttsStateRef.current = 'playing';
     setTtsState('playing');
-    for (let i = fromIndex; i < paras.length; i++) {
+    // S2 fix (2026-07-08): startTts is invoked fire-and-forget from a
+    // button click / setTimeout / voice command — there was no outer
+    // .catch on it. If the very first paragraph's prefetchParagraph
+    // throws (TTS server down, malformed text, etc.), the rejection
+    // bubbled up unhandled, ttsState stayed at 'playing' forever, and
+    // the user had to click Stop. Now any error inside the loop rolls
+    // the state machine back to idle and surfaces a single chip.
+    try {
+      for (let i = fromIndex; i < paras.length; i++) {
       if (ttsAbortRef.current || ttsRunIdRef.current !== runId) break;
       setTtsIndex(i);
       syncTtsHighlight(i);
@@ -3189,13 +3614,55 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       setTtsCurrentSpeaker(sp.name ?? null);
 
       // Apply emotion adjustment (heuristic or neutral)
-      const emo = ttsUseAI ? detectEmotion(paras[i], ttsSpeed, ttsNoise) : { speed: ttsSpeed, noiseScale: ttsNoise, label: '', emoji: '', emotion: 'neutral' };
+      const emo = ttsUseAI ? detectEmotion(paras[i], ttsSpeed, ttsNoise, ttsEmotionIntensityRef.current) : { speed: ttsSpeed, noiseScale: ttsNoise, label: '', emoji: '', emotion: 'neutral' };
       const emotionSuffix = emo.label ? ` · ${emo.emoji} ${emo.label}` : '';
       const speakerSuffix = sp.name ? ` · ${sp.name}` : '';
       setTtsEmotionLabel(`${speakerSuffix}${emotionSuffix}`);
 
       await speakParagraph(myChapter.id, paras, i, emo.speed, sp.name, emo.emotion, emo.noiseScale);
       if (ttsAbortRef.current || ttsRunIdRef.current !== runId) break;
+      // S5 fix (2026-07-08): if audio.play() has been rejected N times in
+      // a row (e.g. tab lost focus, audio context suspended, OS muted the
+      // tab), the loop was silently skipping every paragraph and the user
+      // had no idea why "nothing was playing". Trip a halt after the
+      // threshold and surface a chip so the user knows to refocus the tab.
+      if (ttsLastFinishReasonRef.current === 'play-rejected') {
+        consecutivePlayRejectsRef.current += 1;
+        if (consecutivePlayRejectsRef.current >= MAX_CONSECUTIVE_PLAY_REJECTS) {
+          ttsWarn('startTts halted — consecutive play() rejections', {
+            count: consecutivePlayRejectsRef.current,
+            chapterIdx: myChapterIdx,
+            hint: 'Browser is blocking autoplay. Click the reader, then press Play again.',
+          });
+          setTtsEmotionLabel('⚠️ Tạm dừng — tab mất focus?');
+          ttsAbortRef.current = true;
+          ttsRunIdRef.current += 1;
+          ttsStateRef.current = 'idle';
+          setTtsState('idle');
+          finishCurrentTtsAudio();
+          return;
+        }
+      } else {
+        consecutivePlayRejectsRef.current = 0;
+      }
+    }
+    } catch (err) {
+      // S2 fix (2026-07-08): roll the state machine back to idle and
+      // surface a single chip instead of leaving the run in 'playing'
+      // with no audio. User can retry from Stop → Play.
+      const msg = err instanceof Error ? err.message : String(err);
+      ttsWarn('startTts loop failed — rolling back to idle', { runId, err: msg });
+      ttsAbortRef.current = true;
+      ttsRunIdRef.current += 1;  // invalidate any pending iterations
+      ttsStateRef.current = 'idle';
+      setTtsState('idle');
+      setTtsIndex(0);
+      setTtsParagraphs([]);
+      setTtsEmotionLabel('');
+      setTtsCurrentSpeaker(null);
+      syncTtsHighlight(null);
+      clearNextAudioBuffer();
+      return;
     }
 
     if (ttsAbortRef.current || ttsRunIdRef.current !== runId) {
@@ -3222,18 +3689,44 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       // Mark this as an auto-advance so the chapter-change useEffect
       // doesn't call stopTts() and tear down our state.
       ttsIsAdvancingRef.current = true;
+      const nextChapter = chapters[myChapterIdx + 1];
       // Trigger iframe nav + state update via goToChapter (this sets currentIdx)
       // Note: goToChapter calls saveProgress too.
       goToChapter(myChapterIdx + 1);
-      // Wait briefly for React to re-render with the new currentIdx (the
-      // chapter-change useEffect will see ttsIsAdvancingRef and skip stopTts),
-      // then kick off the next startTts. The ref auto-updates to the new
-      // chapter so the recursive call will read it correctly.
+      // S1 fix (2026-07-08): previously the auto-advance fired `startTts(0)`
+      // 600 ms later and the first paragraph of the new chapter paid the
+      // full fetch + new Audio + load + canplaythrough cost — 1.5–3 s of
+      // silence at every chapter boundary in continuous-play. The blob was
+      // usually already in the prefetch cache (pregenerateChapter was
+      // kicked off at the start of this chapter), so we just needed to
+      // decode it into an HTMLAudioElement while we wait for React to
+      // re-render with the new chapter. That gives the upcoming
+      // speakParagraph(0, ...) a preloaded audio to pop off the ref.
       setTimeout(() => {
-        if (!ttsAbortRef.current && ttsRunIdRef.current === runId) {
+        void (async () => {
+          if (ttsAbortRef.current || ttsRunIdRef.current !== runId) return;
+          // Pre-decode paragraph 0 of the next chapter. chapterParagraphsRef
+          // is already populated by pregenerateChapter (which ran when
+          // THIS chapter started), so the blob fetch is a cache hit and
+          // only the decode is the new work.
+          try {
+            if (nextChapter) {
+              const nextParas = chapterParagraphsRef.current.get(nextChapter.id);
+              if (nextParas && nextParas.length > 0) {
+                await warmUpNextAudio(nextChapter.id, nextParas, 0);
+              }
+            }
+          } catch (e) {
+            ttsWarn('chapter-transition warmup failed — falling back to cold start', {
+              nextChapterId: nextChapter?.id, err: String(e),
+            });
+          }
+          if (ttsAbortRef.current || ttsRunIdRef.current !== runId) return;
           void startTts(0);
-        }
-      }, 600);
+        })();
+      }, 200);   // 200 ms is enough for goToChapter's React state to settle
+                 // (we don't need 600 ms any more — the heavy work is now
+                 // the warm-up, which we kicked off BEFORE startTts).
       return;
     }
 
@@ -3285,7 +3778,12 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     ttsStateRef.current = 'loading';
     setTtsState('loading');
     setTimeout(() => {
-      if (ttsRunIdRef.current === resumeRunId && currentChapterRef.current?.id === ch.id) void startTts(target);
+      // S6 fix (2026-07-08): also gate on ttsAbortRef — if the user hit
+      // Stop (or another restartTtsAt) inside the 100 ms debounce window,
+      // ttsRunIdRef would already be different and this guard would catch
+      // it, but if a future refactor ever decouples runId from abort, the
+      // abort check keeps us from re-spawning a fresh run after Stop.
+      if (ttsRunIdRef.current === resumeRunId && !ttsAbortRef.current && currentChapterRef.current?.id === ch.id) void startTts(target);
     }, 100);
   }
 
@@ -3323,7 +3821,10 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       ttsStateRef.current = 'loading';
       setTtsState('loading');
       setTimeout(() => {
-        if (ttsRunIdRef.current === resumeRunId) void startTts(0);
+        // S6 fix (2026-07-08): also gate on ttsAbortRef — see the
+        // matching note in restartTtsAt. Belt-and-suspenders against any
+        // future refactor that decouples runId from abort.
+        if (ttsRunIdRef.current === resumeRunId && !ttsAbortRef.current) void startTts(0);
       }, 650);
     }
   }
@@ -3339,8 +3840,32 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       .trim();
   }
 
-  function commandIncludes(command: string, phrases: string[]): boolean {
-    return phrases.some((phrase) => command.includes(phrase));
+  // Sensitivity fix (2026-07-08): substring matching was too eager — a
+  // trailing word like "play" or "stop" anywhere in the transcript fired
+  // the command, even when the user was just reading aloud or the mic
+  // picked up background TV. New rules:
+  //   • wordMatches() requires the phrase to align to word boundaries
+  //     (so "play" matches the token "play" but NOT "playing"/"display"
+  //     /"replay"/"parlay").
+  //   • Min-length gate — a 1-word transcript can't match a 2-word
+  //     phrase like "tiep tuc", so accidental single words don't trigger.
+  //   • Cooldown gate — same/near-simultaneous transcripts can't
+  //     double-fire (browser sometimes re-emits final results).
+  //   • English single-word fallbacks ("play"/"stop"/"pause") are still
+  //     accepted as standalone tokens but no longer as substrings.
+  function wordMatches(command: string, phrase: string): boolean {
+    const phraseTokens = phrase.split(' ').filter(Boolean);
+    if (phraseTokens.length === 0) return false;
+    const cmdTokens = command.split(' ').filter(Boolean);
+    if (cmdTokens.length < phraseTokens.length) return false;
+    // Word-boundary anchored substring search. Pad both sides so we can
+    // look for " phrase " cleanly, then check the start/end edges.
+    const padded = ` ${command} `;
+    const target = ` ${phrase} `;
+    if (padded.includes(target)) return true;
+    if (padded.startsWith(`${phrase} `)) return true;
+    if (padded.endsWith(` ${phrase}`)) return true;
+    return false;
   }
 
   function handleVoiceCommand(transcript: string) {
@@ -3348,24 +3873,38 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     const command = normalizeVoiceCommand(raw);
     if (!command) return;
 
+    // Cooldown — drop any transcript that arrives within 1.5s of the
+    // previous one. Stops the browser re-emitting the same final result
+    // and stops noise bursts from firing multiple commands in a row.
+    const now = Date.now();
+    if (now - lastVoiceCommandAtRef.current < VOICE_COMMAND_COOLDOWN_MS) return;
+    lastVoiceCommandAtRef.current = now;
+
     const feedback = (label: string) => setVoiceCommandText(`${raw} -> ${label}`);
 
-    if (commandIncludes(command, ['tat nghe lenh', 'tat micro', 'stop listening'])) {
+    if (wordMatches(command, 'tat nghe lenh') || wordMatches(command, 'tat micro') || wordMatches(command, 'stop listening')) {
       stopVoiceControl();
       feedback('Tắt nghe lệnh');
       return;
     }
-    if (commandIncludes(command, ['dung lai', 'ngung doc', 'dung doc', 'thoi doc', 'stop'])) {
+    if (wordMatches(command, 'dung lai') || wordMatches(command, 'ngung doc') || wordMatches(command, 'dung doc') || wordMatches(command, 'thoi doc')) {
       stopTts();
       feedback('Dừng đọc');
       return;
     }
-    if (commandIncludes(command, ['tam dung', 'pause', 'cho nghi'])) {
+    // "stop" as a standalone token — keeps English-mix ergonomic but can
+    // no longer fire from "stopped" / "stopwatch" / etc.
+    if (wordMatches(command, 'stop')) {
+      stopTts();
+      feedback('Dừng đọc');
+      return;
+    }
+    if (wordMatches(command, 'tam dung') || wordMatches(command, 'cho nghi') || wordMatches(command, 'pause')) {
       if (ttsStateRef.current === 'playing') toggleTtsPause();
       feedback('Tạm dừng');
       return;
     }
-    if (commandIncludes(command, ['tiep tuc', 'doc tiep', 'bat dau doc', 'doc di', 'play', 'resume', 'start reading'])) {
+    if (wordMatches(command, 'tiep tuc') || wordMatches(command, 'doc tiep') || wordMatches(command, 'bat dau doc') || wordMatches(command, 'doc di') || wordMatches(command, 'resume') || wordMatches(command, 'start reading')) {
       if (ttsStateRef.current === 'paused') toggleTtsPause();
       else if (ttsStateRef.current === 'idle') {
         void loadTtsContext();
@@ -3375,52 +3914,66 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       feedback('Tiếp tục đọc');
       return;
     }
-    if (commandIncludes(command, ['doan sau', 'doan tiep', 'cau sau', 'next paragraph'])) {
+    // "play" as a standalone token. Previously this was matched as a raw
+    // substring, so "playing" / "display" / "parlay" / mid-sentence "play
+    // nhạc" all fired it. Now strictly token-aligned, and we still only
+    // resume/start — never interrupt active playback.
+    if (wordMatches(command, 'play')) {
+      if (ttsStateRef.current === 'paused') toggleTtsPause();
+      else if (ttsStateRef.current === 'idle') {
+        void loadTtsContext();
+        setTtsSettingsOpen(false);
+        void startTts(0);
+      }
+      feedback('Tiếp tục đọc');
+      return;
+    }
+    if (wordMatches(command, 'doan sau') || wordMatches(command, 'doan tiep') || wordMatches(command, 'cau sau') || wordMatches(command, 'next paragraph')) {
       if (ttsStateRef.current !== 'idle') skipTtsParagraph(1);
       feedback('Đoạn sau');
       return;
     }
-    if (commandIncludes(command, ['doan truoc', 'cau truoc', 'previous paragraph'])) {
+    if (wordMatches(command, 'doan truoc') || wordMatches(command, 'cau truoc') || wordMatches(command, 'previous paragraph')) {
       if (ttsStateRef.current !== 'idle') skipTtsParagraph(-1);
       feedback('Đoạn trước');
       return;
     }
-    if (commandIncludes(command, ['chuong sau', 'chuong tiep', 'next chapter'])) {
+    if (wordMatches(command, 'chuong sau') || wordMatches(command, 'chuong tiep') || wordMatches(command, 'next chapter')) {
       changeChapterByVoice(1);
       feedback('Chương sau');
       return;
     }
-    if (commandIncludes(command, ['chuong truoc', 'previous chapter'])) {
+    if (wordMatches(command, 'chuong truoc') || wordMatches(command, 'previous chapter')) {
       changeChapterByVoice(-1);
       feedback('Chương trước');
       return;
     }
-    if (commandIncludes(command, ['trang sau', 'next page'])) {
+    if (wordMatches(command, 'trang sau') || wordMatches(command, 'next page')) {
       handleNext();
       feedback('Trang sau');
       return;
     }
-    if (commandIncludes(command, ['trang truoc', 'previous page', 'back page'])) {
+    if (wordMatches(command, 'trang truoc') || wordMatches(command, 'previous page') || wordMatches(command, 'back page')) {
       handlePrev();
       feedback('Trang trước');
       return;
     }
-    if (commandIncludes(command, ['nhanh hon', 'tang toc', 'faster'])) {
+    if (wordMatches(command, 'nhanh hon') || wordMatches(command, 'tang toc') || wordMatches(command, 'faster')) {
       setTtsSpeed((v) => Math.min(2.5, Math.round((v + 0.1) * 100) / 100));
       feedback('Tăng tốc');
       return;
     }
-    if (commandIncludes(command, ['cham hon', 'giam toc', 'slower'])) {
+    if (wordMatches(command, 'cham hon') || wordMatches(command, 'giam toc') || wordMatches(command, 'slower')) {
       setTtsSpeed((v) => Math.max(0.5, Math.round((v - 0.1) * 100) / 100));
       feedback('Giảm tốc');
       return;
     }
-    if (commandIncludes(command, ['toc do binh thuong', 'normal speed'])) {
+    if (wordMatches(command, 'toc do binh thuong') || wordMatches(command, 'normal speed')) {
       setTtsSpeed(1);
       feedback('Tốc độ thường');
       return;
     }
-    if (commandIncludes(command, ['danh dau', 'bookmark'])) {
+    if (wordMatches(command, 'danh dau') || wordMatches(command, 'bookmark')) {
       toggleBookmark();
       feedback('Đánh dấu');
       return;
@@ -3501,6 +4054,13 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       voicePreviewAudioRef.current = null;
     }
     setPreviewingVoice(voiceName);
+    // S3 fix (2026-07-08): track the URL outside the try-block so we can
+    // revoke it in BOTH the normal-end and play()-rejection paths.
+    // Before: `URL.createObjectURL(blob)` ran but `onerror` doesn't fire
+    // on autoplay rejection, `onended` doesn't fire if the audio never
+    // started, and the catch-block didn't revoke the URL. Repeated
+    // previews accumulated leaked blob URLs in memory.
+    let url: string | null = null;
     try {
       const r = await fetch('/api/tts/preview', {
         method: 'POST',
@@ -3517,13 +4077,25 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         throw new Error(detail.error ?? `HTTP ${r.status}`);
       }
       const blob = await r.blob();
-      const url = URL.createObjectURL(blob);
+      url = URL.createObjectURL(blob);
       const audio = new Audio(url);
       voicePreviewAudioRef.current = audio;
-      audio.onended = () => { URL.revokeObjectURL(url); setPreviewingVoice(null); voicePreviewAudioRef.current = null; };
-      audio.onerror = () => { URL.revokeObjectURL(url); setPreviewingVoice(null); voicePreviewAudioRef.current = null; };
-      await audio.play();
+      const cleanup = () => {
+        try { URL.revokeObjectURL(url!); } catch { /* already revoked */ }
+        setPreviewingVoice(null);
+        voicePreviewAudioRef.current = null;
+      };
+      audio.onended = cleanup;
+      audio.onerror = cleanup;
+      // play() can reject with NotAllowedError if the tab lost focus, or
+      // with AbortError on rapid previews. Either way `onended`/`onerror`
+      // don't fire — so revoke here as well.
+      audio.play().catch((err) => {
+        console.warn('[tts preview] play() rejected — revoking URL', err);
+        cleanup();
+      });
     } catch (e) {
+      if (url) { try { URL.revokeObjectURL(url); } catch { /* ignore */ } }
       console.warn('[tts preview]', e);
       setPreviewingVoice(null);
     }
@@ -3653,6 +4225,22 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         <Link href="/library" title="Back">
           <Button variant="ghost" size="icon" className="h-8 w-8"><Home className="h-4 w-4" /></Button>
         </Link>
+        <Link href={`/library/${bookId}`} title="Thông tin sách & AI Illustrations">
+          <Button variant="ghost" size="icon" className="h-8 w-8"><Info className="h-4 w-4" /></Button>
+        </Link>
+        {/* Gallery of all AI-generated chapter illustrations. Click a
+            thumbnail in the side panel to jump to that chapter. The
+            panel sits on the right so the current chapter stays visible
+            alongside, mirroring the Watermark / Bookmarks / TTS panels. */}
+        <Tooltip content={<span>Gallery ảnh (G)</span>} side="bottom">
+          <button onClick={() => { setGalleryOpen((o) => !o); setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); }}
+            aria-label="Image gallery"
+            data-testid="gallery-toggle"
+            className={cn('flex h-8 w-8 items-center justify-center rounded-md transition-colors border border-border', galleryOpen ? activeCls : `border-transparent ${hoverCls}`)}
+            title="Gallery ảnh">
+            <Images className="h-4 w-4" />
+          </button>
+        </Tooltip>
         <Tooltip content={<span className="inline-flex items-center gap-1.5">Mục lục <KbdHint keys={['T']} /></span>} side="bottom">
           <button onClick={() => { setTocOpen((o) => !o); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); }}
             data-testid="toc-toggle"
@@ -3971,7 +4559,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
           role="dialog"
           aria-modal="true"
           aria-labelledby="shortcuts-overlay-title"
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-modal-overlay p-4 animate-in fade-in"
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-modal-overlay/50 p-4 animate-in fade-in"
           onClick={() => setShortcutsOpen(false)}
         >
           <div
@@ -4395,6 +4983,27 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
           )}
         </NavPanel>
 
+        {/* Image gallery panel — every AI-generated chapter illustration
+            as a thumbnail. Click jumps the reader to that chapter. Closes
+            any other right-side panel. */}
+        <NavPanel side="right" open={galleryOpen}>
+          <div className={cn('flex items-center justify-between px-4 py-3 border-b shrink-0', dividerCls)}>
+            <span className="font-semibold text-sm flex items-center gap-1.5">
+              <Images className="h-3.5 w-3.5" /> Gallery ảnh
+            </span>
+            <button onClick={() => setGalleryOpen(false)} className={cn('rounded p-1', hoverCls)}>
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-4">
+            <IllustrationsGallery
+              bookId={bookId}
+              currentChapterIdx={currentIdx}
+              onJumpChapter={(idx) => { goToChapter(idx); setGalleryOpen(false); }}
+            />
+          </div>
+        </NavPanel>
+
         {/* Audio panel: live read-aloud, pre-generated audiobook, and voices */}
         <aside
           onClick={(e) => e.stopPropagation()}
@@ -4485,6 +5094,8 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
                   pregenStatus={pregenStatus}
                   useAIEmotion={ttsUseAI}
                   setUseAIEmotion={setTtsUseAI}
+                  emotionIntensity={ttsEmotionIntensity}
+                  setEmotionIntensity={setTtsEmotionIntensity}
                   ttsState={ttsState}
                   ttsParagraphs={ttsParagraphs}
                   ttsIndex={ttsIndex}
@@ -4707,7 +5318,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         <div
           data-testid="analyzer-modal-backdrop"
           aria-hidden="true"
-          className="fixed inset-0 z-[100] bg-modal-overlay animate-in fade-in pointer-events-none"
+          className="fixed inset-0 z-[100] bg-modal-overlay/50 animate-in fade-in pointer-events-none"
         />,
         document.body,
       )}

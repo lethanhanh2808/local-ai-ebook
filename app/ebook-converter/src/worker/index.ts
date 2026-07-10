@@ -85,13 +85,13 @@ getWorkerConcurrency().then((n) => { activeConcurrency = n; });
 const worker = new Worker<ConversionJobData>(
   QUEUE_NAME,
   async (job) => {
-    const { jobId, inputPath, originalExt, filename, aiEnhance, aiWatermarkClean, deepFormat, aiPrompt } = job.data;
+    const { jobId, inputPath, originalExt, filename, aiEnhance, aiWatermarkClean, deepFormat, readerFriendly, aiPrompt } = job.data;
 
     // Reset per-job log
     try { fs.writeFileSync(jobLogPath(jobId), ''); } catch { /* noop */ }
     const log = (level: LogEntry['level'], stage: string, message: string, meta?: LogEntry['meta']) =>
       appendLog(jobId, { ts: Date.now(), level, stage, message, meta });
-    log('info', 'start', `Job ${jobId} starting`, { aiEnhance, aiWatermarkClean, deepFormat });
+    log('info', 'start', `Job ${jobId} starting`, { aiEnhance, aiWatermarkClean, deepFormat, readerFriendly });
     // Persist logPath immediately so the Debug Console button can appear in
     // JobCard as soon as the job starts (not just at completion).
     try { await updateJob(jobId, { logPath: jobLogPath(jobId) }); } catch { /* noop */ }
@@ -142,6 +142,7 @@ const worker = new Worker<ConversionJobData>(
         aiEnhance: aiEnhance ?? false,
         aiWatermarkClean: aiWatermarkClean ?? false,
         deepFormat: deepFormat ?? false,
+        readerFriendly: readerFriendly ?? false,
         aiPrompt,
         // Per-chapter AI stats callback: each AI call reports tokens + duration
         onAiCall: (stats) => {

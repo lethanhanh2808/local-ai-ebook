@@ -5,21 +5,19 @@
 // Used by the CharacterDetection panel's "nghe thử" button so users can
 // audition a voice before assigning it to a character.
 //
-// Body: { voice: "Bình An", text?: string, language?: "vi"|"en", speed?: number }
+// Body: { voice: "Xuân Vĩnh", text?: string, language?: "vi"|"en", speed?: number }
 //   - "voice" can be either a built-in VieNeu voice name OR a Voice row ID
 //     (UUID). If it looks like a UUID we look it up and use its refAudioPath
 //     for voice cloning.
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import { getVoice } from '@/lib/db/voices';
+import { BUILTIN_VIENEU_NAMES } from '@/lib/tts/vieneu-voices';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const BUILTIN_VIENEU = new Set([
-  'Ngọc Lan', 'Gia Bảo', 'Thái Sơn', 'Đức Trí', 'Mỹ Duyên',
-  'Trúc Ly', 'Xuân Vĩnh', 'Trọng Hữu', 'Bình An', 'Ngọc Linh',
-]);
+const BUILTIN_VIENEU = new Set(BUILTIN_VIENEU_NAMES);
 
 const UNIFIED_TTS_URL = process.env.UNIFIED_TTS_URL ?? process.env.TTS_SERVICE_URL ?? 'http://127.0.0.1:5010';
 const DEFAULT_PREVIEW = 'Xin chào bạn đọc, đây là giọng của tôi.';

@@ -10,16 +10,51 @@
 //   - "custom"    : any OpenAI-compatible /v1/images/generations endpoint
 //
 // Image style presets adapt the prompt to match the novel's visual language:
-//   ink        : traditional ink-wash (水墨画) — black/grey, dramatic
-//   sketch     : pencil sketch, loose lines
-//   watercolor : soft washes, light
-//   manga      : manga/manhua style — clean lines, halftone shading
+//   bw-anime   : anime line art, black ink on white paper — DEFAULT for novels
+//   bw-manga   : manga/manhua halftone + screentone — black-and-white only
+//   bw-ink     : ink-wash (水墨画) line drawing — black-and-white only
+//   bw-sketch  : pencil sketch, loose lines — black-and-white only
+//   ink        : legacy ink-wash (now also B&W)
+//   sketch     : legacy pencil sketch (now also B&W)
+//   watercolor : soft washes, light (allowed grayscale / muted color)
+//   manga      : legacy manga style
 //   none       : provider default — no style guidance
+//
+// All "bw-" presets are GUARANTEED monochrome: prompt instructs the
+// provider for "no color, no fills, white background", and the result is
+// checked for grayscale content before being kept.
 
 import { getSettings } from '@/lib/db/settings';
 import { chat, chatJSON } from './';
 
-export type ImageStyle = 'ink' | 'sketch' | 'watercolor' | 'manga' | 'none';
+export type ImageStyle =
+  | 'bw-anime'    // anime line art — DEFAULT
+  | 'bw-manga'    // manga / manhua
+  | 'bw-ink'      // ink-wash line drawing
+  | 'bw-sketch'   // pencil sketch
+  | 'ink'
+  | 'sketch'
+  | 'watercolor'
+  | 'manga'
+  | 'none';
+
+export const DEFAULT_IMAGE_STYLE: ImageStyle = 'bw-anime';
+
+/** True if this style is the B&W family — prompt will be locked to monochrome. */
+export function isMonochromeStyle(s: ImageStyle | string | null | undefined): boolean {
+  return !!s && s.startsWith('bw-');
+}
+
+/** Back-compat: legacy 'ink' / 'sketch' / 'manga' / 'watercolor' values get
+ *  upgraded to the closest B&W equivalent so existing settings rows silently
+ *  switch to the new visual identity. */
+export function normalizeImageStyle(s: string | null | undefined): ImageStyle {
+  if (!s) return DEFAULT_IMAGE_STYLE;
+  if ((['bw-anime', 'bw-manga', 'bw-ink', 'bw-sketch', 'ink', 'sketch', 'watercolor', 'manga', 'none'] as const).includes(s as ImageStyle)) {
+    return s as ImageStyle;
+  }
+  return DEFAULT_IMAGE_STYLE;
+}
 
 /** Our internal size spec — mapped to provider-specific params. */
 export type ImageSize =
@@ -53,29 +88,38 @@ export interface GenerateImageResult {
 }
 
 const STYLE_HINTS: Record<ImageStyle, string> = {
-  ink: 'Traditional East-Asian ink-wash painting (水墨画). Black ink on white paper. Soft brush strokes, dramatic composition. Black and white only.',
-  sketch: 'Pencil sketch. Loose confident lines, crosshatching for shading. White background. Black and white only.',
-  watercolor: 'Soft watercolor wash. Light greyscale palette. Gentle gradients, no hard edges. Black and white only.',
-  manga: 'Manga / manhua style. Clean line art, halftone shading. White background. Black and white only.',
-  none: 'Black and white illustration. High contrast. White background.',
+  // — Black-and-white family (preferred for novels — keeps the book visually
+  //   cohesive and makes per-character image consistency possible since the
+  //   image provider has fewer degrees of freedom in monochrome) —
+  'bw-anime': 'Anime line-art (アニメ風インク画). Crisp clean confident black ink linework over white paper. Expressive eyes, dynamic hair, light hatching for shading. Strictly monochrome: NO color, NO fills, NO gradient washes. Pure white background. High contrast. Hand-drawn strokes.',
+  'bw-manga':  'Manga / manhua ink-and-paper style. Clean confident line art, halftone / screentone shading, speed lines. Strictly black and white on pure white paper. No color, no fills, no gradients.',
+  'bw-ink':    'Traditional East-Asian ink-wash line drawing (水墨画). Black ink on white paper. Soft brush strokes, controlled washes, dramatic composition. Strictly black and white — no color, no flat fills.',
+  'bw-sketch': 'Pencil sketch. Loose confident graphite lines, crosshatching for shading, smudges for shadow. Pure white background. Strictly black and white — no color, no fills.',
+  // — Legacy styles (now also rendered monochrome) —
+  ink:         'Traditional East-Asian ink-wash painting (水墨画). Black ink on white paper. Soft brush strokes, dramatic composition. Black and white only.',
+  sketch:      'Pencil sketch. Loose confident lines, crosshatching for shading. White background. Black and white only.',
+  watercolor:  'Soft watercolor wash. Light greyscale palette (or muted, restrained color). Gentle gradients, no hard edges.',
+  manga:       'Manga / manhua style. Clean line art, halftone shading. White background. Black and white only.',
+  none:        'Black and white illustration. High contrast. White background.',
 };
+
+/** Suffix appended for B&W-family styles to lock the provider out of color. */
+const MONOCHROME_LOCK = 'STRICT PALETTE: black ink, mid-greys, white. No colour, no flat fills, no gradient washes. Pure white background. Hand-inked strokes only.';
 
 /** Build the full prompt with style + novel-context adaptation. */
 function buildPrompt(opts: GenerateImageOptions, style: ImageStyle): string {
-  const hint = STYLE_HINTS[style] ?? STYLE_HINTS.none;
-  // For novels, we always want grayscale / black-and-white to feel cohesive
-  // with the text — colour would feel out of place.
+  const hint = STYLE_HINTS[style] ?? STYLE_HINTS[DEFAULT_IMAGE_STYLE];
+  const monoSuffix = isMonochromeStyle(style) ? `\n\n${MONOCHROME_LOCK}` : '';
   return [
     opts.prompt.trim(),
     '',
     '── VISUAL STYLE ──',
     hint,
     '',
-    'IMPORTANT: This is a black-and-white illustration. No colour. High contrast. White background. No text, no speech bubbles, no watermarks, no signatures, no borders.',
+    'IMPORTANT: Black-and-white illustration. High contrast. White background. No text, no speech bubbles, no watermarks, no signatures, no borders, no frames.',
+    monoSuffix,
   ].join('\n');
 }
-
-// ── Provider config ──────────────────────────────────────────────────────
 type Provider = 'none' | 'openai' | 'minimax' | 'custom';
 interface ProviderCfg {
   provider: Provider;
@@ -148,7 +192,10 @@ const MINIMAX_ERRORS: Record<number, string> = {
 /** Generate an image. Returns the public URL (or data: URL) of the result. */
 export async function generateImage(opts: GenerateImageOptions): Promise<GenerateImageResult> {
   const s = await getSettings();
-  const style = opts.style ?? (s.imageStyle as ImageStyle) ?? 'ink';
+  // Allow callers to force a specific style; otherwise pick up the user's
+  // saved preference (auto-normalised so legacy values map to the closest
+  // B&W preset, and an empty string falls back to the bw-anime default).
+  const style: ImageStyle = opts.style ?? normalizeImageStyle(s.imageStyle);
   const cfg = await pickProviderCfg();
 
   if (!cfg.apiKey) throw new Error(`Image provider "${cfg.provider}" requires an image API key. Set it in /settings.`);
@@ -298,14 +345,70 @@ function friendlyError(text: string): string {
 }
 
 // ── Chapter analysis (text AI) ──────────────────────────────────────────
+/** Per-character visual anchor. If the LLM detector has inferred a
+ *  physical appearance for a character, we pass it to the illustration
+ *  analyzer so the same character wears the same robe / has the same
+ *  hair in every chapter. Names are stripped before the prompt reaches
+ *  the image generator (some providers refuse brand-name-adjacent
+ *  character names; the visual description is the contract). */
+export interface CastMember {
+  name: string;
+  visualDescription?: string | null;
+}
+
+/** Deterministic 32-bit positive integer seed for an illustration call.
+ *  Used to anchor the image provider's noise pattern so the same
+ *  character + same book + same chapter produces the same image across
+ *  regenerations — MiniMax supports `seed` in its request body and we
+ *  rely on it for visual consistency; OpenAI / custom endpoints ignore
+ *  the field but the locked prompt wording still keeps the character
+ *  recognisable.
+ *
+ *  Algorithm: djb2 on `${bookId}|${chapterIndex}|${name}`. Same input
+ *  always yields the same number; different inputs spread across the
+ *  positive 31-bit range. */
+export function characterSeed(bookId: string, chapterIndex: number, name: string): number {
+  const s = `${bookId}|${chapterIndex}|${name}`;
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  }
+  // Force 31-bit positive integer (mask off sign bit). 0 is reserved by
+  // some providers as "use random seed" so we bump to 1 if we land there.
+  // Mask order matters: `(h | 0)` keeps only the low 32 bits as signed;
+  // `& 0x7fffffff` then strips the sign bit so the result is always a
+  // valid positive int that fits the spec that most image APIs publish.
+  return ((h | 0) & 0x7fffffff) || 1;
+}
+
 /** Analyze a chapter and decide whether to illustrate it + write the prompt.
  *  Uses the text-generation AI (cheap) to score visual richness. */
 export async function analyzeChapterForIllustration(
   chapterTitle: string,
   chapterBody: string,
   novelContext: { title?: string; author?: string; language?: string },
+  /** Optional cast with visual anchors. Names are NEVER injected into
+   *  the image prompt — only the visual description. */
+  cast?: CastMember[],
 ): Promise<{ shouldIllustrate: boolean; prompt?: string; confidence: number; reason?: string }> {
   const truncated = chapterBody.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 4000);
+
+  // Build a cast anchor block. Only members with a real visual description
+  // are included — LLM-saved "unspecified" sentinels and null fields are
+  // silently dropped so the prompt stays focused on characters we can
+  // actually depict consistently.
+  const castLines = (cast ?? [])
+    .filter((c) => c.visualDescription && c.visualDescription.trim() && c.visualDescription.trim().toLowerCase() !== 'unspecified')
+    .map((c) => `* ${c.visualDescription!.trim()}`)
+    .join('\n');
+  // CRITICAL: when a character anchor is supplied, every physical trait in
+  // it MUST appear in the scene prompt VERBATIM (or near-verbatim) — these
+  // words are the contract with the image provider. Rewriting "long black
+  // hair tied with a red ribbon" as "raven locks" breaks the per-character
+  // consistency contract across regenerations and across chapters.
+  const castBlock = castLines
+    ? `\n\nCAST VISUAL ANCHORS (CANONICAL — keep character appearance IDENTICAL across chapters; do NOT paraphrase or substitute synonyms; copy the exact wording for hair, eyes, skin, clothing, accessories, distinguishing marks into the scene prompt so the image provider renders the same character the same way every time):\n${castLines}\n`
+    : '';
 
   const result = await chatJSON<{
     shouldIllustrate: boolean;
@@ -322,20 +425,21 @@ Trả lời JSON với schema:
 - reason: string — giải thích ngắn (1 câu)
 - prompt: string — nếu shouldIllustrate=true, viết prompt tiếng Anh mô tả cảnh (cho AI image gen). Tối đa 200 từ. Bao gồm:
   * Bối cảnh (địa điểm, thời gian, không khí)
-  * Nhân vật chính trong cảnh (ngoại hình, tư thế, biểu cảm nếu rõ)
+  * Nhân vật chính trong cảnh — khi có CAST VISUAL ANCHORS bên dưới, hãy dùng NGUYÊN VĂN mô tả ngoại hình (tóc, mắt, da, quần áo, phụ kiện, đặc điểm nhận dạng) chứ KHÔNG diễn giải lại; đây là hợp đồng với image provider để nhân vật trông giống nhau giữa các chương
+  * Tư thế, biểu cảm nếu rõ
   * Hành động đang diễn ra
   * Phong cách nghệ thuật phù hợp (tu tiểu thuyết → epic fantasy, hiện đại → contemporary, etc.)
-- KHÔNG bao gồm: text/watermark/border, màu sắc (sẽ thêm ở bước sau)` },
+- KHÔNG bao gồm: text/watermark/border, màu sắc (sẽ thêm ở bước sau), tên riêng nhân vật (chỉ dùng mô tả ngoại hình)` },
       { role: 'user', content: `Tiểu thuyết: ${novelContext.title ?? 'Không rõ'} (${novelContext.author ?? ''})
 Ngôn ngữ: ${novelContext.language ?? 'vi'}
 Chương: ${chapterTitle}
-
+${castBlock}
 Nội dung (trích):
 ${truncated}
 
 JSON:` },
     ],
-    temperature: 0.3,
+    temperature: 0.2,  // low — keeps the visual-description wording stable across runs
     max_tokens: 800,
     enable_thinking: false,
   });

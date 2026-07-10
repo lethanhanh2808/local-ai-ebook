@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, BookMarked, Plus, Trash2, Search, BookOpen, Loader2, X,
-  LayoutGrid, List, ChevronDown,
+  LayoutGrid, List, ChevronDown, Info,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -304,10 +304,15 @@ export default function ShelfDetailPage({ params }: { params: { id: string } }) 
                     <div className="h-full bg-primary" style={{ width: `${book.readProgress}%` }} />
                   </div>
                 )}
-                <div className="absolute inset-0 bg-modal-overlay opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                <div className="absolute inset-0 bg-modal-overlay/70 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5">
                   <Link href={`/library/${book.id}/read`}
                     className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[11px] font-medium text-primary-foreground hover:bg-primary/90">
                     <BookOpen className="h-3 w-3" /> Read
+                  </Link>
+                  <Link href={`/library/${book.id}`}
+                    className="flex items-center gap-1 rounded-md bg-background/90 px-2.5 py-1.5 text-[11px] font-medium text-foreground hover:bg-background"
+                    title="Thông tin sách & AI Illustrations">
+                    <Info className="h-3 w-3" /> Info
                   </Link>
                 </div>
               </div>
@@ -361,6 +366,11 @@ export default function ShelfDetailPage({ params }: { params: { id: string } }) 
                 <Link href={`/library/${book.id}/read`}
                   className="flex items-center gap-1 rounded-md bg-primary px-2 py-1.5 text-[11px] font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
                   <BookOpen className="h-3 w-3" /> Read
+                </Link>
+                <Link href={`/library/${book.id}`}
+                  className="flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1.5 text-[11px] font-medium text-foreground hover:bg-muted transition-colors"
+                  title="Thông tin sách & AI Illustrations">
+                  <Info className="h-3 w-3" /> Info
                 </Link>
                 <Button size="sm" variant="ghost" className="px-2 text-destructive hover:bg-destructive/10"
                   onClick={() => handleRemove(book.id)} disabled={removing === book.id}>

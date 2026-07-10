@@ -44,6 +44,7 @@ export interface CharacterBibleView {
     description: string | null;
     personality: string | null;
     speechStyle: string | null;
+    visualDescription: string | null;
     source: ProfileSource;
     version: number;
     updatedAt: Date;
@@ -87,11 +88,12 @@ export interface BibleDiffPatch {
     role?: 'main' | 'supporting' | 'minor' | 'crowd';
   };
   kind: 'new' | 'update' | 'relationship' | 'appearance';
-  /** For kind='update': one or more of description/personality/speechStyle. */
+  /** For kind='update': one or more of description/personality/speechStyle/visualDescription. */
   updateFields?: Partial<{
     description: string;
     personality: string;
     speechStyle: string;
+    visualDescription: string;
   }>;
   /** For kind='relationship'. Either both id fields present, or LLM may
    *  supply just the names and let the worker resolve them. */
@@ -142,11 +144,12 @@ export async function setProfile(args: {
   description?: string | null;
   personality?: string | null;
   speechStyle?: string | null;
+  visualDescription?: string | null;
   source: ProfileSource;
   /** Per-field sources: { description?: 'llm'|'user', ... }. Only fields
    *  explicitly listed are set; unlisted fields keep their prior lock
    *  state. Pass undefined to leave the row's fieldSources alone. */
-  fieldSources?: Partial<Record<'description' | 'personality' | 'speechStyle', 'llm' | 'user' | null>>;
+  fieldSources?: Partial<Record<'description' | 'personality' | 'speechStyle' | 'visualDescription', 'llm' | 'user' | null>>;
   /** When true, overwrites any existing per-field user lock. Default false. */
   force?: boolean;
 }): Promise<{ updated: boolean; reason?: string }> {
@@ -158,11 +161,11 @@ export async function setProfile(args: {
   }
   // Merge fieldSources: existing map + new entries (new wins).
   const priorMap = parseFieldSources(existing?.fieldSources);
-  const newMap = { ...priorMap };
+  const newMap: Record<string, 'llm' | 'user'> = { ...priorMap };
   if (args.fieldSources) {
     for (const [k, v] of Object.entries(args.fieldSources)) {
-      if (v === null) delete newMap[k as keyof typeof newMap];
-      else newMap[k as keyof typeof newMap] = v;
+      if (v === null) delete newMap[k];
+      else newMap[k] = v;
     }
   }
   // Aggregate source: 'user' if ANY field is user-locked, else 'mixed' if
@@ -177,6 +180,7 @@ export async function setProfile(args: {
     description: args.description !== undefined ? args.description : undefined,
     personality: args.personality !== undefined ? args.personality : undefined,
     speechStyle: args.speechStyle !== undefined ? args.speechStyle : undefined,
+    visualDescription: args.visualDescription !== undefined ? args.visualDescription : undefined,
     fieldSources: Object.keys(newMap).length > 0 ? JSON.stringify(newMap) : null,
     source: aggregateSource,
     version: (existing?.version ?? 0) + 1,
@@ -188,6 +192,8 @@ export async function setProfile(args: {
       description: args.description ?? null,
       personality: args.personality ?? null,
       speechStyle: args.speechStyle ?? null,
+      visualDescription: args.visualDescription ?? null,
+      visualSource: args.visualDescription != null ? 'llm' : null,
       fieldSources: Object.keys(newMap).length > 0 ? JSON.stringify(newMap) : null,
       source: aggregateSource,
       version: 1,
@@ -212,19 +218,20 @@ export async function mergeLlmProfilePatch(args: {
   description?: string | null;
   personality?: string | null;
   speechStyle?: string | null;
+  visualDescription?: string | null;
 }): Promise<{
-  applied: Array<'description' | 'personality' | 'speechStyle'>;
-  skipped: Array<'description' | 'personality' | 'speechStyle'>;
-  conflicts: Array<'description' | 'personality' | 'speechStyle'>;
+  applied: Array<'description' | 'personality' | 'speechStyle' | 'visualDescription'>;
+  skipped: Array<'description' | 'personality' | 'speechStyle' | 'visualDescription'>;
+  conflicts: Array<'description' | 'personality' | 'speechStyle' | 'visualDescription'>;
 }> {
-  const applied: Array<'description' | 'personality' | 'speechStyle'> = [];
-  const skipped: Array<'description' | 'personality' | 'speechStyle'> = [];
-  const conflicts: Array<'description' | 'personality' | 'speechStyle'> = [];
+  const applied: Array<'description' | 'personality' | 'speechStyle' | 'visualDescription'> = [];
+  const skipped: Array<'description' | 'personality' | 'speechStyle' | 'visualDescription'> = [];
+  const conflicts: Array<'description' | 'personality' | 'speechStyle' | 'visualDescription'> = [];
   const existing = await prisma.characterProfile.findUnique({
     where: { characterId: args.characterId },
   });
-  const fields: Array<'description' | 'personality' | 'speechStyle'> = [
-    'description', 'personality', 'speechStyle',
+  const fields: Array<'description' | 'personality' | 'speechStyle' | 'visualDescription'> = [
+    'description', 'personality', 'speechStyle', 'visualDescription',
   ];
   const fieldMap = parseFieldSources(existing?.fieldSources);
   // Per-field fallback to row-level source when fieldSources is empty
@@ -263,7 +270,7 @@ export async function mergeLlmProfilePatch(args: {
   // Apply the non-conflicting fields; clear any per-field source for the
   // fields we just overwrote (a user-locked field would have been in
   // `skipped` already).
-  const newMap = { ...fieldMap };
+  const newMap: Record<string, 'llm' | 'user'> = { ...fieldMap };
   for (const f of applied) delete newMap[f];
   const aggregateSource: ProfileSource =
     Object.values(newMap).some((v) => v === 'user') ? 'user' :
@@ -277,6 +284,7 @@ export async function mergeLlmProfilePatch(args: {
   if (applied.includes('description')) update.description = args.description ?? null;
   if (applied.includes('personality')) update.personality = args.personality ?? null;
   if (applied.includes('speechStyle')) update.speechStyle = args.speechStyle ?? null;
+  if (applied.includes('visualDescription')) update.visualDescription = args.visualDescription ?? null;
   await prisma.characterProfile.upsert({
     where: { characterId: args.characterId },
     create: {
@@ -284,6 +292,7 @@ export async function mergeLlmProfilePatch(args: {
       description: applied.includes('description') ? (args.description ?? null) : (existing?.description ?? null),
       personality: applied.includes('personality') ? (args.personality ?? null) : (existing?.personality ?? null),
       speechStyle: applied.includes('speechStyle') ? (args.speechStyle ?? null) : (existing?.speechStyle ?? null),
+      visualDescription: applied.includes('visualDescription') ? (args.visualDescription ?? null) : (existing?.visualDescription ?? null),
       fieldSources: update.fieldSources as string | null,
       source: aggregateSource,
       version: 1,
@@ -307,13 +316,13 @@ function fieldMatchesExisting(existing: string, proposed: string | null): boolea
 
 /** Parse the JSON in fieldSources, tolerating garbage. Returns an empty
  *  object when the column is null or unparseable. */
-function parseFieldSources(s: string | null | undefined): Partial<Record<'description' | 'personality' | 'speechStyle', 'llm' | 'user'>> {
+function parseFieldSources(s: string | null | undefined): Partial<Record<'description' | 'personality' | 'speechStyle' | 'visualDescription', 'llm' | 'user'>> {
   if (!s) return {};
   try {
     const v = JSON.parse(s);
     if (!v || typeof v !== 'object') return {};
-    const out: Partial<Record<'description' | 'personality' | 'speechStyle', 'llm' | 'user'>> = {};
-    for (const k of ['description', 'personality', 'speechStyle'] as const) {
+    const out: Partial<Record<'description' | 'personality' | 'speechStyle' | 'visualDescription', 'llm' | 'user'>> = {};
+    for (const k of ['description', 'personality', 'speechStyle', 'visualDescription'] as const) {
       const x = v[k];
       if (x === 'llm' || x === 'user') out[k] = x;
     }
@@ -697,6 +706,7 @@ export async function getCharacterBible(bookId: string): Promise<CharacterBibleV
         description: p.description,
         personality: p.personality,
         speechStyle: p.speechStyle,
+        visualDescription: p.visualDescription,
         source: p.source as ProfileSource,
         version: p.version,
         updatedAt: p.updatedAt,

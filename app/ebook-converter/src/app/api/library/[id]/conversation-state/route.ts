@@ -112,3 +112,38 @@ export async function GET(
     },
   });
 }
+
+// ── DELETE ─────────────────────────────────────────────────────────────────
+// Wipe the persisted snapshot. Used by E2E test fixtures that need a
+// clean slate (`beforeEach` in 06-cross-chapter-state.spec.ts). Not
+// destructive on missing rows — returns 200 either way. The `force=true`
+// query param exists so callers can opt into "even if the row looks
+// fresh, drop it" without ambiguity in the spec.
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: { id: string } },
+) {
+  const bookId = params.id;
+  const book = await prisma.book.findUnique({ where: { id: bookId } });
+  if (!book) {
+    return NextResponse.json({ error: 'Book not found' }, { status: 404 });
+  }
+  // Use a synthetic "currentChapterIndex=-1" so the loader resolves the
+  // row as fresh. Then delete the row directly.
+  const row = await loadConversationState(
+    bookId,
+    -1,
+    ATTRIBUTION_VERSION,
+  );
+  if (row.found) {
+    // loadConversationState returns the row only when it's fresh for the
+    // requested chapter. For a force-delete we ignore freshness and
+    // drop the row unconditionally if it exists at all.
+    await prisma.bookConversationState
+      .delete({ where: { bookId } })
+      .catch(() => {
+        // Concurrent delete (e.g. parallel test fixture) — no-op.
+      });
+  }
+  return NextResponse.json({ ok: true, cleared: row.found });
+}

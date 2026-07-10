@@ -15,7 +15,8 @@ import { buildEpub, ChapterEntry } from './epub-builder';
 import { generateEpubMetadata, detectChapters } from '../ai/epub-analyzer';
 import { enhanceChaptersParallel } from '../ai/chapter-enhancer';
 import { formatChapters as formatChaptersDeep } from '../ai/chapter-formatter';
-import { buildChapterHtml, extractChapterBodyFragment } from './epub-styler';
+import { buildChapterHtml, extractChapterBodyFragment, READER_FRIENDLY_CSS } from './epub-styler';
+import { listWatermarkPhrases, rememberWatermark, touchWatermark } from '../db/watermark-memory';
 
 export interface PipelineOptions {
   inputPath: string;
@@ -26,6 +27,13 @@ export interface PipelineOptions {
   aiWatermarkClean?: boolean;
   /** Slow-but-thorough Vietnamese-novel formatter (paragraphs, dialogue, scene breaks). */
   deepFormat?: boolean;
+  /** Reader-friendly mode: strip heavy CSS (animations, text-shadow, blur,
+   *  filter, hyphens, fixed-position decorative pseudos) and use a minimal
+   *  stylesheet so the output renders correctly on Onyx Boox (Neoreader),
+   *  Kobo Aura, Nook GlowLight, and older Kindle Paperwhite. Without this
+   *  flag, complex source EPUBs may show only the first 1–2 pages of each
+   *  chapter on those devices. */
+  readerFriendly?: boolean;
   aiPrompt?: string;
   onProgress?: (pct: number, stage: string) => void | Promise<void>;
   /** Per-AI-call stats callback for performance tracking (TOPS, tokens, etc). */
@@ -57,7 +65,7 @@ export interface PipelineResult {
 }
 
 export async function runConversionPipeline(opts: PipelineOptions): Promise<PipelineResult> {
-  const { inputPath, outputPath, onProgress, onAiCall, aiEnhance = false, aiWatermarkClean = false, deepFormat = false, aiPrompt } = opts;
+  const { inputPath, outputPath, onProgress, onAiCall, aiEnhance = false, aiWatermarkClean = false, deepFormat = false, readerFriendly = false, aiPrompt } = opts;
   const progress = async (pct: number, stage: string) => {
     await onProgress?.(pct, stage);
   };
@@ -199,8 +207,11 @@ export async function runConversionPipeline(opts: PipelineOptions): Promise<Pipe
   // When `deepFormat` is true, runs the new chapter-formatter module which
   // understands paragraph structure, dialogue attribution, scene breaks.
   // Processes chapters SEQUENTIALLY by default for best quality.
+  // Reader-friendly mode forces deepFormat off too — it's the slow path the
+  // user is explicitly trying to avoid when they need an Onyx Boox–safe EPUB
+  // in minutes instead of hours.
   let deepFormatAiCalls = 0;
-  if (deepFormat && chapters.length > 0) {
+  if (deepFormat && chapters.length > 0 && !readerFriendly) {
     aiUsed.deepFormat = true;
     const total = chapters.length;
     console.log(`[pipeline] Starting DEEP format for ${total} chapters (slow)…`);
@@ -249,7 +260,13 @@ export async function runConversionPipeline(opts: PipelineOptions): Promise<Pipe
   // ── Step 5.55: Light AI enhancement (optional, fast) ─────────────────
   // The light enhancer still runs when `aiEnhance` is true, even after deep
   // format — it adds watermarks/encoding fixes on top.
-  if (aiEnhance && chapters.length > 0 && !deepFormat) {
+  // Reader-friendly mode forces this off: the whole point of that mode is a
+  // quick conversion that just strips heavy CSS, and per-chapter LLM calls
+  // on a 798-chapter book take many hours. The user can still toggle AI
+  // enhancement back on after the first reader-friendly pass to fix the
+  // heavy-CSS issue, then re-run.
+  const skipAiEnhance = aiEnhance && chapters.length > 0 && !deepFormat && !readerFriendly;
+  if (skipAiEnhance) {
     aiUsed.repair = true;
     const total = chapters.length;
     console.log(`[pipeline] Starting light AI enhancement for ${total} chapters…`);
@@ -314,15 +331,50 @@ export async function runConversionPipeline(opts: PipelineOptions): Promise<Pipe
   }
 
   // ── Step 5.6: watermark detection + cleanup (optional) ───────────────
+  // Two-phase:
+  //   (a) Memory read — phrases from previous conversions that we can
+  //       strip straight away, no scan needed. Sub-millisecond for
+  //       O(10–50) typical catalog size.
+  //   (b) Fresh detection — runs the frequency scan only against the
+  //       phrases we haven't seen before. Whatever it finds joins the
+  //       strip list AND gets persisted to memory so the next book skips
+  //       this work entirely.
+  // The result: book #2 with the same publisher footer is detected in a
+  // single regex pass; book #100 is detected in zero passes.
   if (aiWatermarkClean && chapters.length > 1) {
     await progress(85, 'Detecting watermarks…');
-    const watermarkPhrases = detectWatermarkPhrases(chapters);
-    if (watermarkPhrases.length > 0) {
-      console.log(`[pipeline] Stripping ${watermarkPhrases.length} watermark phrase(s)`);
+    const memoryPhrases = await listWatermarkPhrases();
+    const memorySet = new Set(memoryPhrases);
+    const detectedPhrases = detectWatermarkPhrases(chapters);
+    // Anything from memory is always kept (cheap, already-known to be junk).
+    // Anything new that detection picked up is kept too — but only if it's
+    // *not* already in memory to avoid double-stripping (the strip regex
+    // is idempotent but a second pass still costs CPU).
+    const newOnes = detectedPhrases.filter((p) => !memorySet.has(p));
+    const allPhrases = [...memoryPhrases, ...newOnes];
+
+    if (allPhrases.length > 0) {
+      console.log(`[pipeline] Stripping ${allPhrases.length} watermark phrase(s) (${memoryPhrases.length} from memory, ${newOnes.length} freshly detected)`);
       chapters = chapters.map((ch) => ({
         ...ch,
-        html: stripPhrasesFromHtml(ch.html, watermarkPhrases),
+        html: stripPhrasesFromHtml(ch.html, allPhrases),
       }));
+      // Bump hitCount + lastSeenAt for memory-served phrases (per-book
+      // stats). Newly-detected phrases are inserted below — both paths
+      // move the counter forward by 1.
+      for (const p of memoryPhrases) {
+        await touchWatermark(p);
+      }
+    }
+    // Persist the new discoveries so the next upload skips them.
+    if (newOnes.length > 0) {
+      try {
+        for (const p of newOnes) await rememberWatermark(p, 'auto');
+        console.log(`[pipeline] Memorized ${newOnes.length} new watermark phrase(s)`);
+      } catch (err) {
+        // Non-fatal: memory write failure shouldn't fail the conversion.
+        console.warn('[pipeline] Failed to persist watermark memory:', err);
+      }
     }
   }
 
@@ -337,6 +389,13 @@ export async function runConversionPipeline(opts: PipelineOptions): Promise<Pipe
 
   // ── Step 7: build final EPUB ──────────────────────────────────────────
   await progress(90, 'Building EPUB…');
+  // Reader-friendly mode swaps in a minimal, e-ink-safe stylesheet so the
+  // output renders correctly on Onyx Boox (Neoreader), Kobo Aura, and older
+  // Kindles — devices whose renderers bail on heavy CSS (animations, blur,
+  // text-shadow, fixed-position decorative backgrounds, hyphens, columns).
+  // We deliberately don't include fontPaths in reader-friendly mode because
+  // some devices fail to resolve custom @font-face URLs and the renderer
+  // then stops laying out the chapter.
   await buildEpub(
     {
       title:       finalMeta.title,
@@ -344,7 +403,8 @@ export async function runConversionPipeline(opts: PipelineOptions): Promise<Pipe
       language:    finalMeta.language,
       description: finalMeta.description,
       chapters,
-      fontPaths,
+      fontPaths: readerFriendly ? undefined : fontPaths,
+      customCss:   readerFriendly ? READER_FRIENDLY_CSS : undefined,
     },
     outputPath,
   );

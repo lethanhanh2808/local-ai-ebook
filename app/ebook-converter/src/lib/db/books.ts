@@ -79,6 +79,7 @@ export async function updateBook(
   id: string,
   data: Partial<{
     title: string;
+    titleVi: string | null;
     author: string;
     language: string;
     description: string;
@@ -95,6 +96,11 @@ export async function updateBook(
     isFavorite: boolean;
     lastRead: Date;
     coverPath: string;
+    // File-related fields — only set by the in-place editor save.
+    // (Save-As creates a brand-new Book row instead.)
+    filePath: string;
+    fileSize: number;
+    originalFilename: string;
   }>,
 ) {
   const { tags, ...rest } = data;
@@ -244,6 +250,7 @@ export async function getLibraryStats() {
 function hydrateBook(book: {
   id: string;
   title: string;
+  titleVi?: string | null;
   author: string;
   language: string;
   description: string | null;
@@ -269,6 +276,7 @@ function hydrateBook(book: {
 }) {
   return {
     ...book,
+    titleVi: book.titleVi ?? null,
     tags: book.tags ? (JSON.parse(book.tags) as string[]) : [],
     watermarks: book.watermarks ? (JSON.parse(book.watermarks) as string[]) : [],
     series: book.series ?? null,

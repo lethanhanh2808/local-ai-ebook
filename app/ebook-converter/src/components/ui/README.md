@@ -137,20 +137,22 @@ slot. The analyzer drawer and Read-Aloud panel compose this; both pass
 </Sheet>
 ```
 
-### `<AlertDialog>`
+### `<ConfirmDialog>` (alert-style)
 
-**File:** `alert-dialog.tsx` (wraps `@radix-ui/react-alert-dialog`)
+**File:** `alert-dialog.tsx` (built on our hand-rolled `Dialog` primitive)
 
-Destructive confirms — focus is forced on the cancel button by default
-so a stray Enter doesn't trigger the dangerous action.
+Destructive confirms — backdrop click does NOT cancel by default, so the
+user must pick a button. Pairs naturally with a `variant="danger"`
+confirm action.
 
 ```tsx
-<AlertDialog
+<ConfirmDialog
   open={open} onOpenChange={setOpen}
   title="Dừng worker?"
   description="Mọi conversion đang chạy sẽ bị huỷ."
   confirmLabel="Dừng"
-  destructive
+  cancelLabel="Huỷ"
+  variant="danger"
   onConfirm={stopWorker}
 />
 ```

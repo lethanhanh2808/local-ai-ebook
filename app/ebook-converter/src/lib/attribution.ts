@@ -467,6 +467,27 @@ export interface LLMAttributionInput {
    *  populate `prevSpeaker` context for each LLM batch. */
   parserOut: ChapterAttributionMap;
   regexOut: ChapterAttributionMap;
+  /** Per-batch progress callback. Fires ONCE per batch (success OR failure),
+   *  after that batch's chatJSON() call resolves. Used by the analyze route
+   *  to stream log lines back to the modal so the user sees per-batch
+   *  progress ("Batch 12/60 ✓ · [44,45,46,47] · 18s · ETA ~88s") instead
+   *  of staring at a frozen spinner for the entire LLM step. */
+  onBatch?: (info: {
+    /** 1-based batch index within this LLM step. */
+    idx: number;
+    /** Total number of batches queued. */
+    total: number;
+    /** Paragraph indices this batch contained. */
+    indices: number[];
+    /** True if at least one row was attributed (or batch completed without
+     *  a hard failure). False if chatJSON rejected the response entirely. */
+    ok: boolean;
+    /** Wall time for this batch's chatJSON call. */
+    durationMs: number;
+    /** When `ok=false`, the error message that caused the batch to fail
+     *  (caught/swallowed by us so other batches keep running). */
+    error?: string;
+  }) => void;
 }
 
 /** Result of one batched LLM call. Entries have already been validated
@@ -635,7 +656,12 @@ export async function attributeByLLM(
   // Run batches with a small concurrency cap.
   const out: ChapterAttributionMap = {};
   let cursor = 0;
+  let completedBatches = 0;        // for ETA calculation in onBatch
   let failedBatches = 0;
+  const total = batches.length;
+  let batchStartedAt = 0;          // for per-batch wall-time
+  let batchHadError: string | null = null;
+  let batchHadAny = false;
   const worker = async () => {
     while (cursor < batches.length) {
       const myIdx = cursor++;
@@ -653,6 +679,10 @@ export async function attributeByLLM(
         }
       }
       const { system, user } = buildLLMPrompt(batch, contextByIdx, characterContext);
+      // Reset per-batch state, then run the LLM call.
+      batchHadError = null;
+      batchHadAny = false;
+      batchStartedAt = Date.now();
       try {
         const parsed = await chatJSON<LLMResponseRow[]>({
           messages: [
@@ -666,19 +696,35 @@ export async function attributeByLLM(
         });
         if (!Array.isArray(parsed)) {
           failedBatches++;
-          continue;
-        }
-        for (const row of parsed) {
-          const rowOut = validateLLMRow(row, batch, knownNames);
-          if (rowOut && rowOut.speaker) {
-            out[row.paragraphIdx] = rowOut;
+          batchHadError = 'invalid response shape (not an array)';
+        } else {
+          for (const row of parsed) {
+            const rowOut = validateLLMRow(row, batch, knownNames);
+            if (rowOut && rowOut.speaker) {
+              out[row.paragraphIdx] = rowOut;
+              batchHadAny = true;
+            }
           }
         }
-      } catch {
+      } catch (e) {
         // Bad JSON, timeout, provider error — mark this batch as failed.
         // Don't poison other batches.
         failedBatches++;
+        batchHadError = e instanceof Error ? e.message : String(e);
       }
+      completedBatches++;
+      // Fire the per-batch progress hook so the route can stream the
+      // event down to the modal. `ok` means "the call didn't throw + at
+      // least one row was attributed" — both layers failing is also a
+      // soft failure (LLM delivered nothing usable) and we surface it.
+      input.onBatch?.({
+        idx: myIdx + 1,
+        total,
+        indices: batch.map((p) => p.index),
+        ok: batchHadError === null && batchHadAny,
+        durationMs: Date.now() - batchStartedAt,
+        ...(batchHadError !== null ? { error: batchHadError } : {}),
+      });
     }
   };
   const workers = Array.from({ length: Math.min(LLM_CONCURRENCY, batches.length) }, () => worker());
@@ -1169,7 +1215,28 @@ export function attributeByConversation(
     if (implicitTurn && state.currentSpeaker) {
       const activeNames = [...state.activeCharacters.keys()];
       const otherActive = activeNames.filter((name) => name !== state.currentSpeaker);
-      if (activeNames.length === 2 && otherActive.length === 1) {
+      // Sensitivity fix (2026-07-08): the previous code always picked the
+      // alternation branch when two characters were active, even when the
+      // quote had NO character name mentioned. That made any one-sided
+      // monologue (or a turn that only uses pronouns like "Em/Anh") flip
+      // back and forth between speakers, because the OTHER speaker sat in
+      // activeCharacters from an earlier mention. The two cases need very
+      // different handling:
+      //   • No character name mentioned in the paragraph → the quote is
+      //     almost certainly a continuation of the previous speaker
+      //     (a thought, a follow-up, a "Vâng ạ."), so we strongly favor
+      //     the current speaker.
+      //   • A character name IS mentioned → that's the classic
+      //     "Chào Lan" pattern where the mention identifies the
+      //     addressee, and ping-pong alternation is the right prior.
+      const noNameQuote = mentions.length === 0;
+      if (noNameQuote) {
+        addScore(scores, state.currentSpeaker, 0.55, {
+          source: 'history',
+          weight: 0.55,
+          detail: 'unattributed quote with no character name — strong continuation of previous speaker',
+        });
+      } else if (activeNames.length === 2 && otherActive.length === 1) {
         const other = otherActive[0];
         const previousPrevious = state.dialogueHistory.at(-2)?.speaker ?? null;
         addScore(scores, other, previousPrevious === other ? 0.5 : 0.45, {
@@ -1245,6 +1312,55 @@ export function attributeByConversation(
   }
 
   return out;
+}
+
+// ── Legacy wrapper: `attributeConversationChapter` ──────────────────────────
+// Used by scripts/measure-attribution.ts and scripts/backfill-conversation-
+// state.ts. Older callers expected a different shape: { attribution, finalState }
+// where `finalState` is a ConversationStateSnapshot suitable for persisting
+// and seeding the next chapter. The modern route handler imports
+// `attributeByConversation` directly. This wrapper preserves the legacy
+// shape so the measure/backfill scripts build without code changes.
+//
+// `seedState` is accepted (but unused by attributeByConversation) for source
+// compatibility — the modern function applies its own carry-over logic via
+// `bookConversationState` reads inside the route.
+export interface LegacyChapterAttributionResult {
+  attribution: ChapterAttributionMap;
+  finalState: import('./db/chapter-attribution').ConversationStateSnapshot;
+}
+
+export function attributeConversationChapter(input: {
+  paragraphs: ParagraphRange[];
+  characters: CharacterLite[];
+  parserOut?: ChapterAttributionMap;
+  regexOut?: ChapterAttributionMap;
+  llmOut?: ChapterAttributionMap;
+  /** Legacy parameter — accepted but ignored. Conversation-state carry-over
+   *  happens through the BookConversationState row in the route handler. */
+  seedState?: unknown;
+}): LegacyChapterAttributionResult {
+  const attribution = attributeByConversation({
+    paragraphs: input.paragraphs,
+    characters: input.characters,
+    parserOut: input.parserOut ?? {},
+    regexOut: input.regexOut ?? {},
+    llmOut: input.llmOut ?? {},
+  });
+  // Synthesize an empty snapshot — the measure script only persists when
+  // --seed is set, and the real backfill logic lives in src/lib/db/
+  // conversation-state.ts. Empty snapshot is a safe no-op for back-compat.
+  const finalState: import('./db/chapter-attribution').ConversationStateSnapshot = {
+    sceneId: 0,
+    activeCharacters: [],
+    currentSpeaker: null,
+    previousSpeaker: null,
+    currentFocusCharacter: null,
+    lastActionCharacter: null,
+    lastMentionedCharacters: [],
+    dialogueHistory: [],
+  };
+  return { attribution, finalState };
 }
 
 // ── Merge parser + regex + LLM outputs ──────────────────────────────────

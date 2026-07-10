@@ -48,6 +48,7 @@ interface BibleResponse {
     description: string | null;
     personality: string | null;
     speechStyle: string | null;
+    visualDescription: string | null;
     source: 'llm' | 'user' | 'mixed';
     version: number;
     updatedAt: string;
@@ -72,7 +73,7 @@ interface BibleResponse {
       kind: 'new' | 'update' | 'relationship' | 'appearance';
       characterId?: string | null;
       newCharacter?: { name: string; aliases?: string[]; gender?: string | null; role?: string };
-      updateFields?: { description?: string; personality?: string; speechStyle?: string };
+      updateFields?: { description?: string; personality?: string; speechStyle?: string; visualDescription?: string };
       relationship?: { fromCharName?: string; toCharName?: string; relationship: string; notes?: string };
       evidenceQuote?: string;
       autoReason: string;
@@ -307,7 +308,7 @@ function CharacterRow({
   onEdit,
 }: {
   character: { id: string; name: string; gender: string | null; role: string };
-  profile?: { description: string | null; personality: string | null; speechStyle: string | null; source: string };
+  profile?: { description: string | null; personality: string | null; speechStyle: string | null; visualDescription: string | null; source: string };
   outEdges: BibleResponse['relationships'];
   inEdges: BibleResponse['relationships'];
   appearances?: Record<string, { mentions: number; analyzedAt: string }>;
@@ -371,6 +372,9 @@ function CharacterRow({
           {profile?.speechStyle && (
             <Field label="Cách nói" value={profile.speechStyle} />
           )}
+          {profile?.visualDescription && profile.visualDescription !== 'unspecified' && (
+            <Field label="Ngoại hình" value={profile.visualDescription} />
+          )}
           {outEdges.length > 0 && (
             <div>
               <p className="text-xs font-medium text-muted-foreground mb-1">Quan hệ (ra)</p>
@@ -400,6 +404,7 @@ function CharacterRow({
             </div>
           )}
           {!profile?.description && !profile?.personality && !profile?.speechStyle &&
+           !profile?.visualDescription &&
            outEdges.length === 0 && inEdges.length === 0 && chapterEntries.length === 0 && (
             <p className="text-xs italic text-muted-foreground">
               Chưa có dữ liệu. Nhấn "Refresh" để LLM đề xuất, hoặc "Edit" để tự điền.
@@ -516,13 +521,18 @@ function EditProfileModal({
   characterName, profile, onClose, onSaved,
 }: {
   characterName: string;
-  profile?: { description: string | null; personality: string | null; speechStyle: string | null };
+  profile?: { description: string | null; personality: string | null; speechStyle: string | null; visualDescription: string | null };
   onClose: () => void;
-  onSaved: (fields: { description?: string | null; personality?: string | null; speechStyle?: string | null }) => Promise<void>;
+  onSaved: (fields: { description?: string | null; personality?: string | null; speechStyle?: string | null; visualDescription?: string | null }) => Promise<void>;
 }) {
   const [desc, setDesc] = useState(profile?.description ?? '');
   const [pers, setPers] = useState(profile?.personality ?? '');
   const [style, setStyle] = useState(profile?.speechStyle ?? '');
+  // `unspecified` is the LLM's "the text didn't say" sentinel — the user
+  // typing their own description should overwrite it, not coexist with it.
+  const initialVisual = profile?.visualDescription && profile.visualDescription !== 'unspecified'
+    ? profile.visualDescription : '';
+  const [visual, setVisual] = useState(initialVisual);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   return (
@@ -544,6 +554,11 @@ function EditProfileModal({
             <textarea value={style} onChange={(e) => setStyle(e.target.value)} rows={2}
               className="w-full rounded-md border border-border bg-background p-2 text-xs" />
           </Labeled>
+          <Labeled label="Ngoại hình (visual anchor cho ảnh minh hoạ)">
+            <textarea value={visual} onChange={(e) => setVisual(e.target.value)} rows={2}
+              placeholder="vd: male, mid-20s, long black hair tied with red cord, white robe, jade sword"
+              className="w-full rounded-md border border-border bg-background p-2 text-xs" />
+          </Labeled>
           {err && <p className="text-xs text-destructive">{err}</p>}
         </div>
       </DialogBody>
@@ -556,6 +571,7 @@ function EditProfileModal({
               description: desc || null,
               personality: pers || null,
               speechStyle: style || null,
+              visualDescription: visual || null,
             });
           } catch (e) {
             setErr(e instanceof Error ? e.message : String(e));

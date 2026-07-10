@@ -199,7 +199,7 @@ export function BookCard({ book: initialBook, onDelete, onUpdate, onEnhanced, co
           )}
 
           {/* Hover overlay */}
-          <div className="absolute inset-0 bg-modal-overlay/0 group-hover:bg-modal-overlay transition-colors flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
+          <div className="absolute inset-0 bg-modal-overlay/0 group-hover:bg-modal-overlay/70 transition-colors flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
             <button
               onClick={handleGenerateCover}
               disabled={generatingCover || enhancing}

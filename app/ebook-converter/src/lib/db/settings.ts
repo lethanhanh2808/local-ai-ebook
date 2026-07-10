@@ -2,6 +2,7 @@
 // Singleton settings row helpers.
 import { prisma } from './client';
 import type { Settings } from '@prisma/client';
+import { DEFAULT_IMAGE_STYLE, normalizeImageStyle } from '@/lib/ai/image-generator';
 
 export type AIProvider = 'omlx-local' | 'minimax-cloud' | 'openai' | 'custom';
 export type TTSProvider = 'vieneu' | 'piper' | 'moss-nano';
@@ -21,11 +22,35 @@ export const TTS_PROVIDERS: Array<{ id: TTSProvider; label: string; desc: string
   { id: 'moss-nano', label: 'MOSS-TTS-Nano', desc: 'English voice cloning (no Vietnamese support)' },
 ];
 
-/** Get the current settings (creates the singleton row if missing). */
+/** Get the current settings (creates the singleton row if missing).
+ *  Auto-upgrades legacy `imageStyle` values to the new black-and-white
+ *  family so existing installs silently switch to the cohesive B&W look
+ *  the user asked for. Persists the upgrade so subsequent reads skip
+ *  this work. */
 export async function getSettings(): Promise<Settings> {
   let s = await prisma.settings.findUnique({ where: { id: 'singleton' } });
   if (!s) {
     s = await prisma.settings.create({ data: { id: 'singleton' } });
+  }
+  // One-time migration: legacy "" / "ink" gets bumped to bw-anime so
+  // every existing install picks up the new default without a manual
+  // /settings visit. Unknown values get normalised to the default.
+  if (!s.imageStyle || s.imageStyle === 'ink') {
+    const next = DEFAULT_IMAGE_STYLE;
+    if (next !== s.imageStyle) {
+      const updated = await prisma.settings.update({
+        where: { id: 'singleton' },
+        data: { imageStyle: next },
+      });
+      return updated;
+    }
+  } else if (normalizeImageStyle(s.imageStyle) !== s.imageStyle) {
+    const next = normalizeImageStyle(s.imageStyle);
+    const updated = await prisma.settings.update({
+      where: { id: 'singleton' },
+      data: { imageStyle: next },
+    });
+    return updated;
   }
   return s;
 }

@@ -24,6 +24,9 @@ export async function PATCH(
 
   const body = await req.json() as {
     title?: string;
+    /** Override title used by the cover generator. Pass null to fall
+     *  back to the stored `title`. */
+    titleVi?: string | null;
     author?: string;
     language?: string;
     description?: string;

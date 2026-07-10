@@ -159,7 +159,7 @@ export function CharacterDetection({ bookId, existingCharacters, onApplied }: Pr
     try {
       const characters = Array.from(picked).map((name) => {
         const det = result.characters.find((c) => c.name === name)!;
-        // The picker holds the chosen voice NAME (e.g. "Bình An") for built-in
+        // The picker holds the chosen voice NAME (e.g. "Xuân Vĩnh") for built-in
         // voices or a UUID for custom clones. We send `voiceName` to the
         // backend, which auto-creates a Voice row for built-in names so the
         // character gets a real voiceId to render in the UI (instead of

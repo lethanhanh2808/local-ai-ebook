@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Upload, FileText, Loader2, Sparkles, ChevronDown, ChevronUp, ShieldOff, Wand2, Zap } from 'lucide-react';
+import { Upload, FileText, Loader2, Sparkles, ChevronDown, ChevronUp, ShieldOff, Wand2, Zap, Smartphone } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
@@ -32,6 +32,9 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
   const [aiEnhance, setAiEnhance] = useState(true);
   const [aiWatermarkClean, setAiWatermarkClean] = useState(true);
   const [deepFormat, setDeepFormat] = useState(false);
+  // Default ON — most web-novel source EPUBs ship with CSS that crashes
+  // Onyx Boox / Kobo after the first 1–2 pages. User can turn off in /settings.
+  const [readerFriendly, setReaderFriendly] = useState(true);
   const [aiPrompt, setAiPrompt] = useState('');
   const [showPrompt, setShowPrompt] = useState(false);
   // When ON (default), uploaded files start converting immediately.
@@ -51,6 +54,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
         if (typeof s.defaultAiEnhance === 'boolean') setAiEnhance(s.defaultAiEnhance);
         if (typeof s.defaultAiWatermarkClean === 'boolean') setAiWatermarkClean(s.defaultAiWatermarkClean);
         if (typeof s.defaultDeepFormat === 'boolean') setDeepFormat(s.defaultDeepFormat);
+        if (typeof s.defaultReaderFriendly === 'boolean') setReaderFriendly(s.defaultReaderFriendly);
       } catch { /* best-effort */ }
     })();
     return () => { cancelled = true; };
@@ -63,6 +67,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
       fd.append('aiEnhance', String(aiEnhance));
       fd.append('aiWatermarkClean', String(aiWatermarkClean));
       fd.append('deepFormat', String(deepFormat));
+      fd.append('readerFriendly', String(readerFriendly));
       fd.append('startImmediately', String(autoStart));
       if ((aiEnhance || deepFormat) && aiPrompt.trim()) fd.append('aiPrompt', aiPrompt.trim());
       const res = await fetch('/api/upload', { method: 'POST', body: fd });
@@ -70,7 +75,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
       if (!res.ok) throw new Error(data.error ?? 'Upload failed');
       onJobCreated(data.jobId!, data.filename!);
     },
-    [onJobCreated, aiEnhance, aiWatermarkClean, deepFormat, aiPrompt, autoStart],
+    [onJobCreated, aiEnhance, aiWatermarkClean, deepFormat, readerFriendly, aiPrompt, autoStart],
   );
 
   const onDrop = useCallback(
@@ -223,6 +228,32 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
             </div>
             <p className="text-xs text-muted-foreground mt-0.5">
               <strong>Recommended cho tiểu thuyết.</strong> AI re-formats từng chương: gộp/tách đoạn văn, định dạng hội thoại (nháy cong), ngắt cảnh (&lt;hr/&gt;). ~2-5 phút/chương.
+            </p>
+          </div>
+        </label>
+
+        {/* Reader-friendly (e-ink / Onyx Boox / Kobo safe) */}
+        <label className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none">
+          <div
+            onClick={(e) => { e.preventDefault(); setReaderFriendly((v) => !v); }}
+            className={cn(
+              'relative w-9 h-5 rounded-full transition-colors duration-200 shrink-0',
+              readerFriendly ? 'bg-emerald-600' : 'bg-muted-foreground/30',
+            )}
+          >
+            <div className={cn(
+              'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200',
+              readerFriendly ? 'translate-x-4' : 'translate-x-0',
+            )} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1.5">
+              <Smartphone className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+              <span className="text-sm font-medium">Reader-friendly (Onyx Boox / Kobo / Kindle)</span>
+              {readerFriendly && <span className="text-[10px] rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 font-medium">QUICK</span>}
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              <strong>Dùng khi sách chỉ hiện 1–2 trang trên máy đọc e-ink.</strong> Bỏ animation, blur, text-shadow, hyphens, background gradient, font custom. Dùng stylesheet tối giản — convert xong trong vài chục giây.
             </p>
           </div>
         </label>

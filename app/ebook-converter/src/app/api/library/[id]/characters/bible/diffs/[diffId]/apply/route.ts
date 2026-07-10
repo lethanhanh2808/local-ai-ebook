@@ -43,6 +43,8 @@ export async function POST(
         description: patched.updateFields.description ?? null,
         personality: patched.updateFields.personality ?? null,
         speechStyle: patched.updateFields.speechStyle ?? null,
+        visualDescription: patched.updateFields.visualDescription ?? null,
+        visualSource: patched.updateFields.visualDescription != null ? 'user' : null,
         source: 'user',
         version: 1,
       },
@@ -50,6 +52,7 @@ export async function POST(
         description: patched.updateFields.description ?? undefined,
         personality: patched.updateFields.personality ?? undefined,
         speechStyle: patched.updateFields.speechStyle ?? undefined,
+        visualDescription: patched.updateFields.visualDescription ?? undefined,
         source: 'user',
       },
     });

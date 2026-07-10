@@ -2,6 +2,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import { AppNav } from '@/components/nav/AppNav';
+import { ToastProvider, Toaster } from '@/components/ui/toast';
 
 export const metadata: Metadata = {
   title: 'Ebook Manager – Convert, Organize & Read your EPUB library',
@@ -26,8 +27,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>
       <body className="min-h-screen bg-background font-sans antialiased">
-        <AppNav />
-        <main>{children}</main>
+        <ToastProvider>
+          <AppNav />
+          <main>{children}</main>
+          <Toaster />
+        </ToastProvider>
       </body>
     </html>
   );

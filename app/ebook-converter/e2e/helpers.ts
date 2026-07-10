@@ -122,3 +122,189 @@ export async function runTTS(page: Page, opts: {
 }
 
 export const TEST_BOOK_ID = BOOK_ID;
+
+// ── Conversation-state helpers (D1) ────────────────────────────────────────
+// Helpers used by the cross-chapter / conversation-state E2E specs to
+// drive the attribution pipeline and the read-only debug endpoint.
+
+/**
+ * Drive the per-chapter attribution route via HTTP and return the parsed
+ * JSON. The route *currently* doesn't always emit `crossChapter` /
+ * `potentialNewCharacters` on every response — those fields are surfaced
+ * by the heavier /analyze route in production. We type the result as a
+ * superset so the spec can assert on either path.
+ */
+export interface AttributeChapterCrossChapter {
+  seedApplied: boolean;
+  seedReason: 'applied' | 'no-row' | 'stale-chapter' | 'version-mismatch' | 'empty';
+  seedFromChapterIndex: number | null;
+  seedLastSpeaker?: string | null;
+  persistedAt: number | null;
+}
+
+export interface AttributeChapterResult {
+  attribution: Record<number, { speaker: string | null; confidence: number; source: string }>;
+  fromCache?: boolean;
+  omlxReachable?: boolean;
+  /** Optional in the raw payload — but the helper asserts this is present
+   *  unless `requireCrossChapter: false` is explicitly passed. */
+  crossChapter?: AttributeChapterCrossChapter;
+  potentialNewCharacters?: string[];
+  stats?: {
+    parserHits: number;
+    regexHits: number;
+    llmHits: number;
+    conversationHits: number;
+    defaults: number;
+    totalParagraphs: number;
+  };
+}
+
+/**
+ * Fetch attribution for one chapter. Always asserts that `crossChapter`
+ * is present in the response (the API guarantees it once the route is
+ * wired to the conversation-state pipeline). Specs that need to test the
+ * "missing" path should pass `{ requireCrossChapter: false }` explicitly.
+ *
+ * Returns the narrowed payload type (`crossChapter` non-nullable) so
+ * call-site TS gets a clean `data.crossChapter.persistedAt` access.
+ */
+export async function attributeChapterViaApi(
+  page: Page,
+  chapterId: string,
+  bookId: string = BOOK_ID,
+  opts: { timeout?: number; requireCrossChapter?: boolean } = {},
+): Promise<AttributeChapterResult & { crossChapter: AttributeChapterCrossChapter }> {
+  const requireCrossChapter = opts.requireCrossChapter ?? true;
+  const r = await page.request.get(
+    `/api/library/${bookId}/chapters/${encodeURIComponent(chapterId)}/attribute`,
+    { timeout: opts.timeout ?? 60_000 },
+  );
+  if (!r.ok()) {
+    throw new Error(
+      `attributeChapterViaApi ${chapterId} → ${r.status()}: ${await r.text()}`,
+    );
+  }
+  const data = await r.json() as AttributeChapterResult;
+  if (requireCrossChapter && !data.crossChapter) {
+    throw new Error(
+      `attributeChapterViaApi ${chapterId}: response missing crossChapter block — the route may be serving a legacy payload.`,
+    );
+  }
+  // Helper throws when `requireCrossChapter` (default) — so `crossChapter`
+  // is guaranteed to be defined for the success path. The cast narrows the
+  // type for callers without an extra `!` at every call site.
+  return data as AttributeChapterResult & { crossChapter: AttributeChapterCrossChapter };
+}
+
+/**
+ * Hit DELETE on the conversation-state endpoint to wipe the persisted
+ * snapshot. The route accepts `?force=true` so this is a no-op when the
+ * row is already missing (returns 200 either way). Used by `beforeEach`
+ * hooks in the cross-chapter specs.
+ */
+export async function clearConversationStateForBook(bookId: string): Promise<void> {
+  // We can't pass a request context here because this helper is called
+  // outside Playwright's page fixtures in some specs. We use the global
+  // fetch with a relative URL — Playwright sets up a baseURL for tests
+  // so a path-only fetch works.
+  const r = await fetch(`/api/library/${bookId}/conversation-state?force=true`, {
+    method: 'DELETE',
+  });
+  if (!r.ok && r.status !== 404) {
+    throw new Error(
+      `clearConversationStateForBook ${bookId} → ${r.status}: ${await r.text()}`,
+    );
+  }
+}
+
+/**
+ * Fetch the persisted BookConversationState row directly (no cache). The
+ * server-side endpoint returns `{ found: false, reason }` when no row
+ * exists; we surface that as `null` so callers can use a simple truthy
+ * check.
+ */
+export interface ConversationStateRow {
+  bookId: string;
+  lastChapterIndex: number;
+  parserVersion: string;
+  snapshot?: Record<string, unknown>;
+}
+
+export async function getConversationStateForBook(
+  bookId: string,
+): Promise<ConversationStateRow | null> {
+  const r = await fetch(`/api/library/${bookId}/conversation-state`);
+  if (r.status === 404) return null;
+  if (!r.ok) {
+    throw new Error(`getConversationStateForBook ${bookId} → ${r.status}: ${await r.text()}`);
+  }
+  const body = await r.json() as {
+    found: boolean;
+    bookId?: string;
+    lastChapterIndex?: number;
+    parserVersion?: string;
+    snapshot?: Record<string, unknown>;
+    reason?: string;
+  };
+  if (!body.found) return null;
+  return {
+    bookId: body.bookId ?? bookId,
+    lastChapterIndex: body.lastChapterIndex ?? -1,
+    parserVersion: body.parserVersion ?? '',
+    snapshot: body.snapshot,
+  };
+}
+
+/**
+ * Page-scoped variant of `getConversationStateForBook`. Returns both the
+ * HTTP status and the parsed body so callers can assert on 404 vs. 200.
+ */
+export async function getConversationStateViaApi(
+  page: Page,
+  bookId: string,
+): Promise<{ status: number; body: any }> {
+  const r = await page.request.get(`/api/library/${bookId}/conversation-state`);
+  const status = r.status();
+  let body: any = null;
+  try {
+    body = await r.json();
+  } catch {
+    body = { error: await r.text() };
+  }
+  return { status, body };
+}
+
+/**
+ * Register a single character on a book via the existing characters POST
+ * endpoint. Returns the persisted Character row (with id) on success, or
+ * `null` if the API rejected the request.
+ */
+export async function createCharacter(
+  page: Page,
+  opts: {
+    name: string;
+    role?: 'main' | 'supporting' | 'minor' | 'crowd';
+    bookId?: string;
+    aliases?: string[];
+    voiceName?: string;
+  },
+): Promise<{ id: string; name: string } | null> {
+  const bookId = opts.bookId ?? BOOK_ID;
+  const r = await page.request.post(`/api/library/${bookId}/characters`, {
+    headers: { 'Content-Type': 'application/json' },
+    data: {
+      characters: [
+        {
+          name: opts.name,
+          aliases: opts.aliases ?? [],
+          role: opts.role ?? 'supporting',
+          ...(opts.voiceName ? { voiceName: opts.voiceName } : {}),
+        },
+      ],
+    },
+  });
+  if (!r.ok()) return null;
+  const body = await r.json() as { characters?: Array<{ id: string; name: string }> };
+  return body.characters?.[0] ?? null;
+}

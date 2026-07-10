@@ -6,7 +6,8 @@
 // conflict-with-user-edit patches for review.
 //
 // Body (any combination; null clears the field):
-//   { description?: string|null, personality?: string|null, speechStyle?: string|null }
+//   { description?: string|null, personality?: string|null, speechStyle?: string|null,
+//     visualDescription?: string|null }
 //
 // The character MUST belong to the book in :id; otherwise 404.
 import { NextRequest, NextResponse } from 'next/server';
@@ -31,11 +32,12 @@ export async function PATCH(
     description?: string | null;
     personality?: string | null;
     speechStyle?: string | null;
+    visualDescription?: string | null;
   } = {};
   try { body = await req.json() as typeof body; }
   catch { return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 }); }
 
-  const allowed = ['description', 'personality', 'speechStyle'] as const;
+  const allowed = ['description', 'personality', 'speechStyle', 'visualDescription'] as const;
   const touched: Array<keyof typeof body> = [];
   for (const k of allowed) if (k in body) touched.push(k);
   if (touched.length === 0) {
@@ -47,6 +49,7 @@ export async function PATCH(
     description: body.description,
     personality: body.personality,
     speechStyle: body.speechStyle,
+    visualDescription: body.visualDescription,
   });
 
   const updated = await prisma.characterProfile.findUnique({

@@ -83,4 +83,32 @@ describe('stateful conversation attribution', () => {
     expect(out[1].speaker).toBe('Lan');
     expect(out[1].evidence?.some((e) => e.source === 'pronoun')).toBe(true);
   });
+
+  // Sensitivity regression (2026-07-08): previously, a quote paragraph
+  // that mentions NO character name would flip-flop to the other active
+  // speaker via the 2-speaker alternation heuristic. This produced
+  // wrong attribution for one-sided monologues and pronoun-only turns
+  // ("Em yêu anh." → "Anh yêu em." → ...). The fix routes no-name
+  // quotes to the strong continuation branch, so the same speaker
+  // keeps the floor across consecutive paragraphs.
+  it('keeps the previous speaker when a quote has no character name', () => {
+    const paragraphs = p([
+      'Lan nói với Minh: “Chào Minh.”',
+      '“Em yêu anh.”',
+      '“Em sẽ không bao giờ quên anh.”',
+    ]);
+    const out = attributeByConversation({
+      paragraphs,
+      characters,
+      regexOut: {
+        0: { speaker: 'Lan', confidence: 0.55, source: 'regex' },
+      },
+    });
+
+    expect(out[0].speaker).toBe('Lan');
+    // P[1] and P[2] contain no character names (only pronouns), so the
+    // alternation heuristic must NOT flip them to Minh.
+    expect(out[1].speaker).toBe('Lan');
+    expect(out[2].speaker).toBe('Lan');
+  });
 });

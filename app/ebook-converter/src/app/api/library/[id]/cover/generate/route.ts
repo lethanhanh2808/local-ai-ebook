@@ -37,10 +37,15 @@ export async function POST(
     } catch { /* fall through to generation */ }
   }
 
-  // 2. Generate cover — AI background (if enabled) + elegant title typography
+  // 2. Generate cover — AI background (if enabled) + elegant title typography.
+  //     The title on the bìa is the user's Vietnamese version when set,
+  //     otherwise the book's stored title (which is already Vietnamese for
+  //     native-VN imports). This guarantees the printed text is always
+  //     Vietnamese — even if the imported `title` is in another language
+  //     (e.g. Chinese for translated novels).
   try {
     const result = await generateAIBookCover({
-      title: book.title,
+      title: book.titleVi ?? book.title,
       author: book.author,
       language: book.language,
       series: book.series,

@@ -312,9 +312,14 @@ function buildSystemPrompt(): string {
     '  đặt kind="new" cho một tên đã tồn tại trong danh sách đó. Nếu nghi',
     '  ngờ 2 tên cùng một người, đặt tên mới vào `aliases` của patch',
     '  kind="new" thay vì tạo nhân vật mới.',
-    '- CẬP NHẬT description/personality/speech_style phải dựa trên thông',
-    '  tin MỚI từ chương này. KHÔNG lặp lại y nguyên giá trị cũ — nếu',
-    '  không có gì mới, BỎ QUA patch update đó.',
+    '- CẬP NHẬT description/personality/speech_style/visual_description',
+    '  phải dựa trên thông tin MỚI từ chương này. KHÔNG lặp lại y nguyên',
+    '  giá trị cũ — nếu không có gì mới, BỎ QUA patch update đó.',
+    '- `visual_description` mô tả ngoại hình (1 câu, ≤60 từ, tiếng Anh):',
+    '  giới tính, tuổi, tóc/mắt màu + kiểu, trang phục/trang sức/vũ khí',
+    '  đặc trưng, tư thế. KHÔNG nêu tên. KHÔNG bịa — nếu văn bản không',
+    '  mô tả thì ghi "unspecified". Field này dùng làm anchor cho ảnh minh',
+    '  hoạ chương nên nhân vật phải mặc cùng trang phục giữa các chương.',
     '- Mối quan hệ phải là directed: từ A đến B (ví dụ: Linh là mẹ của',
     '  Lan → from_name=Linh, to_name=Lan, relationship="mother").',
     '- Nhãn `relationship` ưu tiên dạng snake_case_en (mother, father,',
@@ -372,6 +377,7 @@ function buildUserPrompt(input: {
           p.description ? `description: ${truncate(p.description, 200)}` : null,
           p.personality ? `personality: ${truncate(p.personality, 150)}` : null,
           p.speechStyle ? `speech_style: ${truncate(p.speechStyle, 150)}` : null,
+          p.visualDescription ? `visual_description: ${truncate(p.visualDescription, 200)}` : null,
           `source: ${p.source} | version: ${p.version}`,
         ].filter(Boolean).join('\n    ');
         return `- ${nm}\n    ${fields}`;
@@ -401,7 +407,7 @@ function buildUserPrompt(input: {
     '  "new_character": { "name": string, "aliases"?: string[], "gender"?: "male"|"female", "role"?: "main"|"supporting"|"minor"|"crowd" },',
     '  // update (chỉ truyền field muốn cập nhật)',
     '  "update_target_name": string, // tên trong DANH SÁCH TÊN CHUẨN',
-    '  "update_fields": { "description"?: string, "personality"?: string, "speech_style"?: string },',
+    '  "update_fields": { "description"?: string, "personality"?: string, "speech_style"?: string, "visual_description"?: string },',
     '  // relationship',
     '  "from_name": string, // tên trong DANH SÁCH TÊN CHUẨN',
     '  "to_name": string,   // tên trong DANH SÁCH TÊN CHUẨN',
@@ -464,6 +470,7 @@ interface RawBiblePatch {
     description?: string;
     personality?: string;
     speech_style?: string;
+    visual_description?: string;
   };
   from_name?: string;
   to_name?: string;
@@ -637,6 +644,7 @@ async function normalizePatches(
             description: q.patch.update_fields?.description,
             personality: q.patch.update_fields?.personality,
             speechStyle: q.patch.update_fields?.speech_style,
+            visualDescription: q.patch.update_fields?.visual_description,
           }, relationship: undefined }
         : {}),
       conflictWith: q.reason,
@@ -673,6 +681,7 @@ async function normalizePatches(
       if (typeof u.description === 'string') updateFields.description = u.description;
       if (typeof u.personality === 'string') updateFields.personality = u.personality;
       if (typeof u.speech_style === 'string') updateFields.speechStyle = u.speech_style;
+      if (typeof u.visual_description === 'string') updateFields.visualDescription = u.visual_description;
       if (Object.keys(updateFields).length === 0) {
         // The patch made it through sanitization but had no actual field
         // payload (e.g. it was a 'new-already-exists' conversion that
@@ -771,6 +780,7 @@ export async function applyBiblePatch(
       description: patch.updateFields.description ?? null,
       personality: patch.updateFields.personality ?? null,
       speechStyle: patch.updateFields.speechStyle ?? null,
+      visualDescription: patch.updateFields.visualDescription ?? null,
     });
     // Three buckets:
     //   1) Non-conflicting fields written → treat as applied
@@ -900,12 +910,14 @@ export async function setUserProfile(args: {
   description?: string | null;
   personality?: string | null;
   speechStyle?: string | null;
+  visualDescription?: string | null;
 }): Promise<void> {
   await setProfile({
     characterId: args.characterId,
     description: args.description,
     personality: args.personality,
     speechStyle: args.speechStyle,
+    visualDescription: args.visualDescription,
     source: 'user',
     force: true,
   });

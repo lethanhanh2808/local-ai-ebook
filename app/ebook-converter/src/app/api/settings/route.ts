@@ -40,11 +40,19 @@ export async function PUT(req: NextRequest) {
     if (typeof body.defaultAiEnhance === 'boolean') data.defaultAiEnhance = body.defaultAiEnhance;
     if (typeof body.defaultAiWatermarkClean === 'boolean') data.defaultAiWatermarkClean = body.defaultAiWatermarkClean;
     if (typeof body.defaultDeepFormat === 'boolean') data.defaultDeepFormat = body.defaultDeepFormat;
+    if (typeof body.defaultReaderFriendly === 'boolean') data.defaultReaderFriendly = body.defaultReaderFriendly;
     if (typeof body.workerConcurrency === 'number') {
       data.workerConcurrency = Math.max(1, Math.min(8, Math.floor(body.workerConcurrency)));
     }
     if (typeof body.workerChapterConcurrency === 'number') {
       data.workerChapterConcurrency = Math.max(1, Math.min(8, Math.floor(body.workerChapterConcurrency)));
+    }
+    // AI-enhancement concurrency: live-readable from chapter-enhancer.ts
+    // each batch, so the user can dial this from the settings page while
+    // a long conversion is in progress. Clamped to [1, 16] — higher values
+    // saturate Apple Silicon KV cache on a 9B 4Bit model.
+    if (typeof body.aiEnhanceConcurrency === 'number') {
+      data.aiEnhanceConcurrency = Math.max(1, Math.min(16, Math.floor(body.aiEnhanceConcurrency)));
     }
     if (typeof body.imageProvider === 'string') data.imageProvider = body.imageProvider;
     if (body.imageApiKey === '' || typeof body.imageApiKey === 'string') data.imageApiKey = body.imageApiKey || null;

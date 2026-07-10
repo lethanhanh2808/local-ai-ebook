@@ -10,15 +10,36 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveVoiceForCharacter } from '@/lib/ai/voice-selector';
 import { getVoice } from '@/lib/db/voices';
+import { BUILTIN_VIENEU_NAMES } from '@/lib/tts/vieneu-voices';
 
 const UNIFIED_TTS_URL = (process.env.UNIFIED_TTS_URL ?? process.env.TTS_SERVICE_URL ?? 'http://127.0.0.1:5010').replace(/\/$/, '');
 
-/** GET /api/tts/models — proxy the unified server's /backends */
+/** GET /api/tts/models — proxy the unified server's /backends.
+ *  Post-VieNeu-consolidation (2026-07-05): if `/backends` 404s (VieNeu
+ *  serves only `/health` + `/synthesize`), fall back to an inferred
+ *  single-VieNeu backend so callers (e.g. e2e smoke) still see a healthy
+ *  stack.
+ */
 export async function GET(): Promise<NextResponse> {
   try {
     const r = await fetch(`${UNIFIED_TTS_URL}/backends`, { signal: AbortSignal.timeout(5_000) });
-    const data = await r.json();
-    return NextResponse.json(data);
+    if (r.ok) {
+      const data = await r.json();
+      return NextResponse.json(data);
+    }
+    // /backends missing → likely a direct VieNeu server. Verify with
+    // /health and synthesize the same shape the legacy aggregator returned.
+    const healthR = await fetch(`${UNIFIED_TTS_URL}/health`, { signal: AbortSignal.timeout(5_000) });
+    if (healthR.ok) {
+      const health = await healthR.json() as { status?: string };
+      if (health.status === 'ok') {
+        return NextResponse.json({
+          backends: [{ id: 'vieneu', name: 'VieNeu', ready: true, languages: ['vi'] }],
+          default_backend: 'vieneu',
+        });
+      }
+    }
+    return NextResponse.json({ error: 'TTS service unavailable' }, { status: 503 });
   } catch {
     return NextResponse.json({ error: 'TTS service unavailable' }, { status: 503 });
   }
@@ -44,10 +65,7 @@ interface SpeakBody {
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const BUILTIN_VIENEU = new Set([
-  'Ngọc Lan', 'Gia Bảo', 'Thái Sơn', 'Đức Trí', 'Mỹ Duyên',
-  'Trúc Ly', 'Xuân Vĩnh', 'Trọng Hữu', 'Bình An', 'Ngọc Linh',
-]);
+const BUILTIN_VIENEU = new Set(BUILTIN_VIENEU_NAMES);
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
   const n = typeof value === 'number' ? value : Number(value);
@@ -129,26 +147,28 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   // Resolve which voice to use, with this priority:
-  //   1. Character → voice lookup from book's character table (if character given)
-  //      Uses voice-selector.ts which applies:
-  //      - Smart gender/age/tone matching
-  //      - Common-pool routing for minor characters
-  //      - Deterministic per-call jitter for crowd voices (speed/emotion variation)
-  //   2. Explicit `voice` in request body (user's selected default in the UI)
-  //   3. Book's stored default voice (isDefault=true in Voice table)
-  //   4. Undefined → unified server picks its own default
+  //   1. If `body.character` is provided → per-character lookup
+  //      (`resolveVoiceForCharacter` does alias-aware matching, common-
+  //      pool routing, deterministic jitter for crowd voices).
+  //   2. Else if `body.voice` is provided → user UI choice for narration
+  //      (the Read-aloud panel's "Default voice" selector). This is what
+  //      was silently broken before: the old code skipped this branch
+  //      whenever a `bookId` was set, because resolveVoiceForCharacter
+  //      always returned the book's isDefault voice for narration and
+  //      shadowed body.voice. Now body.voice wins for narration.
+  //   3. Else if `body.bookId` is set → book default (legacy fallback).
+  //   4. Undefined → unified server picks its own default.
   let voiceName: string | undefined;
   let referencePath: string | undefined;
   let voiceSpeed = 1.0;
   let voiceEmotion = 'neutral';
-  if (body.bookId) {
-    const v = await resolveVoiceForCharacter(body.bookId, body.character, body.callIdx ?? 0);
+  if (body.character) {
+    const v = await resolveVoiceForCharacter(body.bookId ?? '', body.character, body.callIdx ?? 0);
     if (v?.builtinName) voiceName = v.builtinName;
     if (v?.refAudioPath) referencePath = v.refAudioPath;
     voiceSpeed = v?.speed ?? 1.0;
     voiceEmotion = v?.emotion ?? 'neutral';
-  }
-  if (!voiceName && !referencePath && body.voice) {
+  } else if (body.voice) {
     if (UUID_RE.test(body.voice)) {
       const voice = await getVoice(body.voice);
       if (voice && (!body.bookId || voice.bookId === body.bookId)) {
@@ -161,6 +181,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     } else {
       voiceName = body.voice;
     }
+  } else if (body.bookId) {
+    // Legacy fallback: when neither character nor an explicit voice is
+    // given, defer to the book's stored default. Preserves pre-fix
+    // behaviour for any caller that doesn't set `voice` (e.g. scripts).
+    const v = await resolveVoiceForCharacter(body.bookId, undefined, body.callIdx ?? 0);
+    if (v?.builtinName) voiceName = v.builtinName;
+    if (v?.refAudioPath) referencePath = v.refAudioPath;
+    voiceSpeed = v?.speed ?? 1.0;
+    voiceEmotion = v?.emotion ?? 'neutral';
   }
 
   // Build unified-server payload. Caller-provided speed overrides jitter.

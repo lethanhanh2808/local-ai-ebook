@@ -5,7 +5,7 @@
 //
 // POST body: { characters: [{ name, aliases?, voiceId?, voiceName? }] }
 //   - voiceId: existing Voice row id (preferred)
-//   - voiceName: built-in VieNeu voice name (e.g. "Bình An") — auto-creates
+//   - voiceName: built-in VieNeu voice name (e.g. "Xuân Vĩnh") — auto-creates
 //                a Voice row if not present, returns its id
 import { NextRequest, NextResponse } from 'next/server';
 import { getBook } from '@/lib/db/books';
@@ -14,14 +14,12 @@ import {
 } from '@/lib/db/voices';
 import { setBookAudiobookStatus } from '@/lib/db/audiobook';
 import { prisma } from '@/lib/db/client';
+import { BUILTIN_VIENEU_NAMES } from '@/lib/tts/vieneu-voices';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const BUILTIN_VIENEU = new Set([
-  'Ngọc Lan', 'Gia Bảo', 'Thái Sơn', 'Đức Trí', 'Mỹ Duyên',
-  'Trúc Ly', 'Xuân Vĩnh', 'Trọng Hữu', 'Bình An', 'Ngọc Linh',
-]);
+const BUILTIN_VIENEU = new Set(BUILTIN_VIENEU_NAMES);
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const book = await getBook(params.id);

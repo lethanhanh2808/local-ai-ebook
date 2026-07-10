@@ -19,7 +19,7 @@ import { prisma } from '@/lib/db/client';
 import { getBook } from '@/lib/db/books';
 import { parseEpub } from '@/lib/pipeline/epub-parser';
 import { getSettings } from '@/lib/db/settings';
-import { generateImage, analyzeChapterForIllustration } from '@/lib/ai/image-generator';
+import { generateImage, analyzeChapterForIllustration, characterSeed, normalizeImageStyle } from '@/lib/ai/image-generator';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -52,6 +52,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     maxPerBook?: number;
     /** If provided, only analyze/generate for these chapter indices. */
     chapterIndices?: number[];
+    /** If true, use a RANDOM seed instead of the deterministic
+     *  per-character seed. Useful when the user wants a fresh take
+     *  on a chapter without losing the locked prompt wording. */
+    reroll?: boolean;
   };
 
   // Parse the EPUB once
@@ -69,6 +73,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     chapters.push({ index: i, title, bodyText: body });
   }
 
+  // Look up character visual anchors once. Wrapped in try so a transient
+  // DB error doesn't break illustration generation entirely — the
+  // analyzer just won't get the cast hint for this run.
+  let cast: import('@/lib/ai/image-generator').CastMember[] = [];
+  try {
+    const charRows = await prisma.character.findMany({
+      where: { bookId: params.id },
+      include: { profile: { select: { visualDescription: true } } },
+    });
+    cast = charRows
+      .filter((c) => c.profile?.visualDescription)
+      .map((c) => ({ name: c.name, visualDescription: c.profile!.visualDescription }));
+  } catch (err) {
+    console.warn(`[illustrations] character cast lookup failed for ${params.id}:`, err);
+  }
+
   if (body.action === 'analyze') {
     const analyses = [];
     for (const ch of chapters) {
@@ -76,7 +96,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       try {
         const result = await analyzeChapterForIllustration(ch.title, ch.bodyText, {
           title: book.title, author: book.author, language: book.language,
-        });
+        }, cast);
         analyses.push({ chapterIndex: ch.index, chapterTitle: ch.title, ...result });
       } catch (err) {
         analyses.push({
@@ -94,6 +114,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const bookDir = path.join(ILLUSTRATIONS_DIR, params.id);
     fs.mkdirSync(bookDir, { recursive: true });
 
+    // Whether to bypass the per-character deterministic seed. By default
+    // (reroll=false) the SAME character + same chapter + same book always
+    // gets the SAME seed → same noise → near-identical images across
+    // regenerations; this is the lever for character consistency. When
+    // the user explicitly wants a fresh take they pass reroll=true.
+    const useStableSeed = body.reroll !== true;
+    // Resolve style once per request so it can be normalised + coerced.
+    const resolvedStyle = normalizeImageStyle(settings.imageStyle);
+
     // First, run analyze on all chapters to find candidates
     const analyses: Array<{ chapterIndex: number; chapterTitle: string; shouldIllustrate: boolean; confidence: number; prompt?: string; reason?: string }> = [];
     for (const ch of chapters) {
@@ -101,7 +130,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       try {
         const result = await analyzeChapterForIllustration(ch.title, ch.bodyText, {
           title: book.title, author: book.author, language: book.language,
-        });
+        }, cast);
         analyses.push({ chapterIndex: ch.index, chapterTitle: ch.title, ...result });
       } catch (err) {
         // skip on error
@@ -116,27 +145,48 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     const results: Array<{
       chapterIndex: number; chapterTitle: string; ok: boolean;
-      imagePath?: string; prompt?: string; reason?: string;
+      imagePath?: string; prompt?: string; reason?: string; seed?: number;
     }> = [];
 
     for (const cand of candidates) {
       try {
+        // Pick the first cast member with a description as the seed anchor
+        // for this chapter. Fall back to a chapter-only seed if no character
+        // has a description (book without character bible).
+        const anchorName = cast[0]?.name ?? `chapter-${cand.chapterIndex}`;
+        const seed = useStableSeed
+          ? characterSeed(params.id, cand.chapterIndex, anchorName)
+          : Math.floor(Math.random() * 0x7fffffff) + 1;
         const img = await generateImage({
           prompt: cand.prompt!,
-          style: settings.imageStyle as 'ink' | 'manga' | 'sketch' | 'watercolor' | 'none',
-          size: '1024x1024',
+          style: resolvedStyle,
+          // Default to portrait (1024x1792) — fits Vietnamese-novel reader
+          // layouts (vertical reading, portrait-first devices like Onyx Boox
+          // and Kobo Aura). Square 1024x1024 looked out-of-register on the
+          // top-of-chapter preview spot.
+          size: '1024x1792',
+          seed,
         });
 
         let imagePath: string;
+        // MiniMax returns JPEG bytes; OpenAI DALL-E 3 returns PNG bytes.
+        // We sniff the magic bytes instead of trusting the file extension
+        // so the on-disk filename matches the actual format (browsers handle
+        // mismatched Content-Type, but correct ext helps file managers /
+        // e-ink reader-side tools that ignore headers).
+        let ext = 'png';
         if (img.b64) {
           const buf = Buffer.from(img.b64, 'base64');
-          imagePath = path.join(bookDir, `chapter-${String(cand.chapterIndex).padStart(3, '0')}.png`);
+          // PNG magic: 89 50 4E 47 ; JPEG magic: FF D8 FF
+          if (buf[0] === 0xff && buf[1] === 0xd8) ext = 'jpg';
+          imagePath = path.join(bookDir, `chapter-${String(cand.chapterIndex).padStart(3, '0')}.${ext}`);
           fs.writeFileSync(imagePath, buf);
         } else {
           // Some providers return a URL instead of b64 — fetch and save
           const fetched = await fetch(img.url);
           const buf = Buffer.from(await fetched.arrayBuffer());
-          imagePath = path.join(bookDir, `chapter-${String(cand.chapterIndex).padStart(3, '0')}.png`);
+          if (buf[0] === 0xff && buf[1] === 0xd8) ext = 'jpg';
+          imagePath = path.join(bookDir, `chapter-${String(cand.chapterIndex).padStart(3, '0')}.${ext}`);
           fs.writeFileSync(imagePath, buf);
         }
 
@@ -160,7 +210,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           },
         });
 
-        results.push({ chapterIndex: cand.chapterIndex, chapterTitle: cand.chapterTitle, ok: true, imagePath, prompt: cand.prompt });
+        results.push({ chapterIndex: cand.chapterIndex, chapterTitle: cand.chapterTitle, ok: true, imagePath, prompt: cand.prompt, seed });
       } catch (err) {
         results.push({
           chapterIndex: cand.chapterIndex, chapterTitle: cand.chapterTitle, ok: false,

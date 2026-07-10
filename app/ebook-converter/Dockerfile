@@ -82,6 +82,14 @@ COPY --from=builder --chown=nextjs:nodejs /app/dist/worker.js ./worker.js
 
 RUN mkdir -p data/uploads data/outputs && chown -R nextjs:nodejs data
 
+# Ship a fontconfig config so sharp/libvips can render SVG text with full
+# Vietnamese + Latin coverage. The static libvips inside @img/sharp-libvips-*
+# has fontconfig built in but ships with no default config; without this,
+# diacritic-bearing characters render as tofu boxes.
+COPY fonts.conf /app/fonts.conf
+ENV FONTCONFIG_FILE=/app/fonts.conf
+ENV FONTCONFIG_PATH=/app
+
 USER nextjs
 EXPOSE 3100
 ENV PORT=3100

@@ -11,6 +11,7 @@ import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/components/ui/toast';
 import { ErrorState } from '@/components/layout/ErrorState';
+import { VIENEU_BUILTIN_LIST } from '@/lib/tts/vieneu-voices';
 import { CharacterDetection } from './CharacterDetection';
 
 interface Voice {
@@ -26,22 +27,11 @@ interface Voice {
 }
 
 // ── VieNeu built-in voices (Vietnamese-native, 48 kHz) ──────────────────────
-// Same 10 presets as ReadAloudPanel. We surface them in the per-character
-// dropdown so users can assign a built-in voice WITHOUT having to upload a
-// custom clone first. The backend's POST /characters route auto-creates a
-// Voice row for the built-in name when the user applies the assignment.
-const VIENEU_BUILTIN: Array<{ id: string; name: string; gender: 'male' | 'female'; tone: string }> = [
-  { id: 'Ngọc Linh', name: 'Ngọc Linh', gender: 'female', tone: 'cheerful' },
-  { id: 'Ngọc Lan',  name: 'Ngọc Lan',  gender: 'female', tone: 'calm' },
-  { id: 'Mỹ Duyên',  name: 'Mỹ Duyên',  gender: 'female', tone: 'calm' },
-  { id: 'Trúc Ly',   name: 'Trúc Ly',   gender: 'female', tone: 'cheerful' },
-  { id: 'Bình An',   name: 'Bình An',   gender: 'male',   tone: 'calm' },
-  { id: 'Gia Bảo',   name: 'Gia Bảo',   gender: 'male',   tone: 'calm' },
-  { id: 'Đức Trí',   name: 'Đức Trí',   gender: 'male',   tone: 'calm' },
-  { id: 'Thái Sơn',  name: 'Thái Sơn',  gender: 'male',   tone: 'cold' },
-  { id: 'Trọng Hữu', name: 'Trọng Hữu', gender: 'male',   tone: 'mysterious' },
-  { id: 'Xuân Vĩnh', name: 'Xuân Vĩnh', gender: 'male',   tone: 'cheerful' },
-];
+// Source: `src/lib/tts/vieneu-voices.ts` — synced from the upstream catalog
+// at `app/tts-service/VieNeu-TTS/src/vieneu/assets/voices_v3_turbo.json`. The
+// backend's POST /characters route auto-creates a Voice row for the built-in
+// name when the user applies the assignment.
+const VIENEU_BUILTIN = VIENEU_BUILTIN_LIST;
 
 interface Character {
   id: string;
@@ -244,7 +234,7 @@ export function VoicePanel({ bookId, bookLanguage, section: _section }: Props) {
   const setCharVoice = async (charId: string, voiceId: string | null) => {
     // The dropdown's `value` is either:
     //   - A custom voice UUID      → backend expects { voiceId }
-    //   - A built-in name (e.g. "Bình An") → backend expects { voiceName }
+    //   - A built-in name (e.g. "Xuân Vĩnh") → backend expects { voiceName }
     //     (the backend auto-creates a Voice row so it can be previewed/edited)
     //   - "" (empty placeholder)  → unassign (voiceId: null)
     const char = characters.find((c) => c.id === charId);

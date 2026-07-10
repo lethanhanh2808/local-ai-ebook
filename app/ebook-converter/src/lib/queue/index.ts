@@ -12,6 +12,10 @@ export interface ConversionJobData {
   aiWatermarkClean?: boolean;
   /** Slow-but-thorough Vietnamese-novel formatter (paragraphs, dialogue, scene breaks). */
   deepFormat?: boolean;
+  /** Strip heavy CSS + use minimal stylesheet so the output renders on
+   *  Onyx Boox / Kobo Aura / older Kindle (devices whose renderers bail on
+   *  animations, blur, text-shadow, fixed-position decorative pseudos). */
+  readerFriendly?: boolean;
   aiPrompt?: string;
 }
 
@@ -30,6 +34,23 @@ export interface AudiobookBookJobData {
 export type AudiobookJobData = AudiobookChapterJobData | AudiobookBookJobData;
 
 export const AUDIOBOOK_QUEUE_NAME = 'ebook-audiobook';
+
+// ── Character Bible queue ──────────────────────────────────────────────────
+// Background jobs that ask an LLM to refresh a book's Character Bible
+// after a chapter closes. One job per (bookId, chapterIndex) — the worker
+// dedupes by jobId so duplicate enqueues collapse into a single invocation.
+export const CHARACTER_BIBLE_QUEUE_NAME = 'ebook-character-bible';
+
+export interface CharacterBibleJobData {
+  bookId: string;
+  chapterIndex: number;
+  chapterFile?: string | null;
+  /** When true, auto-merge non-conflicting LLM patches. When false, all
+   *  patches land in PendingBibleDiff for user review. */
+  autoMerge?: boolean;
+  /** Why the job was enqueued. */
+  reason?: 'chapter-close' | 'book-load' | 'manual';
+}
 
 const redisConnection = {
   host: process.env.REDIS_HOST ?? '127.0.0.1',
@@ -84,6 +105,20 @@ export function getAudiobookQueue(): Queue<AudiobookJobData> {
     });
   }
   return _audiobookQueue;
+}
+
+export function getCharacterBibleQueue(): Queue<CharacterBibleJobData> {
+  // Lazy singleton — same IORedis instance across calls (BullMQ requires
+  // duplicate-connection-resistant client).
+  const charQ = new Queue<CharacterBibleJobData>(CHARACTER_BIBLE_QUEUE_NAME, {
+    connection: new IORedis(redisConnection),
+    defaultJobOptions: {
+      attempts: 1,                          // LLM-driven jobs are expensive; retry manually instead
+      removeOnComplete: 100,
+      removeOnFail: 200,
+    },
+  });
+  return charQ;
 }
 
 export { redisConnection };

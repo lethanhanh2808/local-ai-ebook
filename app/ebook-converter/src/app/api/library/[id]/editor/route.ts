@@ -1,11 +1,16 @@
 // GET/POST /api/library/[id]/editor
-// Minimal EPUB editor API. Saves edits as a new library copy by default.
+// Minimal EPUB editor API. Supports two save modes:
+//   - 'saveAs' (default): creates a brand-new library copy with the
+//     " - Edited" suffix. Original book is left untouched.
+//   - 'save':             rewrites the chapter inside the EXISTING
+//     EPUB at book.filePath and updates fileSize. The current book is
+//     effectively edited in place; no new row is created.
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import yazl from 'yazl';
 import { v4 as uuid } from 'uuid';
-import { getBook, createBook } from '@/lib/db/books';
+import { getBook, createBook, updateBook } from '@/lib/db/books';
 import { parseEpub } from '@/lib/pipeline/epub-parser';
 import { coverPath, ensureDirs, libraryPath } from '@/lib/storage';
 
@@ -172,10 +177,14 @@ export async function POST(
     chapterId?: string;
     title?: string;
     html?: string;
+    /** 'save' = overwrite the current book's EPUB in place; 'saveAs' (default)
+     *  = create a brand-new copy with the " - Edited" suffix. */
+    mode?: 'save' | 'saveAs';
   };
   if (!body.chapterId || typeof body.html !== 'string') {
     return NextResponse.json({ error: 'chapterId and html are required' }, { status: 400 });
   }
+  const mode: 'save' | 'saveAs' = body.mode === 'save' ? 'save' : 'saveAs';
 
   const epub = await parseEpub(book.filePath);
   const targetFile = epub.htmlFiles.find((candidate) => chapterIdForFile(candidate) === body.chapterId || path.basename(candidate) === body.chapterId);
@@ -187,6 +196,42 @@ export async function POST(
   const editedHtml = replaceBody(originalHtml, editedBody, title, book.language);
 
   ensureDirs();
+
+  // ── 'save' : rewrite the chapter inside the current EPUB. We write to a
+  // sibling .tmp file first and rename atomically so a crash mid-write
+  // never leaves a half-written book on disk. ────────────────────────────
+  if (mode === 'save') {
+    const tmpOutput = `${book.filePath}.tmp`;
+    await writeEditedCopy({
+      sourcePath: book.filePath,
+      outputPath: tmpOutput,
+      targetFile,
+      editedHtml,
+      title,
+    });
+    // Atomically replace. fs.renameSync on the same filesystem is atomic on
+    // POSIX (macOS / Linux). If the temp file is on a different volume than
+    // book.filePath (rare — both live under data/library), fall back to
+    // copy + unlink.
+    try {
+      fs.renameSync(tmpOutput, book.filePath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'EXDEV') {
+        fs.copyFileSync(tmpOutput, book.filePath);
+        fs.unlinkSync(tmpOutput);
+      } else {
+        try { fs.unlinkSync(tmpOutput); } catch { /* best effort */ }
+        throw err;
+      }
+    }
+    const stat = fs.statSync(book.filePath);
+    const updated = await updateBook(book.id, {
+      fileSize: stat.size,
+    });
+    return NextResponse.json({ book: updated, mode: 'save' });
+  }
+
+  // ── 'saveAs' (default): create a brand-new library row + EPUB copy. ────
   const newBookId = uuid();
   const outputFile = libraryPath(newBookId);
   await writeEditedCopy({
@@ -228,7 +273,7 @@ export async function POST(
     notes: book.notes ?? undefined,
   });
 
-  return NextResponse.json({ book: newBook }, { status: 201 });
+  return NextResponse.json({ book: newBook, mode: 'saveAs' }, { status: 201 });
 }
 
 function escXml(s: string) {

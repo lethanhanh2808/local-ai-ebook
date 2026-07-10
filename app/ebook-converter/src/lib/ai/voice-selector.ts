@@ -38,38 +38,18 @@ type CharacterRow = {
   voice: VoiceRow | null;
 };
 import { createVoice, upsertCharacters, listVoices, listCharacters } from '@/lib/db/voices';
+import {
+  BUILTIN_VIENEU,
+  COMMON_POOL_BUILTINS,
+  VIENEU_PROFILES,
+  type VoiceProfile,
+} from '@/lib/tts/vieneu-voices';
 
-// ── Voice profile database ──────────────────────────────────────────────────
-// Each entry describes one of the 10 built-in VieNeu voices so we can
-// score-match them against detected character attributes.
-export interface VoiceProfile {
-  name: string;
-  gender: 'male' | 'female';
-  age: 'young' | 'mature' | 'old';
-  tone: 'calm' | 'cheerful' | 'cold' | 'mysterious' | 'serious';
-  energy: 'low' | 'medium' | 'high';
-  description: string;
-}
-export const VIENEU_PROFILES: VoiceProfile[] = [
-  { name: 'Ngọc Linh', gender: 'female', age: 'young',   tone: 'cheerful',  energy: 'high',   description: 'Nữ trẻ, trong trẻo' },
-  { name: 'Ngọc Lan',  gender: 'female', age: 'mature',  tone: 'calm',      energy: 'low',    description: 'Nữ trưởng thành, ấm áp' },
-  { name: 'Mỹ Duyên',  gender: 'female', age: 'mature',  tone: 'calm',      energy: 'low',    description: 'Nữ trưởng thành, mượt mà' },
-  { name: 'Trúc Ly',   gender: 'female', age: 'young',   tone: 'cheerful',  energy: 'high',   description: 'Nữ trẻ, vui tươi' },
-  { name: 'Bình An',   gender: 'male',   age: 'mature',  tone: 'calm',      energy: 'low',    description: 'Nam trưởng thành, điềm đạm' },
-  { name: 'Gia Bảo',   gender: 'male',   age: 'mature',  tone: 'calm',      energy: 'low',    description: 'Nam trưởng thành, mượt mà' },
-  { name: 'Đức Trí',   gender: 'male',   age: 'mature',  tone: 'serious',   energy: 'medium', description: 'Nam trưởng thành, rõ ràng' },
-  { name: 'Thái Sơn',  gender: 'male',   age: 'young',   tone: 'cold',      energy: 'low',    description: 'Nam trẻ, lạnh lùng' },
-  { name: 'Trọng Hữu', gender: 'male',   age: 'mature',  tone: 'mysterious',energy: 'medium', description: 'Nam trưởng thành, uyên bác' },
-  { name: 'Xuân Vĩnh', gender: 'male',   age: 'young',   tone: 'cheerful',  energy: 'high',   description: 'Nam trẻ, vui tươi' },
-];
-
-const BUILTIN_VIENEU = new Set(VIENEU_PROFILES.map((p) => p.name));
-
-// ── Common voice pool ──────────────────────────────────────────────────────
-// Underlying built-in voices used as the rotation base for the common pool.
-// Different from the 10 distinct ones so minor characters sound "different"
-// from main characters, while keeping the pool small (4 voices).
-const COMMON_POOL_BUILTINS = ['Mỹ Duyên', 'Gia Bảo', 'Trúc Ly', 'Đức Trí'];
+// Re-export so existing callers (`characters/detect/route.ts`,
+// tests/reassign-character-voices.*.ts) can keep importing
+// `VoiceProfile` and `VIENEU_PROFILES` from here.
+export type { VoiceProfile } from '@/lib/tts/vieneu-voices';
+export { VIENEU_PROFILES } from '@/lib/tts/vieneu-voices';
 
 // ── Voice scoring ───────────────────────────────────────────────────────────
 // Match a detected character against the profile database. Higher = better.
@@ -148,7 +128,7 @@ function jitterForCall(name: string, callIdx: number, base: { speed?: number; em
 export interface VoiceAssignment {
   /** Voice row ID to pass to the TTS API. */
   voiceId: string;
-  /** Underlying built-in name (e.g. "Bình An"). For cloned voices this is null. */
+  /** Underlying built-in name (e.g. "Xuân Vĩnh"). For cloned voices this is null. */
   builtinName: string | null;
   /** Reference audio path for cloned/custom voices. Never returned to the browser. */
   refAudioPath: string | null;

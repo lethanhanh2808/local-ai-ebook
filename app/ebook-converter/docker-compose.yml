@@ -41,7 +41,11 @@ services:
       - REDIS_HOST=redis
       - DATABASE_URL=file:/app/data/ebook-converter.db
       # Override local URLs so the container can reach host-local services.
-      - UNIFIED_TTS_URL=http://host.docker.internal:5010
+      # Host's unified TTS aggregator / VieNeu server runs on :5020 (see
+      # .env.local). Pointing the container at :5010 was a leftover from
+      # the legacy Piper+MOSS-Nano aggregator that has since been retired.
+      - UNIFIED_TTS_URL=http://host.docker.internal:5020
+      - TTS_SERVICE_URL=http://host.docker.internal:5020
       - OMLX_BASE_URL=http://host.docker.internal:8080/v1
       - NODE_ENV=production
       # Next.js standalone server.js binds to process.env.HOSTNAME if set,
@@ -78,7 +82,8 @@ services:
     environment:
       - REDIS_HOST=redis
       - DATABASE_URL=file:/app/data/ebook-converter.db
-      - UNIFIED_TTS_URL=http://host.docker.internal:5010
+      - UNIFIED_TTS_URL=http://host.docker.internal:5020
+      - TTS_SERVICE_URL=http://host.docker.internal:5020
       - OMLX_BASE_URL=http://host.docker.internal:8080/v1
       - NODE_ENV=production
     extra_hosts:

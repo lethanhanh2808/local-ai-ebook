@@ -18,6 +18,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { cn, formatDuration } from '@/lib/utils';
+import { VIENEU_VOICES_LIST } from '@/lib/tts/vieneu-voices';
 
 interface CharacterVoice { name: string; voiceName?: string; }
 
@@ -59,6 +60,11 @@ interface ReadAloudPanelProps {
   pregenStatus: { chapterId: string; done: number; total: number } | null;
   useAIEmotion: boolean;
   setUseAIEmotion: (v: boolean) => void;
+  /** How strongly the auto-emotion deltas (speed, noise scale) are applied.
+   * 0 = detection still happens (label shown) but no TTS parameter changes;
+   * 1 = full legacy behaviour (dramatic swings). 0.5 = gentle hint. */
+  emotionIntensity: number;
+  setEmotionIntensity: (v: number) => void;
   // TTS state
   ttsState: 'idle' | 'loading' | 'playing' | 'paused';
   ttsParagraphs: string[];
@@ -86,27 +92,11 @@ interface ReadAloudPanelProps {
 }
 
 // ── VieNeu built-in voices ────────────────────────────────────────────
-// 10 Vietnamese-native voices with gender/age/demeanor metadata so the
-// panel can show a richer card (icon + tagline) instead of just a name.
-const VIENEU_VOICES: Array<{
-  id: string;
-  label: string;
-  shortLabel: string;
-  gender: 'female' | 'male';
-  age: 'young' | 'mature';
-  desc: string;
-}> = [
-  { id: 'Ngọc Linh', shortLabel: 'Ngọc Linh', label: 'Ngọc Linh', gender: 'female', age: 'young',   desc: 'Nữ — trẻ, trong trẻo' },
-  { id: 'Ngọc Lan',  shortLabel: 'Ngọc Lan',  label: 'Ngọc Lan',  gender: 'female', age: 'mature',  desc: 'Nữ — trưởng thành, ấm áp' },
-  { id: 'Mỹ Duyên',  shortLabel: 'Mỹ Duyên',  label: 'Mỹ Duyên',  gender: 'female', age: 'mature',  desc: 'Nữ — chín chắn, truyền cảm' },
-  { id: 'Trúc Ly',   shortLabel: 'Trúc Ly',   label: 'Trúc Ly',   gender: 'female', age: 'young',   desc: 'Nữ — nhẹ nhàng, thủ thỉ' },
-  { id: 'Bình An',   shortLabel: 'Bình An',   label: 'Bình An',   gender: 'male',   age: 'mature',  desc: 'Nam — trung niên, bình tĩnh' },
-  { id: 'Thái Sơn',  shortLabel: 'Thái Sơn',  label: 'Thái Sơn',  gender: 'male',   age: 'young',   desc: 'Nam — trẻ, khí thế' },
-  { id: 'Đức Trí',   shortLabel: 'Đức Trí',   label: 'Đức Trí',   gender: 'male',   age: 'mature',  desc: 'Nam — chín chắn, quyền lực' },
-  { id: 'Xuân Vĩnh', shortLabel: 'Xuân Vĩnh', label: 'Xuân Vĩnh', gender: 'male',   age: 'mature',  desc: 'Nam — trầm, trưởng thành' },
-  { id: 'Trọng Hữu', shortLabel: 'Trọng Hữu', label: 'Trọng Hữu', gender: 'male',   age: 'mature',  desc: 'Nam — trầm ấm, thủ thỉ' },
-  { id: 'Gia Bảo',   shortLabel: 'Gia Bảo',   label: 'Gia Bảo',   gender: 'male',   age: 'young',   desc: 'Nam — trẻ, năng động' },
-];
+// Source: `src/lib/tts/vieneu-voices.ts` (synced from the upstream catalog
+// at `app/tts-service/VieNeu-TTS/src/vieneu/assets/voices_v3_turbo.json`).
+// Each entry has gender/age/desc metadata so the panel can show a richer
+// card (icon + tagline) instead of just a name.
+const VIENEU_VOICES = VIENEU_VOICES_LIST;
 
 function VoiceAvatar({ voice, selected }: { voice: typeof VIENEU_VOICES[number]; selected: boolean }) {
   const color = voice.gender === 'female' ? 'bg-pink-500/15 text-pink-700 dark:text-pink-300' : 'bg-blue-500/15 text-blue-700 dark:text-blue-300';
@@ -133,6 +123,7 @@ export function ReadAloudPanel({
   continuousPlay, setContinuousPlay,
   pregenStatus,
   useAIEmotion, setUseAIEmotion,
+  emotionIntensity, setEmotionIntensity,
   ttsState, ttsParagraphs, ttsIndex, ttsCurrentSpeaker, ttsEmotionLabel,
   onStart, onStop, onTogglePause, onSeekParagraph,
   onPreviewDefaultVoice, onStopPreview, previewingVoice,
@@ -465,6 +456,38 @@ export function ReadAloudPanel({
                     ⚡ hành động · 😤 tức giận · 💧 buồn · 💕 lãng mạn · 😰 căng thẳng · 🍃 bình yên
                   </p>
                 )}
+                {useAIEmotion && (
+                  <div className="mt-2.5">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className={cn('text-[10px] uppercase tracking-wider', mutedCls)}>
+                        Cường độ cảm xúc
+                      </span>
+                      <span className="text-xs font-mono font-semibold">
+                        {Math.round(emotionIntensity * 100)}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={emotionIntensity}
+                      onChange={(e) => setEmotionIntensity(parseFloat(e.target.value))}
+                      className="w-full"
+                      style={{ accentColor }}
+                    />
+                    <div className={cn('flex justify-between text-[10px] mt-0.5', mutedCls)}>
+                      <span>Tiết chế</span>
+                      <span>Vừa</span>
+                      <span>Mạnh</span>
+                    </div>
+                    {emotionIntensity === 0 && (
+                      <p className={cn('text-[10px] mt-1 leading-relaxed', mutedCls)}>
+                        Vẫn phát hiện cảm xúc nhưng không thay đổi tốc độ/giọng.
+                      </p>
+                    )}
+                  </div>
+                )}
               </section>
 
               {/* Voice library link */}
@@ -567,7 +590,7 @@ export function ReadAloudPanel({
 
       {/* Backdrop — sits below the panel but above the book content */}
       <div
-        className="fixed inset-0 z-[55] bg-modal-overlay backdrop-blur-[2px] transition-opacity"
+        className="fixed inset-0 z-[55] bg-modal-overlay/40 backdrop-blur-[2px] transition-opacity"
         onClick={onClose}
       />
     </>

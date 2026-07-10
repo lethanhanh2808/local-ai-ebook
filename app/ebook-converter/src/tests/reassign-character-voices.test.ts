@@ -1,22 +1,14 @@
 import { describe, expect, it } from 'vitest';
+import { VIENEU_VOICE_GENDER } from '@/lib/tts/vieneu-voices';
 
 // Pure helpers extracted from scripts/reassign-character-voices.ts so we
 // can unit-test the gender-violation logic without spinning up the whole
 // script (and its prisma client). These mirror the same logic in the
-// script.
+// script. `VIENEU_VOICE_GENDER` is the same Record the live code uses
+// (hoisted into lib/tts/vieneu-voices.ts to be the single source of truth
+// across API + worker + UI).
 
-const VOICE_GENDER: Record<string, 'female' | 'male'> = {
-  'Ngọc Linh': 'female',
-  'Ngọc Lan': 'female',
-  'Mỹ Duyên': 'female',
-  'Trúc Ly': 'female',
-  'Bình An': 'male',
-  'Gia Bảo': 'male',
-  'Đức Trí': 'male',
-  'Thái Sơn': 'male',
-  'Trọng Hữu': 'male',
-  'Xuân Vĩnh': 'male',
-};
+const VOICE_GENDER = VIENEU_VOICE_GENDER;
 
 function builtinGenderOf(voice: { builtinName?: string | null; name?: string }): 'female' | 'male' | 'unknown' {
   const builtin = voice.builtinName ?? (voice.name ?? '');
@@ -31,12 +23,13 @@ function pickSlot(name: string, count: number): number {
 
 describe('reassign-character-voices helpers', () => {
   it('classifies built-in voice genders correctly', () => {
-    expect(builtinGenderOf({ builtinName: 'Ngọc Lan' })).toBe('female');
+    // Ngọc Linh survived the Jul-2026 upstream catalog sync.
+    expect(builtinGenderOf({ builtinName: 'Ngọc Linh' })).toBe('female');
     expect(builtinGenderOf({ builtinName: 'Xuân Vĩnh' })).toBe('male');
   });
 
   it('falls back to the display name when builtinName is missing', () => {
-    expect(builtinGenderOf({ builtinName: null, name: 'Bình An' })).toBe('male');
+    expect(builtinGenderOf({ builtinName: null, name: 'Xuân Vĩnh' })).toBe('male');
   });
 
   it('returns "unknown" for cloned or unmapped voices', () => {
@@ -73,7 +66,7 @@ describe('reassign-character-voices helpers', () => {
 
   it('confirms a correct assignment (female character with female voice)', () => {
     const charGender = 'female' as const;
-    const builtinGender = builtinGenderOf({ builtinName: 'Ngọc Lan' });
+    const builtinGender = builtinGenderOf({ builtinName: 'Ngọc Linh' });
     expect(builtinGender).toBe(charGender);
   });
 });
