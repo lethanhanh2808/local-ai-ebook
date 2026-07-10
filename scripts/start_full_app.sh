@@ -28,7 +28,8 @@ REDIS_HOST="${REDIS_HOST:-127.0.0.1}"
 REDIS_PORT="${REDIS_PORT:-6379}"
 APP_PORT="${APP_PORT:-3100}"
 OMLX_HEALTH_URL="${OMLX_HEALTH_URL:-http://127.0.0.1:8080/health}"
-UNIFIED_TTS_HEALTH_URL="${UNIFIED_TTS_HEALTH_URL:-http://127.0.0.1:5010/health}"
+TTS_BASE_URL="${UNIFIED_TTS_URL:-${TTS_SERVICE_URL:-http://127.0.0.1:5020}}"
+UNIFIED_TTS_HEALTH_URL="${UNIFIED_TTS_HEALTH_URL:-${TTS_BASE_URL%/}/health}"
 
 http_ok() {
   curl -fsS -m 2 "$1" >/dev/null 2>&1
@@ -81,7 +82,7 @@ start_omlx() {
 
 start_tts() {
   if http_ok "$UNIFIED_TTS_HEALTH_URL"; then
-    echo "[ok] Unified TTS is healthy"
+    echo "[ok] TTS endpoint is healthy ($TTS_BASE_URL)"
     return
   fi
   if [[ -x "$TTS_DIR/start_all.sh" ]]; then
@@ -139,7 +140,7 @@ start_next_foreground() {
 print_status() {
   echo "Local-AI application status"
   echo "  oMLX       : $(http_ok "$OMLX_HEALTH_URL" && echo ok || echo down)"
-  echo "  Unified TTS: $(http_ok "$UNIFIED_TTS_HEALTH_URL" && echo ok || echo down)"
+  echo "  TTS endpoint: $(http_ok "$UNIFIED_TTS_HEALTH_URL" && echo "ok ($TTS_BASE_URL)" || echo down)"
   echo "  Redis      : $(redis_ok && echo ok || echo down)"
   echo "  Next.js    : $([[ -n "$(port_pid "$APP_PORT")" ]] && echo "listening on :$APP_PORT" || echo down)"
   echo "  Worker     : $(bash "$APP_DIR/scripts/start-worker.sh" --status 2>/dev/null || echo unknown)"

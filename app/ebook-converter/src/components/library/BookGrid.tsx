@@ -62,12 +62,17 @@ function BookListRow({
   const starRating = book.rating ? Math.round(book.rating / 2) : 0;
 
   const handleStatusChange = async (readStatus: string) => {
-    const updated = await fetch(`/api/library/${book.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ readStatus }),
-    }).then((r) => r.json()) as BookSummary;
-    onUpdate(updated);
+    try {
+      const res = await fetch(`/api/library/${book.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ readStatus }),
+      });
+      if (!res.ok) throw new Error(`Update failed (HTTP ${res.status})`);
+      onUpdate(await res.json() as BookSummary);
+    } catch (e) {
+      toast.error('Could not update reading status', { description: e instanceof Error ? e.message : String(e) });
+    }
   };
 
   const handleDelete = () => {
@@ -76,8 +81,14 @@ function BookListRow({
       confirmLabel: 'Remove',
       destructive: true,
       onConfirm: async () => {
-        await fetch(`/api/library/${book.id}`, { method: 'DELETE' });
-        onDelete(book.id);
+        try {
+          const res = await fetch(`/api/library/${book.id}`, { method: 'DELETE' });
+          if (!res.ok) throw new Error(`Remove failed (HTTP ${res.status})`);
+          onDelete(book.id);
+          toast.success('Removed', { description: book.title });
+        } catch (e) {
+          toast.error('Failed to remove', { description: e instanceof Error ? e.message : String(e) });
+        }
       },
     });
   };
@@ -125,7 +136,7 @@ function BookListRow({
       {/* Status quick toggle */}
       <div className="hidden sm:flex gap-0.5 shrink-0">
         {(['unread', 'reading', 'read'] as const).map((s) => (
-          <button key={s} onClick={() => handleStatusChange(s)}
+          <button key={s} type="button" onClick={() => handleStatusChange(s)} aria-pressed={book.readStatus === s}
             className={cn('rounded px-2 py-1 text-[9px] font-medium capitalize transition-colors',
               book.readStatus === s ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'
             )}>{s}</button>
@@ -133,7 +144,7 @@ function BookListRow({
       </div>
 
       {/* Actions */}
-      <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="flex items-center gap-1 shrink-0 opacity-100 transition-opacity lg:opacity-0 lg:group-hover:opacity-100 group-focus-within:opacity-100">
         <Link
           href={`/library/${book.id}/read`}
           className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[11px] font-medium text-primary-foreground hover:bg-primary/90"
@@ -141,10 +152,12 @@ function BookListRow({
           <BookOpen className="h-3 w-3" /> Read
         </Link>
         <a href={`/api/library/${book.id}/download`} download
+          aria-label={`Download ${book.title}`}
           className="flex h-8 w-8 items-center justify-center rounded-md border border-border hover:bg-muted transition-colors">
           <Download className="h-3.5 w-3.5" />
         </a>
         <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-destructive hover:bg-destructive/10" onClick={handleDelete}>
+          <span className="sr-only">Remove {book.title}</span>
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </div>
@@ -162,34 +175,89 @@ export function BookGrid() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
+  const [filtersReady, setFiltersReady] = useState(false);
+  const [debouncedSearch, setDebouncedSearch] = useState('');
 
   useEffect(() => { setViewMode(loadViewMode()); }, []);
 
-  const fetchBooks = useCallback(async () => {
+  // Dashboard links and browser history can pre-populate library filters.
+  useEffect(() => {
+    const applyUrl = () => {
+      const params = new URLSearchParams(window.location.search);
+      const nextSearch = params.get('search') ?? params.get('q') ?? '';
+      setSearch(nextSearch);
+      setDebouncedSearch(nextSearch.trim());
+      setLang(params.get('language') ?? '');
+      setReadStatus(params.get('readStatus') ?? params.get('status') ?? '');
+      setIsFavorite(params.get('isFavorite') === 'true' || params.get('favorites') === '1');
+      setFiltersReady(true);
+    };
+    applyUrl();
+    window.addEventListener('popstate', applyUrl);
+    return () => window.removeEventListener('popstate', applyUrl);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  // Keep the current view shareable without adding a history entry per keystroke.
+  useEffect(() => {
+    if (!filtersReady) return;
+    const params = new URLSearchParams();
+    if (search.trim()) params.set('search', search.trim());
+    if (lang) params.set('language', lang);
+    if (readStatus) params.set('status', readStatus);
+    if (isFavorite) params.set('favorites', '1');
+    const query = params.toString();
+    window.history.replaceState(null, '', query ? `/library?${query}` : '/library');
+  }, [filtersReady, isFavorite, lang, readStatus, search]);
+
+  const fetchBooks = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams();
-      if (search) params.set('search', search);
+      if (debouncedSearch) params.set('search', debouncedSearch);
       if (lang)   params.set('language', lang);
       if (readStatus) params.set('readStatus', readStatus);
       if (isFavorite) params.set('isFavorite', 'true');
-      const res = await fetch(`/api/library?${params}`);
-      if (res.ok) setBooks(await res.json());
+      const res = await fetch(`/api/library?${params}`, { signal });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error ?? `Không thể tải thư viện (HTTP ${res.status})`);
+      }
+      const data = await res.json() as unknown;
+      if (!Array.isArray(data)) throw new Error('Phản hồi thư viện không hợp lệ.');
+      setBooks(data as BookSummary[]);
     } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
-  }, [search, lang, readStatus, isFavorite]);
+  }, [debouncedSearch, lang, readStatus, isFavorite]);
 
-  useEffect(() => { void fetchBooks(); }, [fetchBooks]);
+  useEffect(() => {
+    if (!filtersReady) return;
+    const controller = new AbortController();
+    void fetchBooks(controller.signal);
+    return () => controller.abort();
+  }, [fetchBooks, filtersReady]);
 
   const handleDelete = (id: string) => setBooks((prev) => prev.filter((b) => b.id !== id));
   const handleUpdate = (updated: BookSummary) => setBooks((prev) => prev.map((b) => b.id === updated.id ? updated : b));
   const handleEnhanced = (newBook: BookSummary) => setBooks((prev) => [newBook, ...prev]);
 
   const setView = (v: ViewMode) => { setViewMode(v); saveViewMode(v); };
+  const clearFilters = () => {
+    setSearch('');
+    setLang('');
+    setReadStatus('');
+    setIsFavorite(false);
+  };
+  const hasFilters = Boolean(search || lang || readStatus || isFavorite);
 
   const VIEW_ICONS = [
     { id: 'grid' as ViewMode, icon: LayoutGrid, label: 'Grid' },
@@ -208,6 +276,7 @@ export function BookGrid() {
             type="search" placeholder="Search title, author, series…"
             value={search} onChange={(e) => setSearch(e.target.value)}
             className="pl-9"
+            aria-label="Search library"
           />
         </div>
 
@@ -215,7 +284,7 @@ export function BookGrid() {
             so the "All languages" sentinel is "all" instead. We translate back to
             the empty string when sending to the API and when filtering locally. */}
         <Select value={lang || 'all'} onValueChange={(v) => setLang(v === 'all' ? '' : v)}>
-          <SelectTrigger className="w-[160px]">
+          <SelectTrigger className="w-[160px]" aria-label="Filter by language">
             <SelectValue placeholder="All languages" />
           </SelectTrigger>
           <SelectContent>
@@ -227,9 +296,9 @@ export function BookGrid() {
         </Select>
 
         {/* Status tabs */}
-        <div className="flex rounded-md border border-border overflow-hidden">
+        <div className="flex max-w-full overflow-x-auto rounded-md border border-border" role="group" aria-label="Filter by reading status">
           {READ_STATUS_OPTS.map((opt) => (
-            <button key={opt.value} onClick={() => setReadStatus(opt.value)}
+            <button key={opt.value} type="button" onClick={() => setReadStatus(opt.value)} aria-pressed={readStatus === opt.value}
               className={cn('px-3 h-9 text-xs font-medium transition-colors border-r border-border last:border-r-0',
                 readStatus === opt.value ? 'bg-primary text-primary-foreground' : 'bg-background hover:bg-muted',
               )}>{opt.label}</button>
@@ -238,7 +307,9 @@ export function BookGrid() {
 
         {/* Favorites */}
         <button
+          type="button"
           onClick={() => setIsFavorite((v) => !v)}
+          aria-pressed={isFavorite}
           className={cn('h-9 px-3 rounded-md border border-border flex items-center gap-1.5 text-xs font-medium transition-colors',
             isFavorite ? 'bg-rose-500/10 border-rose-500/30 text-rose-600 dark:text-rose-400' : 'bg-background hover:bg-muted',
           )}
@@ -248,9 +319,9 @@ export function BookGrid() {
         </button>
 
         {/* View mode toggle */}
-        <div className="flex rounded-md border border-border overflow-hidden ml-auto">
+        <div className="flex rounded-md border border-border overflow-hidden ml-auto" role="group" aria-label="Library layout">
           {VIEW_ICONS.map(({ id, icon: Icon, label }) => (
-            <button key={id} onClick={() => setView(id)} title={label}
+            <button key={id} type="button" onClick={() => setView(id)} title={label} aria-label={`${label} view`} aria-pressed={viewMode === id}
               className={cn('flex h-9 w-9 items-center justify-center transition-colors border-r border-border last:border-r-0',
                 viewMode === id ? 'bg-primary text-primary-foreground' : 'bg-background hover:bg-muted',
               )}>
@@ -260,7 +331,7 @@ export function BookGrid() {
         </div>
 
         {/* Count */}
-        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+        <div className="flex items-center gap-1 text-xs text-muted-foreground" aria-live="polite">
           <Filter className="h-3.5 w-3.5" />
           <span>{books.length} book{books.length !== 1 ? 's' : ''}</span>
         </div>
@@ -287,12 +358,16 @@ export function BookGrid() {
       ) : books.length === 0 ? (
         <EmptyState
           icon={<BookOpen className="h-6 w-6" />}
-          title={search || lang || readStatus || isFavorite ? 'Không có kết quả' : 'Thư viện trống'}
-          hint={search || lang || readStatus || isFavorite
+          title={hasFilters ? 'Không có kết quả' : 'Thư viện trống'}
+          hint={hasFilters
             ? 'Thử bỏ bớt bộ lọc hoặc đổi từ khoá khác.'
             : 'Upload file EPUB, HTML hoặc TXT đầu tiên để bắt đầu.'}
-          action={!(search || lang || readStatus || isFavorite) && (
-            <Link href="/"><Button size="sm"><Plus className="h-3.5 w-3.5 mr-1.5" />Thêm sách mới</Button></Link>
+          action={hasFilters ? (
+            <Button size="sm" variant="outline" onClick={clearFilters}>Xoá bộ lọc</Button>
+          ) : (
+            <Link href="/convert" className="inline-flex h-8 items-center justify-center rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground shadow hover:bg-primary/90">
+              <Plus className="h-3.5 w-3.5 mr-1.5" />Thêm sách mới
+            </Link>
           )}
         />
       ) : viewMode === 'list' ? (
@@ -312,7 +387,7 @@ export function BookGrid() {
         </div>
       )}
 
-      <p className="text-xs text-muted-foreground">
+      <p className="text-xs text-muted-foreground" aria-live="polite">
         {books.length} book{books.length !== 1 ? 's' : ''} in library
       </p>
     </div>

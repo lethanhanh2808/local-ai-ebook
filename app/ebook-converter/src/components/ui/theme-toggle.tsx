@@ -1,30 +1,20 @@
 // src/components/ui/theme-toggle.tsx
 'use client';
-import { useEffect, useState } from 'react';
 import { Moon, Sun } from 'lucide-react';
+import { useTheme } from '@/components/theme/ThemeProvider';
 
 export function ThemeToggle() {
-  const [dark, setDark] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    setDark(document.documentElement.classList.contains('dark'));
-  }, []);
-
-  if (dark === null) return <div className="w-8 h-8" />;
-
-  const toggle = () => {
-    const next = !dark;
-    setDark(next);
-    document.documentElement.classList.toggle('dark', next);
-    try { localStorage.setItem('theme', next ? 'dark' : 'light'); } catch { /* ignore */ }
-  };
+  const { resolvedTheme, setTheme } = useTheme();
+  const dark = resolvedTheme === 'dark';
 
   return (
     <button
-      onClick={toggle}
-      className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+      type="button"
+      onClick={() => setTheme(dark ? 'light' : 'dark')}
+      className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
-      aria-label="Toggle theme"
+      aria-label={dark ? 'Chuyển sang giao diện sáng' : 'Chuyển sang giao diện tối'}
+      aria-pressed={dark}
     >
       {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
     </button>

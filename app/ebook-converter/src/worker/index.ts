@@ -14,6 +14,7 @@ import { updateJob } from '../lib/db/jobs';
 import { getSettings } from '../lib/db/settings';
 import { runConversionPipeline } from '../lib/pipeline/conversion-pipeline';
 import { outputPath } from '../lib/storage';
+import { prisma } from '../lib/db/client';
 
 // Use a dedicated connection for the liveness ping (separate from BullMQ
 // which sometimes has its own connection state). This is more reliable.
@@ -35,8 +36,12 @@ async function pingAlive() {
   }
 }
 void pingAlive();
-setInterval(() => { void pingAlive(); }, 10_000);
-const shutdownPing = async () => { await pingAlive(); };
+const pingTimer = setInterval(() => { void pingAlive(); }, 10_000);
+pingTimer.unref();
+const shutdownPing = async () => {
+  clearInterval(pingTimer);
+  try { await pingConnection.del(WORKER_ALIVE_KEY); } catch { /* best-effort */ }
+};
 
 const connection = pingConnection;
 
@@ -101,6 +106,7 @@ const worker = new Worker<ConversionJobData>(
     const heartbeat = setInterval(() => {
       log('debug', 'heartbeat', `Job still running`);
     }, 30_000);
+    heartbeatTimers.set(jobId, heartbeat);
 
     const tick = async (pct: number, stage: string) => {
       await updateJob(jobId, { status: 'processing', progress: pct, stage: stage as never });
@@ -229,10 +235,8 @@ const worker = new Worker<ConversionJobData>(
   },
   {
     connection,
-    // Concurrency is set from the settings row, but we need to set it at
-    // construction time. The settings fetch is async. We default to 2 and
-    // update on first job. The actual concurrency doesn't change after
-    // first job — the user must restart worker to apply changes.
+    // Construction uses a safe default; startup immediately applies the
+    // persisted setting through BullMQ's runtime concurrency setter.
     concurrency: 2,
     limiter: { max: 60, duration: 60_000 }, // generous: 60 jobs/min
     // AI enhancement on a 12-chapter book takes ~10-15 min on slow local
@@ -249,12 +253,15 @@ const worker = new Worker<ConversionJobData>(
   },
 );
 
-// Periodically update concurrency from settings (in case user changed it)
+// Periodically update concurrency from settings (BullMQ supports changing
+// this value live; active jobs are not interrupted).
 setInterval(async () => {
   try {
     const n = await getWorkerConcurrency();
     if (n !== activeConcurrency) {
-      console.log(`[worker] Concurrency change requested: ${activeConcurrency} → ${n} (restart worker to apply)`);
+      console.log(`[worker] Concurrency changed: ${activeConcurrency} → ${n}`);
+      worker.concurrency = n;
+      activeConcurrency = n;
     }
   } catch { /* noop */ }
 }, 30_000).unref();
@@ -271,22 +278,46 @@ worker.on('error', (err) => {
   console.error('[worker] Worker error:', err);
 });
 
-process.on('SIGTERM', async () => {
+let shuttingDown = false;
+async function shutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[worker] ${signal} received; draining active work`);
+  const forceTimer = setTimeout(() => {
+    console.error('[worker] graceful shutdown timed out; forcing exit');
+    process.exit(1);
+  }, 30_000);
+  forceTimer.unref();
   await shutdownPing();
   await worker.close();
+  await pingConnection.quit().catch(() => undefined);
+  clearTimeout(forceTimer);
   process.exit(0);
-});
+}
 
-process.on('SIGINT', async () => {
-  await shutdownPing();
-  await worker.close();
-  process.exit(0);
-});
+process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
+process.on('SIGINT', () => { void shutdown('SIGINT'); });
 
 (async () => {
   const n = await getWorkerConcurrency();
   activeConcurrency = n;
+  worker.concurrency = n;
   console.log(`[worker] EPUB conversion worker started (concurrency=${n} from settings)`);
+
+  // A hard-killed worker leaves rows in `processing`; no future BullMQ
+  // event can complete them. Recover only sufficiently old rows so a
+  // briefly overlapping replacement process cannot clobber live work.
+  const staleBefore = new Date(Date.now() - 15 * 60_000);
+  const recovered = await prisma.job.updateMany({
+    where: { status: 'processing', updatedAt: { lt: staleBefore } },
+    data: {
+      status: 'failed',
+      errorMsg: 'Worker restarted while this conversion was still running. Requeue the book to try again.',
+    },
+  });
+  if (recovered.count > 0) {
+    console.warn(`[worker] recovered ${recovered.count} stale processing job(s)`);
+  }
 
   // Also start the audiobook worker so audiobook jobs sitting on the
   // 'ebook-audiobook' queue actually get processed. Without this, books

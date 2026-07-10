@@ -48,9 +48,10 @@ export function buttonClasses(opts: {
 }
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant = 'default', size = 'default', ...props }, ref) => (
+  ({ className, variant = 'default', size = 'default', type = 'button', ...props }, ref) => (
     <button
       ref={ref}
+      type={type}
       className={buttonClasses({ variant, size, className })}
       {...props}
     />

@@ -8,6 +8,7 @@ import { parseEpub } from '@/lib/pipeline/epub-parser';
 import { chat } from '@/lib/ai';  // unified AI client (routes by settings.aiProvider)
 import fs from 'fs';
 import path from 'path';
+import { resolveBookPath } from '@/lib/storage';
 
 // ── Text extraction ────────────────────────────────────────────────────────────
 
@@ -51,9 +52,10 @@ export interface WatermarkCandidate {
 async function detectCandidates(bookId: string): Promise<WatermarkCandidate[]> {
   const book = await getBook(bookId);
   if (!book) throw new Error('Book not found');
-  if (!fs.existsSync(book.filePath)) throw new Error('EPUB file not found');
+  const bookPath = await resolveBookPath(book);
+  if (!fs.existsSync(bookPath)) throw new Error('EPUB file not found');
 
-  const epub = await parseEpub(book.filePath);
+  const epub = await parseEpub(bookPath);
   const totalChapters = epub.htmlFiles.length;
   if (totalChapters < 2) return []; // Can't detect with only 1 chapter
 
@@ -135,10 +137,8 @@ If none are watermarks, reply: []`;
 
 // ── Route handlers ─────────────────────────────────────────────────────────────
 
-export async function GET(
-  req: NextRequest,
-  { params }: { params: { id: string } },
-) {
+export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const useAI = req.nextUrl.searchParams.get('ai') === 'true';
     const book = await getBook(params.id);
@@ -160,17 +160,18 @@ export async function GET(
   }
 }
 
-export async function POST(
-  req: NextRequest,
-  { params }: { params: { id: string } },
-) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
-    const body = await req.json() as { watermarks: string[] };
-    if (!Array.isArray(body.watermarks)) {
+    const body = await req.json() as { watermarks: unknown[] };
+    if (!Array.isArray(body.watermarks) || !body.watermarks.every((value) => typeof value === 'string')) {
       return NextResponse.json({ error: 'watermarks must be an array' }, { status: 400 });
     }
     // Deduplicate and sanitise
-    const cleaned = [...new Set(body.watermarks.map((w: string) => w.trim()).filter((w) => w.length > 0))];
+    const cleaned = [...new Set(body.watermarks.map((w) => (w as string).trim()).filter((w) => w.length > 0))];
+    if (cleaned.length > 500 || cleaned.some((value) => value.length > 1_000)) {
+      return NextResponse.json({ error: 'Too many or overly long watermark phrases' }, { status: 400 });
+    }
     await updateBookWatermarks(params.id, cleaned);
     return NextResponse.json({ ok: true, saved: cleaned });
   } catch (err) {
@@ -179,10 +180,8 @@ export async function POST(
   }
 }
 
-export async function DELETE(
-  _req: NextRequest,
-  { params }: { params: { id: string } },
-) {
+export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     await updateBookWatermarks(params.id, []);
     return NextResponse.json({ ok: true });

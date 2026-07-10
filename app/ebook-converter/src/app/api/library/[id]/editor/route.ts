@@ -12,7 +12,7 @@ import yazl from 'yazl';
 import { v4 as uuid } from 'uuid';
 import { getBook, createBook, updateBook } from '@/lib/db/books';
 import { parseEpub } from '@/lib/pipeline/epub-parser';
-import { coverPath, ensureDirs, libraryPath } from '@/lib/storage';
+import { coverPath, ensureDirs, libraryPath, resolveBookPath, resolveCoverPath } from '@/lib/storage';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -126,15 +126,14 @@ async function writeEditedCopy(options: {
   });
 }
 
-export async function GET(
-  req: NextRequest,
-  { params }: { params: { id: string } },
-) {
+export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const book = await getBook(params.id);
   if (!book) return NextResponse.json({ error: 'Book not found' }, { status: 404 });
-  if (!fs.existsSync(book.filePath)) return NextResponse.json({ error: 'Book file not found' }, { status: 404 });
+  const bookPath = await resolveBookPath(book);
+  if (!fs.existsSync(bookPath)) return NextResponse.json({ error: 'Book file not found' }, { status: 404 });
 
-  const epub = await parseEpub(book.filePath);
+  const epub = await parseEpub(bookPath);
   const tocByBase = new Map(epub.tocEntries.map((entry) => [path.basename(entry.src), entry.title]));
   const tocByFull = new Map(epub.tocEntries.map((entry) => [entry.src, entry.title]));
   const chapters = epub.htmlFiles.map((file, index) => {
@@ -165,13 +164,12 @@ export async function GET(
   });
 }
 
-export async function POST(
-  req: NextRequest,
-  { params }: { params: { id: string } },
-) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const book = await getBook(params.id);
   if (!book) return NextResponse.json({ error: 'Book not found' }, { status: 404 });
-  if (!fs.existsSync(book.filePath)) return NextResponse.json({ error: 'Book file not found' }, { status: 404 });
+  const bookPath = await resolveBookPath(book);
+  if (!fs.existsSync(bookPath)) return NextResponse.json({ error: 'Book file not found' }, { status: 404 });
 
   const body = await req.json().catch(() => ({})) as {
     chapterId?: string;
@@ -186,7 +184,7 @@ export async function POST(
   }
   const mode: 'save' | 'saveAs' = body.mode === 'save' ? 'save' : 'saveAs';
 
-  const epub = await parseEpub(book.filePath);
+  const epub = await parseEpub(bookPath);
   const targetFile = epub.htmlFiles.find((candidate) => chapterIdForFile(candidate) === body.chapterId || path.basename(candidate) === body.chapterId);
   if (!targetFile) return NextResponse.json({ error: 'Chapter not found' }, { status: 404 });
 
@@ -201,9 +199,9 @@ export async function POST(
   // sibling .tmp file first and rename atomically so a crash mid-write
   // never leaves a half-written book on disk. ────────────────────────────
   if (mode === 'save') {
-    const tmpOutput = `${book.filePath}.tmp`;
+    const tmpOutput = `${bookPath}.tmp`;
     await writeEditedCopy({
-      sourcePath: book.filePath,
+      sourcePath: bookPath,
       outputPath: tmpOutput,
       targetFile,
       editedHtml,
@@ -214,17 +212,17 @@ export async function POST(
     // book.filePath (rare — both live under data/library), fall back to
     // copy + unlink.
     try {
-      fs.renameSync(tmpOutput, book.filePath);
+      fs.renameSync(tmpOutput, bookPath);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'EXDEV') {
-        fs.copyFileSync(tmpOutput, book.filePath);
+        fs.copyFileSync(tmpOutput, bookPath);
         fs.unlinkSync(tmpOutput);
       } else {
         try { fs.unlinkSync(tmpOutput); } catch { /* best effort */ }
         throw err;
       }
     }
-    const stat = fs.statSync(book.filePath);
+    const stat = fs.statSync(bookPath);
     const updated = await updateBook(book.id, {
       fileSize: stat.size,
     });
@@ -235,7 +233,7 @@ export async function POST(
   const newBookId = uuid();
   const outputFile = libraryPath(newBookId);
   await writeEditedCopy({
-    sourcePath: book.filePath,
+    sourcePath: bookPath,
     outputPath: outputFile,
     targetFile,
     editedHtml,
@@ -243,10 +241,11 @@ export async function POST(
   });
 
   let copiedCover: string | undefined;
-  if (book.coverPath && fs.existsSync(book.coverPath)) {
-    const ext = path.extname(book.coverPath) || '.jpg';
+  const sourceCover = await resolveCoverPath(book);
+  if (sourceCover) {
+    const ext = path.extname(sourceCover) || '.jpg';
     copiedCover = coverPath(newBookId, ext.replace(/^\./, ''));
-    fs.copyFileSync(book.coverPath, copiedCover);
+    fs.copyFileSync(sourceCover, copiedCover);
   }
 
   const editedSuffix = ' - Edited';

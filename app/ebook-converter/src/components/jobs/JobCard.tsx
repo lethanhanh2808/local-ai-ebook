@@ -1,6 +1,6 @@
 'use client';
 // src/components/jobs/JobCard.tsx – Full-width conversion job card with live stats
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { forwardRef, useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   CheckCircle2, XCircle, Loader2, Clock, Download, Trash2,
@@ -84,7 +84,10 @@ interface JobCardProps {
   onAddedToLibrary?: (id: string) => void;
 }
 
-export function JobCard({ job, position, onDelete, onAddedToLibrary }: JobCardProps) {
+export const JobCard = forwardRef<HTMLDivElement, JobCardProps>(function JobCard(
+  { job, position, onDelete, onAddedToLibrary },
+  forwardedRef,
+) {
   const toast = useToast();
   const [addingToLib, setAddingToLib] = useState(false);
   const [addedToLib, setAddedToLib] = useState(false);
@@ -152,6 +155,7 @@ export function JobCard({ job, position, onDelete, onAddedToLibrary }: JobCardPr
 
   return (
     <motion.div
+      ref={forwardedRef}
       layout
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
@@ -160,7 +164,7 @@ export function JobCard({ job, position, onDelete, onAddedToLibrary }: JobCardPr
         // Base border (color set explicitly because this element sits inside a
         // Card without one). Conditional classes override `border-border` for
         // status highlights; later classes win in Tailwind's cascade.
-        'border border-border shadow-sm transition-shadow hover:shadow-md overflow-hidden',
+        'min-w-0 border border-border shadow-sm transition-shadow hover:shadow-md overflow-hidden',
         job.status === 'failed' && 'border-destructive/40',
         job.status === 'completed' && 'border-success-fg/40',
         isActive && 'border-primary/40',
@@ -175,7 +179,7 @@ export function JobCard({ job, position, onDelete, onAddedToLibrary }: JobCardPr
         'bg-muted-foreground': job.status === 'cancelled',
       })} />
 
-      <div className="p-4">
+      <div className="p-3 sm:p-4">
         {/* Header row */}
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-start gap-2.5 min-w-0 flex-1">
@@ -222,12 +226,12 @@ export function JobCard({ job, position, onDelete, onAddedToLibrary }: JobCardPr
         {/* Progress section */}
         {isActive && (
           <div className="mt-3 space-y-1.5">
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <div className="flex flex-col gap-1 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
               <span className="flex items-center gap-1">
                 <RefreshCw className="h-3 w-3 animate-spin" />
                 {job.stage.replace(/_/g, ' ')}
               </span>
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 {eta !== null && (
                   <span className="flex items-center gap-1">
                     <Clock className="h-3 w-3" />
@@ -238,7 +242,7 @@ export function JobCard({ job, position, onDelete, onAddedToLibrary }: JobCardPr
               </div>
             </div>
             <Progress value={job.progress} className="h-2" />
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <div className="flex flex-wrap items-center justify-between gap-1 text-xs text-muted-foreground">
               <span>Elapsed: {formatDuration(elapsed)}</span>
               {position !== undefined && job.status === 'queued' && (
                 <span>Queue position #{position + 1}</span>
@@ -375,8 +379,8 @@ export function JobCard({ job, position, onDelete, onAddedToLibrary }: JobCardPr
         ))}
 
         {/* Footer */}
-        <div className="mt-3 flex items-center justify-between pt-2 border-t border-border/50">
-          <div className="flex items-center gap-2">
+        <div className="mt-3 flex flex-col gap-2 border-t border-border/50 pt-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <span className="text-xs text-muted-foreground">{formatDate(job.createdAt)}</span>
             {/* Console button — shows live log of what's being processed */}
             {job.logPath && (
@@ -390,7 +394,7 @@ export function JobCard({ job, position, onDelete, onAddedToLibrary }: JobCardPr
               </Button>
             )}
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
             {/* Start button — for pending jobs only */}
             {job.status === 'pending' && (
               <Button
@@ -441,7 +445,8 @@ export function JobCard({ job, position, onDelete, onAddedToLibrary }: JobCardPr
       </div>
     </motion.div>
   );
-}
+});
+JobCard.displayName = 'JobCard';
 
 // ── DebugConsole: live log panel that tails the per-job log file ─────────
 interface DebugConsoleProps {

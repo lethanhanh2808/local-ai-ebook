@@ -6,7 +6,7 @@ Converts EPUB, HTML, and TXT ebooks into clean, standardized EPUB3 with optional
 
 ## Tech stack
 
-- **Next.js 14** (App Router) + **TailwindCSS** + **Framer Motion** + **Radix UI** primitives
+- **Next.js 15** (App Router) + **TailwindCSS** + **Framer Motion** + **Radix UI** primitives
 - **Prisma + SQLite** for persistent job, library, shelf, voice, character, and illustration tracking
 - **BullMQ + Redis (ioredis)** for reliable async job processing and live progress polling
 - **OMLX** local AI models (Qwen/DeepSeek) served on `http://127.0.0.1:8080/v1` for:
@@ -82,7 +82,10 @@ Run validation after changes:
 
 ```bash
 npm test
-npx tsc --noEmit
+npm run lint
+npm run typecheck
+npm run test:python
+npm run build
 npm run test:e2e:local:smoke
 npm run test:e2e:local
 ```
@@ -103,7 +106,8 @@ cd /Volumes/EXT-SSD/Users/anhl/Local-AI
 | `/` | Dashboard — recent jobs, library stats, quick links |
 | `/convert` | Drag-and-drop upload + per-file conversion options (light AI, deep format, watermark cleanup) |
 | `/library` | Library grid — all converted books, filter by status/format, edit metadata, multi-select actions |
-| `/library/[id]` | Built-in reader with TOC, themes, progress, audiobook panel, chapter illustrations, voice commands, and TTS status |
+| `/library/[id]` | Book details, metadata, title override, and illustration controls |
+| `/library/[id]/read` | Built-in reader with TOC, themes, progress, audiobook panel, chapter illustrations, voice commands, and TTS status |
 | `/library/[id]/edit` | Basic WYSIWYG EPUB chapter editor that saves edits as a new library copy |
 | `/shelves` | Shelves management — group books into collections, public/private, drag-to-reorder |
 | `/shelves/[id]` | Single shelf with its books |

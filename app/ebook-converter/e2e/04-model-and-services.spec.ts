@@ -5,16 +5,22 @@ import { test, expect } from '@playwright/test';
 
 test.describe('AI model + service routing', () => {
   test('Settings page shows current model selection', async ({ page }) => {
+    const response = await page.request.get('/api/settings');
+    expect(response.ok()).toBe(true);
+    const settings = await response.json() as { aiModel?: string };
+    expect(settings.aiModel, 'settings API should expose the selected model').toBeTruthy();
+
     await page.goto('/settings');
     await page.waitForLoadState('networkidle');
 
-    // Model label should be visible (or its current value)
+    // The current settings UI uses an editable model textbox rather than a
+    // native select, so assert the persisted value is rendered directly.
     await expect(page.getByText(/Model/i).first()).toBeVisible();
-
-    // Verify the model dropdown/select exists
-    const modelSelectors = page.locator('select').filter({ has: page.locator('option') });
-    const count = await modelSelectors.count();
-    expect(count, 'should have at least one model selector on settings page').toBeGreaterThan(0);
+    const renderedValues = await page.locator('input').evaluateAll(
+      (inputs) => inputs.map((input) => (input as HTMLInputElement).value),
+    );
+    expect(renderedValues, 'selected model should be rendered in a settings input')
+      .toContain(settings.aiModel);
   });
 
   test('Conversion pipeline uses the user-selected model', async ({ page }) => {
@@ -32,7 +38,7 @@ test.describe('AI model + service routing', () => {
     const r = await page.request.post('/api/tts/preview', {
       headers: { 'Content-Type': 'application/json' },
       data: {
-        voice: 'Bình An',
+        voice: 'Xuân Vĩnh',
         text: 'Xin chào, đây là bài test preview.',
         language: 'vi',
         speed: 1.0,

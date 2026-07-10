@@ -14,11 +14,15 @@ export const dynamic = 'force-dynamic';
 
 const UNIFIED_TTS_URL = process.env.UNIFIED_TTS_URL ?? 'http://127.0.0.1:5010';
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string; voiceId: string } }) {
+export async function PATCH(
+  req: NextRequest,
+  props: { params: Promise<{ id: string; voiceId: string }> }
+) {
+  const params = await props.params;
   const voice = await getVoice(params.voiceId);
   if (!voice || voice.bookId !== params.id) return NextResponse.json({ error: 'Voice not found' }, { status: 404 });
 
-  const body = await req.json() as {
+  let body: {
     name?: string;
     description?: string;
     language?: string;
@@ -26,15 +30,49 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     defaultSpeed?: number;
     defaultEmotion?: string;
   };
+  try { body = await req.json() as typeof body; }
+  catch { return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 }); }
 
-  const updated = await updateVoice(params.voiceId, body);
-  if (body.isDefault !== undefined) {
-    await setBookAudiobookStatus(params.id, 'none');
+  const data: Parameters<typeof updateVoice>[1] = {};
+  if (body.name !== undefined) {
+    if (typeof body.name !== 'string' || !body.name.trim()) {
+      return NextResponse.json({ error: 'name must be a non-empty string' }, { status: 400 });
+    }
+    data.name = body.name.trim().slice(0, 120);
   }
+  if (body.description !== undefined) {
+    if (typeof body.description !== 'string') return NextResponse.json({ error: 'description must be a string' }, { status: 400 });
+    data.description = body.description.trim().slice(0, 500);
+  }
+  if (body.language !== undefined) {
+    if (typeof body.language !== 'string' || !body.language.trim()) return NextResponse.json({ error: 'language must be a non-empty string' }, { status: 400 });
+    data.language = body.language.trim().slice(0, 16);
+  }
+  if (body.isDefault !== undefined) {
+    if (typeof body.isDefault !== 'boolean') return NextResponse.json({ error: 'isDefault must be boolean' }, { status: 400 });
+    data.isDefault = body.isDefault;
+  }
+  if (body.defaultSpeed !== undefined) {
+    if (typeof body.defaultSpeed !== 'number' || !Number.isFinite(body.defaultSpeed)) {
+      return NextResponse.json({ error: 'defaultSpeed must be a finite number' }, { status: 400 });
+    }
+    data.defaultSpeed = Math.min(2, Math.max(0.5, body.defaultSpeed));
+  }
+  if (body.defaultEmotion !== undefined) {
+    if (typeof body.defaultEmotion !== 'string') return NextResponse.json({ error: 'defaultEmotion must be a string' }, { status: 400 });
+    data.defaultEmotion = body.defaultEmotion.trim().slice(0, 40);
+  }
+
+  const updated = await updateVoice(params.voiceId, data);
+  await setBookAudiobookStatus(params.id, 'none');
   return NextResponse.json({ voice: updated });
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: { id: string; voiceId: string } }) {
+export async function DELETE(
+  _req: NextRequest,
+  props: { params: Promise<{ id: string; voiceId: string }> }
+) {
+  const params = await props.params;
   const voice = await getVoice(params.voiceId);
   if (!voice || voice.bookId !== params.id) return NextResponse.json({ error: 'Voice not found' }, { status: 404 });
 
@@ -44,7 +82,11 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
   return NextResponse.json({ ok: true });
 }
 
-export async function POST(req: NextRequest, { params }: { params: { id: string; voiceId: string } }) {
+export async function POST(
+  req: NextRequest,
+  props: { params: Promise<{ id: string; voiceId: string }> }
+) {
+  const params = await props.params;
   const voice = await getVoice(params.voiceId);
   if (!voice || voice.bookId !== params.id) return NextResponse.json({ error: 'Voice not found' }, { status: 404 });
   const book = await getBook(params.id);
@@ -54,8 +96,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
   if (action !== 'test') return NextResponse.json({ error: 'unknown action' }, { status: 400 });
 
   const body = await req.json().catch(() => ({})) as { text?: string; speed?: number };
-  const text = body.text?.trim() || 'Xin chào, đây là giọng đọc thử nghiệm của tôi.';
-  const speed = body.speed ?? voice.defaultSpeed ?? 1.0;
+  const text = (body.text?.trim() || 'Xin chào, đây là giọng đọc thử nghiệm của tôi.').slice(0, 1_000);
+  const rawSpeed = body.speed ?? voice.defaultSpeed ?? 1.0;
+  const speed = Number.isFinite(rawSpeed) ? Math.min(2, Math.max(0.5, rawSpeed)) : 1.0;
 
   // Pick the right backend based on whether we have a reference audio (cloned
   // voice) or just a built-in VieNeu voice name.

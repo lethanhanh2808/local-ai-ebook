@@ -73,7 +73,7 @@ export function ServiceHealth({ variant = 'compact', className, showWorker = tru
     if (showWorker && !worker?.online) return 'Worker offline';
     if (showWorker && !worker?.redis) return 'Redis offline';
     return 'Services degraded';
-  }, [allOk, loading, showWorker, tts?.ok, worker?.online, worker?.redis]);
+  }, [allOk, loading, showWorker, tts, worker?.online, worker?.redis]);
 
   if (variant === 'compact') {
     return (
@@ -157,4 +157,3 @@ const rows = [
     </div>
   );
 }
-

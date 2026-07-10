@@ -68,19 +68,23 @@ function useDialogContext(component: string): DialogContextValue {
 
 // Stack of open dialogs so the focus trap only acts on the topmost one,
 // and so multi-dialog interactions (e.g. confirm-on-top-of-edit) work.
-const dialogStack: Array<{ close: () => void }> = [];
+interface DialogStackEntry {
+  close: () => void;
+}
 
-function pushDialog(entry: { close: () => void }) {
+const dialogStack: DialogStackEntry[] = [];
+
+function pushDialog(entry: DialogStackEntry) {
   dialogStack.push(entry);
 }
 
-function popDialog(entry: { close: () => void }) {
+function popDialog(entry: DialogStackEntry) {
   const idx = dialogStack.lastIndexOf(entry);
   if (idx >= 0) dialogStack.splice(idx, 1);
 }
 
-function topmostClose(): (() => void) | null {
-  return dialogStack.length ? dialogStack[dialogStack.length - 1].close : null;
+function topmostDialog(): DialogStackEntry | null {
+  return dialogStack.length ? dialogStack[dialogStack.length - 1] : null;
 }
 
 export interface DialogProps {
@@ -111,6 +115,7 @@ export function Dialog({
   const panelRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const closeRef = useRef<() => void>(() => {});
+  const stackEntryRef = useRef<DialogStackEntry>({ close: () => closeRef.current() });
 
   const close = useCallback(() => onOpenChange(false), [onOpenChange]);
   closeRef.current = close;
@@ -129,18 +134,20 @@ export function Dialog({
     // Move focus to the dialog panel after mount. Use a microtask so
     // the portal has rendered.
     queueMicrotask(() => {
-      panelRef.current?.focus();
+      const panel = panelRef.current;
+      if (!panel) return;
+      const preferred = panel.querySelector<HTMLElement>('[autofocus], [data-autofocus="true"]');
+      (preferred ?? panel).focus();
     });
 
     // Register on the global dialog stack so the topmost close handler
     // wins for ESC.
-    const entry = { close: () => closeRef.current() };
+    const entry = stackEntryRef.current;
     pushDialog(entry);
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      const top = topmostClose();
-      if (top === entry.close) {
+      if (topmostDialog() === entry) {
         e.preventDefault();
         closeRef.current();
       }
@@ -168,8 +175,7 @@ export function Dialog({
       const panel = panelRef.current;
       if (!panel) return;
       // Only trap when this dialog is the topmost one.
-      const top = topmostClose();
-      if (top !== (() => closeRef.current())) return;
+      if (topmostDialog() !== stackEntryRef.current) return;
       const focusables = panel.querySelectorAll<HTMLElement>(
         'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
       );
@@ -278,7 +284,7 @@ DialogBody.displayName = 'DialogBody';
 /** Footer region — typically contains action buttons. */
 export const DialogFooter = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
   ({ className, ...props }, ref) => {
-    const ctx = useDialogContext('DialogFooter');
+    useDialogContext('DialogFooter');
     return (
       <div
         ref={ref}

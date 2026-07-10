@@ -22,10 +22,8 @@ import { getBook } from '@/lib/db/books';
 
 export const dynamic = 'force-dynamic';
 
-export async function POST(
-  req: NextRequest,
-  { params }: { params: { id: string } },
-) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const book = await getBook(params.id);
   if (!book) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 

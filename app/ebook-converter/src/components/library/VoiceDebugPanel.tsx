@@ -289,6 +289,8 @@ export function VoiceDebugPanel({
   hoverCls,
 }: VoiceDebugPanelProps) {
   const rows = useMemo<ParagraphRow[]>(() => {
+    // Intentionally invalidate after the parent mutates the attribution ref.
+    void attributionRefreshTick;
     // Pull the current chapter's attribution map (parser + regex results
     // stored on the server) so we can label each row with its source.
     const info = currentChapterId
@@ -723,7 +725,7 @@ export function VoiceDebugPanel({
         Inline <code className="font-mono opacity-80">regex:/local:/llm:</code> chips show what each
         evidence layer voted — only render after a Full Analyzer run.
         If a Ưu Nhi line shows amber, the attribution logic missed — check the snippet for
-        pronoun / name pattern. Run "Full Analysis" (Wand2 button) to retry with the LLM.
+        pronoun / name pattern. Run &ldquo;Full Analysis&rdquo; (Wand2 button) to retry with the LLM.
       </div>
     </div>
   );

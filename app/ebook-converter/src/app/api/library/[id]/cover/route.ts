@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { getBook } from '@/lib/db/books';
+import { resolveCoverPath } from '@/lib/storage';
 
 /** Generate a deterministic color from a string */
 function strToHue(s: string): number {
@@ -67,22 +68,21 @@ function generateCoverSvg(title: string, author: string): string {
 </svg>`;
 }
 
-export async function GET(
-  _req: NextRequest,
-  { params }: { params: { id: string } },
-) {
+export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const book = await getBook(params.id);
   if (!book) return new NextResponse(null, { status: 404 });
 
   // Serve stored cover if available
-  if (book.coverPath && fs.existsSync(book.coverPath)) {
-    const ext = path.extname(book.coverPath).slice(1).toLowerCase();
+  const storedCover = await resolveCoverPath(book);
+  if (storedCover && fs.existsSync(storedCover)) {
+    const ext = path.extname(storedCover).slice(1).toLowerCase();
     const mime = ext === 'png' ? 'image/png'
       : ext === 'gif' ? 'image/gif'
       : ext === 'svg' ? 'image/svg+xml'
       : ext === 'webp' ? 'image/webp'
       : 'image/jpeg';
-    const buf = fs.readFileSync(book.coverPath);
+    const buf = fs.readFileSync(storedCover);
     return new NextResponse(buf, {
       headers: { 'Content-Type': mime, 'Cache-Control': 'public, max-age=86400' },
     });

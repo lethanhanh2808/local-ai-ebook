@@ -7,25 +7,24 @@ import path from 'path';
 import fs from 'fs';
 import { getBook, updateBook } from '@/lib/db/books';
 import { extractCoverFromEpub } from '@/lib/pipeline/epub-cover';
-import { coverPath } from '@/lib/storage';
+import { coverPath, resolveBookPath } from '@/lib/storage';
 import { generateAIBookCover } from '@/lib/covers/ai-generate-cover';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(
-  _req: NextRequest,
-  { params }: { params: { id: string } },
-) {
+export async function POST(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const book = await getBook(params.id);
   if (!book) return NextResponse.json({ error: 'Book not found' }, { status: 404 });
 
   const destBase = coverPath(book.id);
+  const bookPath = await resolveBookPath(book);
 
   // 1. Try to extract existing cover from the EPUB
-  if (book.filePath && fs.existsSync(book.filePath)) {
+  if (fs.existsSync(bookPath)) {
     try {
-      const extracted = await extractCoverFromEpub(book.filePath, destBase);
+      const extracted = await extractCoverFromEpub(bookPath, destBase);
       if (extracted) {
         const exts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
         for (const ext of exts) {

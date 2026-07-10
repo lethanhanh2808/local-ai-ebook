@@ -34,8 +34,9 @@ function sniffExt(buf: Buffer): 'png' | 'jpg' | undefined {
 
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { id: string; chapterIdx: string } },
+  props: { params: Promise<{ id: string; chapterIdx: string }> }
 ) {
+  const params = await props.params;
   const idx = parseInt(params.chapterIdx, 10);
   if (!Number.isFinite(idx) || idx < 0) {
     return NextResponse.json({ error: 'Invalid chapterIdx' }, { status: 400 });

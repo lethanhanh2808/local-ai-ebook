@@ -7,12 +7,17 @@ import path from 'path';
 import { createJob } from '@/lib/db/jobs';
 import { getQueue } from '@/lib/queue';
 import { ensureDirs, uploadPath, UPLOAD_DIR, jobLogPath } from '@/lib/storage';
+import { clientIp, consume, rateLimitResponse } from '@/lib/utils/rate-limit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const ALLOWED_EXTENSIONS = new Set(['epub', 'html', 'htm', 'txt']);
-const MAX_BYTES = parseInt(process.env.MAX_FILE_SIZE_MB ?? '100', 10) * 1024 * 1024;
+const configuredMaxMb = Number(process.env.MAX_FILE_SIZE_MB ?? 100);
+const MAX_FILE_SIZE_MB = Number.isFinite(configuredMaxMb) && configuredMaxMb > 0
+  ? Math.min(configuredMaxMb, 1024)
+  : 100;
+const MAX_BYTES = Math.floor(MAX_FILE_SIZE_MB * 1024 * 1024);
 
 /**
  * Converts a filename with Unicode/diacritics to a safe ASCII filename.
@@ -37,6 +42,9 @@ function toSafeFilename(name: string): string {
 }
 
 export async function POST(req: NextRequest) {
+  const limit = consume(`upload:${clientIp(req)}`, { capacity: 10, windowMs: 10 * 60_000 });
+  if (!limit.allowed) return rateLimitResponse(limit);
+
   try {
     ensureDirs();
 
@@ -49,7 +57,7 @@ export async function POST(req: NextRequest) {
 
     if (file.size > MAX_BYTES) {
       return NextResponse.json(
-        { error: `File exceeds maximum size of ${process.env.MAX_FILE_SIZE_MB ?? 100} MB` },
+        { error: `File exceeds maximum size of ${MAX_FILE_SIZE_MB} MB` },
         { status: 413 },
       );
     }
@@ -122,7 +130,8 @@ export async function POST(req: NextRequest) {
       // intended safe default. Users who want the original heavy styling
       // can turn it off in /settings.
       const readerFriendly = formReaderFriendly !== null ? formReaderFriendly === 'true' : (settings.defaultReaderFriendly ?? true);
-      const aiPrompt = (formData.get('aiPrompt') as string | null)?.trim() || undefined;
+      const rawAiPrompt = (formData.get('aiPrompt') as string | null)?.trim() || undefined;
+      const aiPrompt = rawAiPrompt?.slice(0, 8_000);
 
       // Persist the user's actual choices back to settings (so next upload uses
       // them as default) — but only if the form explicitly sent them.

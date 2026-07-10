@@ -407,7 +407,7 @@ function CharacterRow({
            !profile?.visualDescription &&
            outEdges.length === 0 && inEdges.length === 0 && chapterEntries.length === 0 && (
             <p className="text-xs italic text-muted-foreground">
-              Chưa có dữ liệu. Nhấn "Refresh" để LLM đề xuất, hoặc "Edit" để tự điền.
+              Chưa có dữ liệu. Nhấn &ldquo;Refresh&rdquo; để LLM đề xuất, hoặc &ldquo;Edit&rdquo; để tự điền.
             </p>
           )}
         </div>
@@ -459,7 +459,7 @@ function PendingDiffsBanner({
             <span className="flex-1">
               {summaryForDiff(d)}{' '}
               {d.patch.evidenceQuote && (
-                <em className="text-muted-foreground">"{d.patch.evidenceQuote.slice(0, 100)}…"</em>
+                <em className="text-muted-foreground">&ldquo;{d.patch.evidenceQuote.slice(0, 100)}…&rdquo;</em>
               )}
               {d.patch.autoReason.startsWith('conflict-') && (
                 <span className="ml-2 text-bible-pending-fg font-medium">

@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { prisma } from '@/lib/db/client';
+import { assertWithinRoots, pathRoots, SafePathError } from '@/lib/storage/safe-path';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -37,10 +38,8 @@ function parseLog(content: string): LogEntry[] {
   return out;
 }
 
-export async function GET(
-  req: NextRequest,
-  { params }: { params: { id: string } },
-) {
+export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   // Look up the log file path from the DB (set by the worker)
   const job = await prisma.job.findUnique({
     where: { id: params.id },
@@ -52,7 +51,18 @@ export async function GET(
   const fromLine = fromParam ? Math.max(0, parseInt(fromParam, 10) || 0) : 0;
 
   // The worker writes to logPath; fall back to LOG_DIR/<jobId>.jsonl
-  const logPath = job.logPath ?? path.join(LOG_DIR, `${params.id}.jsonl`);
+  let logPath: string;
+  try {
+    logPath = assertWithinRoots(
+      job.logPath ?? path.join(LOG_DIR, `${params.id}.jsonl`),
+      [pathRoots().logs],
+    );
+  } catch (error) {
+    if (error instanceof SafePathError) {
+      return NextResponse.json({ error: 'Log file path is invalid' }, { status: 404 });
+    }
+    throw error;
+  }
 
   if (!fs.existsSync(logPath)) {
     return NextResponse.json({
@@ -68,6 +78,10 @@ export async function GET(
 
   // Read the file. We could mmap, but for simplicity just read the whole file.
   // For large files (>10MB) we could chunk, but logs are small (<1MB typically).
+  const stat = fs.statSync(logPath);
+  if (stat.size > 10 * 1024 * 1024) {
+    return NextResponse.json({ error: 'Log file is too large to display' }, { status: 413 });
+  }
   const content = fs.readFileSync(logPath, 'utf8');
   const allLines = content.split('\n');
   const all = parseLog(content);

@@ -1,0 +1,5 @@
+# Lightweight dependencies needed to import and unit-test the orchestration
+# layer. Model runtimes/weights are intentionally excluded and mocked by tests.
+fastapi>=0.115,<1
+httpx>=0.28,<0.29
+numpy>=2,<3

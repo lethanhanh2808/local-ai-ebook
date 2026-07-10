@@ -2,9 +2,9 @@
 # Run the standard verification set after code changes.
 #
 # Usage:
-#   ./scripts/verify_changes.sh              # typecheck + unit + E2E smoke
-#   ./scripts/verify_changes.sh --full-e2e   # typecheck + unit + full Playwright suite
-#   SKIP_E2E=1 ./scripts/verify_changes.sh   # typecheck + unit only
+#   ./scripts/verify_changes.sh              # lint + typecheck + tests + build + E2E smoke
+#   ./scripts/verify_changes.sh --full-e2e   # same gate + full Playwright suite
+#   SKIP_E2E=1 ./scripts/verify_changes.sh   # everything except Playwright
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -23,10 +23,19 @@ bash -n "$APP_DIR/scripts/start-worker.sh"
 cd "$APP_DIR"
 
 echo "[verify] TypeScript"
-npx tsc --noEmit
+npm run typecheck
+
+echo "[verify] lint"
+npm run lint
 
 echo "[verify] unit tests"
 npm test
+
+echo "[verify] Python TTS tests"
+npm run test:python
+
+echo "[verify] production build"
+npm run build
 
 if [[ "${SKIP_E2E:-0}" == "1" ]]; then
   echo "[verify] skipping E2E because SKIP_E2E=1"
@@ -43,4 +52,3 @@ else
   echo "[verify] Playwright smoke E2E"
   npm run test:e2e:local:smoke
 fi
-

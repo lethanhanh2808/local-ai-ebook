@@ -6,10 +6,12 @@ interface ProgressProps {
   value?: number;
   /** Optional caption rendered next to (or above) the bar. */
   label?: string;
+  /** Accessible name when no visible label is rendered. */
+  ariaLabel?: string;
   className?: string;
   indicatorClassName?: string;
 }
-export function Progress({ value, className, indicatorClassName, label }: ProgressProps) {
+export function Progress({ value, className, indicatorClassName, label, ariaLabel }: ProgressProps) {
   const isIndeterminate = value === undefined;
   const pct = isIndeterminate ? 100 : Math.min(100, Math.max(0, value));
   return (
@@ -21,6 +23,12 @@ export function Progress({ value, className, indicatorClassName, label }: Progre
         </div>
       )}
       <div
+        role="progressbar"
+        aria-label={ariaLabel ?? label ?? 'Tiến độ'}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={isIndeterminate ? undefined : Math.round(pct)}
+        aria-valuetext={isIndeterminate ? 'Đang xử lý' : `${Math.round(pct)}%`}
         className={cn(
           'relative h-2 w-full overflow-hidden rounded-full bg-secondary',
           isIndeterminate && 'animate-pulse',

@@ -6,6 +6,9 @@ import { getBook } from '@/lib/db/books';
 import fs from 'fs';
 import yauzl from 'yauzl';
 import { promisify } from 'util';
+import { resolveBookPath } from '@/lib/storage';
+
+const MAX_ASSET_BYTES = 25 * 1024 * 1024;
 
 const MIME_MAP: Record<string, string> = {
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
@@ -17,7 +20,16 @@ const MIME_MAP: Record<string, string> = {
 function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    stream.on('data', (c: Buffer) => chunks.push(c));
+    let total = 0;
+    stream.on('data', (c: Buffer) => {
+      total += c.length;
+      if (total > MAX_ASSET_BYTES) {
+        (stream as NodeJS.ReadableStream & { destroy(error?: Error): void })
+          .destroy(new Error('EPUB asset exceeds size limit'));
+        return;
+      }
+      chunks.push(c);
+    });
     stream.on('end', () => resolve(Buffer.concat(chunks)));
     stream.on('error', reject);
   });
@@ -25,21 +37,27 @@ function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
 
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { id: string; path: string[] } },
+  props: { params: Promise<{ id: string; path: string[] }> }
 ) {
+  const params = await props.params;
   const book = await getBook(params.id);
-  if (!book?.filePath || !fs.existsSync(book.filePath)) {
+  if (!book) {
     return new NextResponse(null, { status: 404 });
   }
+  const bookPath = await resolveBookPath(book);
+  if (!fs.existsSync(bookPath)) return new NextResponse(null, { status: 404 });
 
-  const assetPath = params.path.join('/'); // e.g. "images/cover.jpg"
+  const assetPath = params.path.join('/').replace(/\\/g, '/'); // e.g. "images/cover.jpg"
+  if (!assetPath || assetPath.startsWith('/') || assetPath.split('/').some((part) => part === '..')) {
+    return NextResponse.json({ error: 'Invalid asset path' }, { status: 400 });
+  }
   const ext = assetPath.split('.').pop()?.toLowerCase() ?? '';
   const mime = MIME_MAP[ext] ?? 'application/octet-stream';
 
   const openZip = promisify<string, yauzl.Options, yauzl.ZipFile>(yauzl.open);
 
   try {
-    const zip = await openZip(book.filePath, { lazyEntries: true });
+    const zip = await openZip(bookPath, { lazyEntries: true });
 
     const buf = await new Promise<Buffer | null>((resolve, reject) => {
       zip.readEntry();
@@ -52,6 +70,11 @@ export async function GET(
           fn.endsWith(`/${assetPath}`) ||
           fn.endsWith(assetPath);
         if (isMatch && !/\/$/.test(fn)) {
+          if (entry.uncompressedSize > MAX_ASSET_BYTES) {
+            zip.close();
+            resolve(null);
+            return;
+          }
           zip.openReadStream(entry, (err, stream) => {
             if (err || !stream) { zip.close(); resolve(null); return; }
             streamToBuffer(stream)
@@ -72,6 +95,8 @@ export async function GET(
       headers: {
         'Content-Type': mime,
         'Cache-Control': 'public, max-age=86400',
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
       },
     });
   } catch {

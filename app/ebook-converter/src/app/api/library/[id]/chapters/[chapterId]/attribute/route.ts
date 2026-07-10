@@ -60,8 +60,9 @@ export const maxDuration = 60; // parser cold-start can be slow first time
 // ── Main handler ─────────────────────────────────────────────────────────
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string; chapterId: string } },
+  props: { params: Promise<{ id: string; chapterId: string }> }
 ) {
+  const params = await props.params;
   const book = await getBook(params.id);
   if (!book) return NextResponse.json({ error: 'Book not found' }, { status: 404 });
 

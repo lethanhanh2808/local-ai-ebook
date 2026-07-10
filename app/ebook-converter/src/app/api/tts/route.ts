@@ -122,7 +122,7 @@ function applyEmotionMarker(text: string, emotion?: string | null): string {
   // If the caller already injected a marker, don't double up.
   if (/^\s*\[(?:cười|thở dài|hắng giọng)\]/i.test(text)) return text;
   // Require content evidence for [cười] — explicit laugh patterns only.
-  if (marker === ' [cười] ') {
+  if (marker === '[cười]') {
     const lc = text.toLowerCase();
     const hasLaughEvidence =
       /\b(?:haha|ha ha|hehe|hihi|hê hê|cười lớn|phá lên cười|cười khanh khách|cười khúc khích|cười ha hả|cười hô hố|cười rúc rích|cười gằn)\b/.test(lc)
@@ -144,6 +144,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const text = (body.text ?? '').trim();
   if (!text) {
     return NextResponse.json({ error: 'text is required' }, { status: 400 });
+  }
+  if (text.length > 10_000) {
+    return NextResponse.json({ error: 'text is too long (maximum 10000 characters)' }, { status: 413 });
   }
 
   // Resolve which voice to use, with this priority:

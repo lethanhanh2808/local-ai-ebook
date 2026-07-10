@@ -1,6 +1,6 @@
 // src/lib/queue/index.ts
 // BullMQ queue and connection helpers
-import { Queue, Worker, QueueEvents } from 'bullmq';
+import { Queue, QueueEvents } from 'bullmq';
 import IORedis from 'ioredis';
 
 export interface ConversionJobData {
@@ -107,18 +107,20 @@ export function getAudiobookQueue(): Queue<AudiobookJobData> {
   return _audiobookQueue;
 }
 
+let _characterBibleQueue: Queue<CharacterBibleJobData> | null = null;
+
 export function getCharacterBibleQueue(): Queue<CharacterBibleJobData> {
-  // Lazy singleton — same IORedis instance across calls (BullMQ requires
-  // duplicate-connection-resistant client).
-  const charQ = new Queue<CharacterBibleJobData>(CHARACTER_BIBLE_QUEUE_NAME, {
-    connection: new IORedis(redisConnection),
-    defaultJobOptions: {
-      attempts: 1,                          // LLM-driven jobs are expensive; retry manually instead
-      removeOnComplete: 100,
-      removeOnFail: 200,
-    },
-  });
-  return charQ;
+  if (!_characterBibleQueue) {
+    _characterBibleQueue = new Queue<CharacterBibleJobData>(CHARACTER_BIBLE_QUEUE_NAME, {
+      connection: new IORedis(redisConnection),
+      defaultJobOptions: {
+        attempts: 1, // LLM-driven jobs are expensive; retry manually instead
+        removeOnComplete: 100,
+        removeOnFail: 200,
+      },
+    });
+  }
+  return _characterBibleQueue;
 }
 
 export { redisConnection };

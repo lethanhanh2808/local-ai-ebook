@@ -10,10 +10,8 @@ import { forgetWatermark } from '@/lib/db/watermark-memory';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function DELETE(
-  _req: NextRequest,
-  { params }: { params: { phrase: string } },
-) {
+export async function DELETE(_req: NextRequest, props: { params: Promise<{ phrase: string }> }) {
+  const params = await props.params;
   try {
     const ok = await forgetWatermark(decodeURIComponent(params.phrase));
     if (!ok) {

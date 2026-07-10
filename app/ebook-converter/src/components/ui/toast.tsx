@@ -21,9 +21,9 @@ import { AlertTriangle, CheckCircle2, Info, X, XCircle } from 'lucide-react';
 import {
   ReactNode,
   createContext,
-  useCallback,
   useContext,
   useEffect,
+  useMemo,
   useState,
 } from 'react';
 import { createPortal } from 'react-dom';
@@ -66,57 +66,38 @@ export interface ToastOpts {
 const ToastContext = createContext<ToastApi | null>(null);
 
 export function ToastProvider({ children }: { children: ReactNode }) {
-  const api = useCallback<ToastApi>(((variant: ToastVariant, title: string, opts: ToastOpts = {}) => {
-    return pushToast({
+  const full = useMemo<ToastApi>(() => {
+    const api = ((variant: ToastVariant, title: string, opts: ToastOpts = {}) => pushToast({
+      variant,
+      title,
+      description: opts.description,
+      duration: opts.duration,
+      action: opts.action,
+    })) as ToastApi;
+
+    const notify = (variant: ToastVariant) => (title: string, opts: ToastOpts = {}) => pushToast({
       variant,
       title,
       description: opts.description,
       duration: opts.duration,
       action: opts.action,
     });
-  }) as ToastApi, []);
 
-  // Attach helpers to the api object.
-  const full = api as ToastApi;
-  full.success = (title, opts = {}) => pushToast({
-    variant: 'success',
-    title,
-    description: opts.description,
-    duration: opts.duration,
-    action: opts.action,
-  });
-  full.error = (title, opts = {}) => pushToast({
-    variant: 'error',
-    title,
-    description: opts.description,
-    duration: opts.duration,
-    action: opts.action,
-  });
-  full.info = (title, opts = {}) => pushToast({
-    variant: 'info',
-    title,
-    description: opts.description,
-    duration: opts.duration,
-    action: opts.action,
-  });
-  full.warning = (title, opts = {}) => pushToast({
-    variant: 'warning',
-    title,
-    description: opts.description,
-    duration: opts.duration,
-    action: opts.action,
-  });
-  full.dismiss = (id) => dismissToast(id);
-  full.clear = () => clearToasts();
-  full.confirm = ({ title, description, confirmLabel = 'Confirm', destructive = false, onConfirm }) => {
-    return pushToast({
+    api.success = notify('success');
+    api.error = notify('error');
+    api.info = notify('info');
+    api.warning = notify('warning');
+    api.dismiss = dismissToast;
+    api.clear = clearToasts;
+    api.confirm = ({ title, description, confirmLabel = 'Confirm', destructive = false, onConfirm }) => pushToast({
       variant: destructive ? 'error' : 'info',
       title,
       description,
-      duration: null, // sticky until user acts
-      action: { label: confirmLabel, onClick: () => { onConfirm(); } },
+      duration: null,
+      action: { label: confirmLabel, onClick: onConfirm },
     });
-  };
+    return api;
+  }, []);
 
   return <ToastContext.Provider value={full}>{children}</ToastContext.Provider>;
 }
@@ -176,7 +157,10 @@ function ToastItem({ toast }: { toast: ToastModel }) {
           <div className="mt-2 flex gap-2">
             <button
               type="button"
-              onClick={toast.action.onClick}
+              onClick={() => {
+                toast.action?.onClick();
+                handleDismiss();
+              }}
               className={cn(
                 'inline-flex items-center rounded-md px-2.5 py-1 text-xs font-medium',
                 'bg-primary text-primary-foreground hover:bg-primary/90',
@@ -226,7 +210,7 @@ export function Toaster() {
   return createPortal(
     <div
       aria-label="Notifications"
-      className="pointer-events-none fixed bottom-4 right-4 z-50 flex max-h-screen w-full flex-col-reverse gap-2 sm:bottom-6 sm:right-6"
+      className="pointer-events-none fixed bottom-4 left-4 right-4 z-50 flex max-h-screen flex-col-reverse gap-2 sm:bottom-6 sm:left-auto sm:right-6 sm:w-full sm:max-w-sm"
     >
       {toasts.map((t) => (
         <ToastItem key={t.id} toast={t} />

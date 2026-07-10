@@ -9,11 +9,14 @@ import { listVoices, getDefaultVoice } from '@/lib/db/voices';
 import {
   listChapters, getAudiobookSummary, resetAudiobook, setBookAudiobookStatus,
 } from '@/lib/db/audiobook';
+import { assertWithinRoots, pathRoots, SafePathError } from '@/lib/storage/safe-path';
+import { clientIp, consume, rateLimitResponse } from '@/lib/utils/rate-limit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const book = await getBook(params.id);
   if (!book) return NextResponse.json({ error: 'Book not found' }, { status: 404 });
   const summary = await getAudiobookSummary(params.id);
@@ -37,7 +40,11 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   });
 }
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
+  const rate = consume(`audiobook:${clientIp(req)}`, { capacity: 20, windowMs: 60_000 });
+  if (!rate.allowed) return rateLimitResponse(rate);
+
   const book = await getBook(params.id);
   if (!book) return NextResponse.json({ error: 'Book not found' }, { status: 404 });
 
@@ -48,12 +55,20 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   };
 
   const action = body.action ?? 'generate';
+  if (!new Set(['generate', 'stop', 'reset', 'regenerate_one']).has(action)) {
+    return NextResponse.json({ error: 'Unknown audiobook action' }, { status: 400 });
+  }
 
   if (action === 'reset') {
     // Delete existing audio files and chapter rows
     const existing = await resetAudiobook(params.id);
     for (const p of existing) {
-      try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch {}
+      try {
+        const safePath = assertWithinRoots(p, [pathRoots().audiobooks]);
+        if (fs.existsSync(safePath)) fs.unlinkSync(safePath);
+      } catch (error) {
+        if (!(error instanceof SafePathError)) throw error;
+      }
     }
     return NextResponse.json({ ok: true, reset: existing.length });
   }
@@ -75,14 +90,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       for (const j of toRemove) {
         await j.remove().catch(() => {});
       }
-      // Also move all "active" jobs to failed (so worker stops retrying)
+      // Active BullMQ jobs own a private lock token and cannot safely be
+      // moved from this API process. The worker observes the persisted
+      // status after the in-flight synthesis exits, then stops before the
+      // next chapter. Report those jobs as pending cancellation.
       const active = await queue.getActive();
-      for (const j of active) {
-        if (j.data?.bookId === params.id) {
-          await j.moveToFailed(new Error('stopped by user'), 'true').catch(() => {});
-        }
-      }
-      return NextResponse.json({ ok: true, stopped: true, removed: toRemove.length });
+      const activeForBook = active.filter((j) => j.data?.bookId === params.id).length;
+      return NextResponse.json({
+        ok: true,
+        stopped: true,
+        removed: toRemove.length,
+        activeCancellationPending: activeForBook,
+      });
     } catch (e) {
       console.error('[audiobook/stop]', e);
       return NextResponse.json({ ok: true, stopped: true, error: String(e) });
@@ -102,6 +121,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   if (action === 'regenerate_one') {
     if (!body.chapterFile) return NextResponse.json({ error: 'chapterFile required' }, { status: 400 });
+    if (body.chapterFile.length > 1_000 || body.chapterFile.includes('\0')) {
+      return NextResponse.json({ error: 'chapterFile is invalid' }, { status: 400 });
+    }
     const queue = getAudiobookQueue();
     await queue.add(
       'chapter',

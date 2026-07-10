@@ -28,54 +28,59 @@ export async function getVoice(id: string) {
 
 export async function getDefaultVoice(bookId: string) {
   // Get explicit default voice if any, else the first voice created for the book.
-  return prisma.voice.findFirst({
+  const explicit = await prisma.voice.findFirst({
     where: { bookId, isDefault: true },
-  }) ?? prisma.voice.findFirst({
+  });
+  return explicit ?? prisma.voice.findFirst({
     where: { bookId },
     orderBy: { createdAt: 'asc' },
   });
 }
 
 export async function createVoice(input: CreateVoiceInput) {
-  // If marking as default, unset other defaults first (one default per book).
-  if (input.isDefault) {
-    await prisma.voice.updateMany({
-      where: { bookId: input.bookId, isDefault: true },
-      data: { isDefault: false },
+  // Keep "unset old default + create new default" atomic. Without a
+  // transaction, a failed insert left the book with no explicit narrator.
+  return prisma.$transaction(async (tx) => {
+    if (input.isDefault) {
+      await tx.voice.updateMany({
+        where: { bookId: input.bookId, isDefault: true },
+        data: { isDefault: false },
+      });
+    }
+    return tx.voice.create({
+      data: {
+        ...input,
+        language: input.language ?? 'vi',
+        isDefault: input.isDefault ?? false,
+        kind: input.kind ?? 'character',
+        builtinName: input.builtinName ?? null,
+      },
     });
-  }
-  return prisma.voice.create({
-    data: {
-      ...input,
-      language: input.language ?? 'vi',
-      isDefault: input.isDefault ?? false,
-      kind: input.kind ?? 'character',
-      builtinName: input.builtinName ?? null,
-    },
   });
 }
 
 export async function updateVoice(id: string, data: Partial<Omit<CreateVoiceInput, 'bookId'>>) {
-  // If marking as default, unset other defaults first.
-  if (data.isDefault === true) {
-    const voice = await prisma.voice.findUnique({ where: { id } });
-    if (voice) {
-      await prisma.voice.updateMany({
+  return prisma.$transaction(async (tx) => {
+    if (data.isDefault === true) {
+      const voice = await tx.voice.findUnique({ where: { id } });
+      if (!voice) throw new Error('Voice not found');
+      await tx.voice.updateMany({
         where: { bookId: voice.bookId, isDefault: true, NOT: { id } },
         data: { isDefault: false },
       });
     }
-  }
-  return prisma.voice.update({ where: { id }, data });
+    return tx.voice.update({ where: { id }, data });
+  });
 }
 
 export async function deleteVoice(id: string) {
-  // Set characters using this voice to null
-  await prisma.character.updateMany({
-    where: { voiceId: id },
-    data: { voiceId: null },
+  return prisma.$transaction(async (tx) => {
+    await tx.character.updateMany({
+      where: { voiceId: id },
+      data: { voiceId: null },
+    });
+    return tx.voice.delete({ where: { id } });
   });
-  return prisma.voice.delete({ where: { id } });
 }
 
 // ── Characters ───────────────────────────────────────────────────────────────
@@ -96,8 +101,20 @@ export async function listCharacters(bookId: string) {
   });
   return chars.map((c) => ({
     ...c,
-    aliases: c.aliases ? (JSON.parse(c.aliases) as string[]) : [],
+    aliases: parseAliases(c.aliases),
   }));
+}
+
+function parseAliases(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const value: unknown = JSON.parse(raw);
+    return Array.isArray(value)
+      ? value.filter((alias): alias is string => typeof alias === 'string' && alias.trim().length > 0)
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 export async function upsertCharacters(
@@ -116,6 +133,18 @@ export async function upsertCharacters(
     tone?: string | null;
   }>,
 ) {
+  const requestedVoiceIds = [...new Set(
+    characters.map((c) => c.voiceId).filter((id): id is string => typeof id === 'string' && id.length > 0),
+  )];
+  if (requestedVoiceIds.length > 0) {
+    const owned = await prisma.voice.findMany({
+      where: { bookId, id: { in: requestedVoiceIds } },
+      select: { id: true },
+    });
+    if (owned.length !== requestedVoiceIds.length) {
+      throw new Error('One or more character voices do not belong to this book');
+    }
+  }
   // Use upsert pattern; idempotent.
   const ops = characters.map((c) =>
     prisma.character.upsert({
@@ -146,9 +175,16 @@ export async function upsertCharacters(
 }
 
 export async function setCharacterVoice(id: string, voiceId: string | null) {
-  return prisma.character.update({
-    where: { id },
-    data: { voiceId },
+  return prisma.$transaction(async (tx) => {
+    const character = await tx.character.findUnique({ where: { id }, select: { bookId: true } });
+    if (!character) throw new Error('Character not found');
+    if (voiceId) {
+      const voice = await tx.voice.findUnique({ where: { id: voiceId }, select: { bookId: true } });
+      if (!voice || voice.bookId !== character.bookId) {
+        throw new Error('Voice does not belong to the character book');
+      }
+    }
+    return tx.character.update({ where: { id }, data: { voiceId } });
   });
 }
 

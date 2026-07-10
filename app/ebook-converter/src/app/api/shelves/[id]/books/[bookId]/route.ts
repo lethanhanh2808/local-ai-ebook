@@ -7,8 +7,9 @@ export const dynamic = 'force-dynamic';
 
 export async function DELETE(
   _req: NextRequest,
-  { params }: { params: { id: string; bookId: string } },
+  props: { params: Promise<{ id: string; bookId: string }> }
 ) {
+  const params = await props.params;
   await removeBookFromShelf(params.id, params.bookId);
   return new NextResponse(null, { status: 204 });
 }

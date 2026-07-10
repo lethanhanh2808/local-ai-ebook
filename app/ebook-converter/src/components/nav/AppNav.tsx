@@ -68,13 +68,13 @@ export function AppNav() {
   }, [pathname]);
 
   const isActive = (href: string) =>
-    href === '/' ? pathname === '/' : pathname.startsWith(href);
+    href === '/' ? pathname === '/' : pathname === href || pathname.startsWith(`${href}/`);
 
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="mx-auto flex h-14 max-w-7xl items-center gap-3 px-4">
         {/* Brand */}
-        <Link href="/" className="flex items-center gap-2.5 shrink-0">
+        <Link href="/" aria-label="Ebook Manager — trang chủ" className="flex items-center gap-2.5 shrink-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-primary/70 text-primary-foreground shadow-sm">
             <BookOpen className="h-4 w-4" />
           </div>

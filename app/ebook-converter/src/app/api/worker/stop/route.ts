@@ -9,19 +9,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import path from 'path';
 import fs from 'fs';
+import { workerControlAuthorized } from '@/lib/utils/worker-control';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function isLocalhost(req: NextRequest): boolean {
-  const ip = req.headers.get('x-forwarded-for')?.split(',')[0].trim()
-    ?? req.headers.get('x-real-ip')
-    ?? '127.0.0.1';
-  return ip === '127.0.0.1' || ip === '::1' || ip === 'localhost' || ip.startsWith('::ffff:');
-}
-
 export async function POST(req: NextRequest) {
-  if (!isLocalhost(req)) {
+  if (!workerControlAuthorized(req)) {
     return NextResponse.json(
       { ok: false, error: 'Worker control is only allowed from localhost.' },
       { status: 403 },

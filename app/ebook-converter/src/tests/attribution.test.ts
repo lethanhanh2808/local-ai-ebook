@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   attributeByConversation,
+  isNonSpokenQuotedParagraph,
   sliceParagraphs,
   type CharacterLite,
   type ParagraphRange,
@@ -110,5 +111,28 @@ describe('stateful conversation attribution', () => {
     // alternation heuristic must NOT flip them to Minh.
     expect(out[1].speaker).toBe('Lan');
     expect(out[2].speaker).toBe('Lan');
+  });
+
+  it('keeps silent thoughts on the narrator despite dialogue history', () => {
+    const paragraphs = p([
+      'Lan nói: “Em sẽ đi.”',
+      'Lan nghĩ thầm: “Mình không thể quay lại.”',
+    ]);
+    const out = attributeByConversation({
+      paragraphs,
+      characters,
+      regexOut: {
+        0: { speaker: 'Lan', confidence: 0.55, source: 'regex' },
+        1: { speaker: 'Lan', confidence: 0.55, source: 'regex' },
+      },
+    });
+    expect(out[0].speaker).toBe('Lan');
+    expect(out[1]).toBeUndefined();
+  });
+
+  it('distinguishes written quotes from a thought followed by audible speech', () => {
+    expect(isNonSpokenQuotedParagraph('Lan đọc bức thư “Hẹn gặp lại.”')).toBe(true);
+    expect(isNonSpokenQuotedParagraph('Lan nghĩ một lúc rồi nói: “Đi thôi.”')).toBe(false);
+    expect(isNonSpokenQuotedParagraph('“Không được.” Lan nghĩ thầm.')).toBe(true);
   });
 });

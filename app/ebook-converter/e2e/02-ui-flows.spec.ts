@@ -18,13 +18,13 @@ test.describe('Voice + character detection UI', () => {
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(1500);  // let React mount
 
-    // Open the audiobook panel via the headphones button
-    const headphones = page.getByTitle(/Audiobook/i).first();
+    // Open the unified Audio panel via the headphones button.
+    const headphones = page.getByRole('button', { name: /Audio, đọc thành tiếng và giọng/i });
     await headphones.click();
     await page.waitForTimeout(500);
 
-    // Click "Giọng & nhân vật" tab
-    const voicesTab = page.getByRole('button', { name: /Giọng & nhân vật/i });
+    // Open the dedicated character-assignment tab.
+    const voicesTab = page.getByRole('tab', { name: 'Nhân vật', exact: true });
     await voicesTab.click();
     await page.waitForTimeout(500);
 
@@ -45,8 +45,8 @@ test.describe('Voice + character detection UI', () => {
     await page.waitForTimeout(1500);
 
     // Open audiobook panel → voices tab
-    await page.getByTitle(/Audiobook/i).first().click();
-    await page.getByRole('button', { name: /Giọng & nhân vật/i }).click();
+    await page.getByRole('button', { name: /Audio, đọc thành tiếng và giọng/i }).click();
+    await page.getByRole('tab', { name: 'Nhân vật', exact: true }).click();
     await page.waitForTimeout(500);
 
     // Should see characters loaded (API call above populated the DB)
@@ -65,8 +65,8 @@ test.describe('Voice + character detection UI', () => {
     await page.waitForTimeout(1500);
 
     // Open voices tab
-    await page.getByTitle(/Audiobook/i).first().click();
-    await page.getByRole('button', { name: /Giọng & nhân vật/i }).click();
+    await page.getByRole('button', { name: /Audio, đọc thành tiếng và giọng/i }).click();
+    await page.getByRole('tab', { name: 'Nhân vật', exact: true }).click();
     await page.waitForTimeout(500);
 
     // Auto-assign button should be present (only shows when chars exist)
@@ -79,8 +79,8 @@ test.describe('Voice + character detection UI', () => {
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(1500);
 
-    // The Read aloud button (volume icon) has title="Read aloud"
-    const readAloudBtn = page.getByTitle(/Read aloud/i).first();
+    // The volume icon opens the unified Audio panel on its Read aloud tab.
+    const readAloudBtn = page.getByRole('button', { name: /Audio, đọc thành tiếng và giọng/i });
     await expect(readAloudBtn).toBeVisible();
 
     // Click it to open the ReadAloudPanel
@@ -97,7 +97,7 @@ test.describe('Voice + character detection UI', () => {
     await page.waitForTimeout(1500);
 
     // Open the read-aloud panel
-    await page.getByTitle(/Read aloud/i).first().click();
+    await page.getByRole('button', { name: /Audio, đọc thành tiếng và giọng/i }).click();
     await page.waitForTimeout(500);
 
     // Switch to Settings tab
@@ -118,7 +118,7 @@ test.describe('Voice + character detection UI', () => {
     await page.waitForTimeout(1500);
 
     // Open read-aloud panel → settings
-    await page.getByTitle(/Read aloud/i).first().click();
+    await page.getByRole('button', { name: /Audio, đọc thành tiếng và giọng/i }).click();
     await page.waitForTimeout(500);
     await page.getByRole('button', { name: /Cài đặt/i }).first().click();
     await page.waitForTimeout(300);
@@ -141,7 +141,7 @@ test.describe('Voice + character detection UI', () => {
     await page.waitForTimeout(1500);
 
     // Open read-aloud panel → settings
-    await page.getByTitle(/Read aloud/i).first().click();
+    await page.getByRole('button', { name: /Audio, đọc thành tiếng và giọng/i }).click();
     await page.waitForTimeout(500);
     await page.getByRole('button', { name: /Cài đặt/i }).first().click();
     await page.waitForTimeout(300);

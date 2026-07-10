@@ -9,6 +9,9 @@ This directory contains browser and service-level validation for the ebook app.
 - `02-ui-flows.spec.ts`: reader-side voice and character UI flows.
 - `03-character-detection.spec.ts`: AI character detection UI and apply flow.
 - `04-model-and-services.spec.ts`: model/settings/TTS service validation.
+- `09-route-quality.spec.ts`: non-mutating desktop/mobile sweep of every
+  user-facing route, including console errors, HTTP 5xx responses, and
+  document-level horizontal overflow.
 
 ## Commands
 
@@ -58,6 +61,11 @@ Override it when needed:
 ```bash
 E2E_BOOK_ID=<book-id> npm run test:e2e:local
 ```
+
+> **Data-safety warning:** the full suite intentionally deletes and recreates
+> character/voice/conversation-state rows for `E2E_BOOK_ID`. Point it at a
+> disposable test book and database. The smoke and route-quality specs are
+> non-mutating and are safe to run against a normal local library.
 
 The smoke suite can use any book in the local library. The deeper character/voice tests expect the configured book to have `chapter003` and `chapter004`.
 

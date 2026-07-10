@@ -79,8 +79,9 @@ async function omlxPreflight(): Promise<boolean> {
 // ── Main handler ─────────────────────────────────────────────────────────
 export async function POST(
   req: NextRequest,
-  { params }: { params: { id: string; chapterId: string } },
+  props: { params: Promise<{ id: string; chapterId: string }> }
 ) {
+  const params = await props.params;
   const book = await getBook(params.id);
   if (!book) {
     return new Response(JSON.stringify({ error: 'Book not found' }), {

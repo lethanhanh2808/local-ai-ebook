@@ -28,10 +28,13 @@ export const TTS_PROVIDERS: Array<{ id: TTSProvider; label: string; desc: string
  *  the user asked for. Persists the upgrade so subsequent reads skip
  *  this work. */
 export async function getSettings(): Promise<Settings> {
-  let s = await prisma.settings.findUnique({ where: { id: 'singleton' } });
-  if (!s) {
-    s = await prisma.settings.create({ data: { id: 'singleton' } });
-  }
+  // Atomic singleton initialization avoids a first-request race where two
+  // concurrent pages both observed no row and one failed its create.
+  let s = await prisma.settings.upsert({
+    where: { id: 'singleton' },
+    create: { id: 'singleton' },
+    update: {},
+  });
   // One-time migration: legacy "" / "ink" gets bumped to bw-anime so
   // every existing install picks up the new default without a manual
   // /settings visit. Unknown values get normalised to the default.

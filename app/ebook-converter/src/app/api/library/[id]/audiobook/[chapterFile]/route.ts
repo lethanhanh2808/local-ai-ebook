@@ -7,11 +7,10 @@ import fs from 'fs';
 import path from 'path';
 import { getBook } from '@/lib/db/books';
 import { getChapter } from '@/lib/db/audiobook';
+import { assertWithinRoots, pathRoots, SafePathError } from '@/lib/storage/safe-path';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-const DATA_DIR = path.resolve(process.cwd(), 'data/audiobooks');
 
 const CONTENT_TYPES: Record<string, string> = {
   '.wav': 'audio/wav',
@@ -23,21 +22,35 @@ const CONTENT_TYPES: Record<string, string> = {
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string; chapterFile: string } },
+  props: { params: Promise<{ id: string; chapterFile: string }> }
 ) {
+  const params = await props.params;
   const book = await getBook(params.id);
   if (!book) return NextResponse.json({ error: 'Book not found' }, { status: 404 });
 
   const chapterFile = decodeURIComponent(params.chapterFile);
   const row = await getChapter(params.id, chapterFile);
-  if (!row || row.status !== 'ready' || !row.audioPath || !fs.existsSync(row.audioPath)) {
+  if (!row || row.status !== 'ready' || !row.audioPath) {
     return NextResponse.json({ error: 'Audio not generated yet', status: row?.status ?? 'missing' }, { status: 404 });
   }
 
-  const stat = fs.statSync(row.audioPath);
+  let audioPath: string;
+  try {
+    audioPath = assertWithinRoots(row.audioPath, [pathRoots().audiobooks]);
+  } catch (error) {
+    if (error instanceof SafePathError) {
+      return NextResponse.json({ error: 'Audio not generated yet', status: 'missing' }, { status: 404 });
+    }
+    throw error;
+  }
+  if (!fs.existsSync(audioPath)) {
+    return NextResponse.json({ error: 'Audio not generated yet', status: 'missing' }, { status: 404 });
+  }
+
+  const stat = fs.statSync(audioPath);
   const total = stat.size;
   const range = req.headers.get('range');
-  const ext = path.extname(row.audioPath).toLowerCase();
+  const ext = path.extname(audioPath).toLowerCase();
   const contentType = CONTENT_TYPES[ext] ?? 'application/octet-stream';
   const baseName = `${book.title} – ${row.chapterTitle ?? path.basename(chapterFile, '.xhtml')}`
     .replace(/[^\x20-\x7E]/g, '_');
@@ -48,9 +61,14 @@ export async function GET(
     if (!m) return NextResponse.json({ error: 'bad range' }, { status: 416 });
     const start = parseInt(m[1], 10);
     const end = m[2] ? parseInt(m[2], 10) : total - 1;
-    if (start >= total || end >= total) return NextResponse.json({ error: 'range out of bounds' }, { status: 416 });
+    if (start >= total || end >= total || end < start) {
+      return NextResponse.json(
+        { error: 'range out of bounds' },
+        { status: 416, headers: { 'Content-Range': `bytes */${total}` } },
+      );
+    }
     const chunk = end - start + 1;
-    const stream = fs.createReadStream(row.audioPath, { start, end });
+    const stream = fs.createReadStream(audioPath, { start, end });
     return new NextResponse(stream as unknown as ReadableStream, {
       status: 206,
       headers: {
@@ -65,12 +83,12 @@ export async function GET(
   }
 
   // Full file
-  const buf = fs.readFileSync(row.audioPath);
-  return new NextResponse(buf, {
+  const stream = fs.createReadStream(audioPath);
+  return new NextResponse(stream as unknown as ReadableStream, {
     status: 200,
     headers: {
       'Content-Type': contentType,
-      'Content-Length': String(buf.length),
+      'Content-Length': String(total),
       'Accept-Ranges': 'bytes',
       'Content-Disposition': `inline; filename="${filename}"`,
       'Cache-Control': 'public, max-age=86400',

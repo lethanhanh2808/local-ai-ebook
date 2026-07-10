@@ -17,13 +17,16 @@ Or importable:
   result = detect_characters(book_path, max_chapters=10, model="…")
 """
 import json
+import html
 import os
+import posixpath
 import re
 import sys
 import zipfile
 import time
-from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlsplit
+from xml.etree import ElementTree
 
 import httpx
 
@@ -53,41 +56,69 @@ MAX_CHAPTERS = 5           # number of chapters to sample
 def extract_chapter_samples(epub_path: str, max_chapters: int = MAX_CHAPTERS,
                             max_chars: int = MAX_CHAPTER_CHARS) -> list[dict]:
     """Return up to N (chapter_name, plain_text) pairs sampled across the book."""
+    if max_chapters <= 0 or max_chars <= 0:
+        return []
     with zipfile.ZipFile(epub_path) as z:
         names = z.namelist()
-        opf = next((n for n in names if n.endswith(".opf")), None)
+        opf = next((n for n in names if n.lower().endswith(".opf")), None)
         if not opf:
             return []
-        opf_content = z.read(opf).decode("utf-8", errors="ignore")
+        opf_content = z.read(opf)
         opf_dir = opf.rsplit("/", 1)[0] if "/" in opf else ""
 
-        spine_ids = re.findall(r'<itemref\s+idref="([^"]+)"', opf_content)
-        # map id → href
-        items = re.findall(r'<item\s[^>]*id="([^"]+)"[^>]*href="([^"]+)"', opf_content)
-        item_map = dict(items)
+        # XML attribute order is not significant. Regex parsing previously
+        # missed valid manifests that wrote href before id or used single
+        # quotes/namespaces, causing "No chapters found" for healthy EPUBs.
+        try:
+            root = ElementTree.fromstring(opf_content)
+        except ElementTree.ParseError:
+            return []
+        item_map: dict[str, str] = {}
+        spine_ids: list[str] = []
+        for elem in root.iter():
+            local = elem.tag.rsplit("}", 1)[-1]
+            if local == "item":
+                item_id, href = elem.get("id"), elem.get("href")
+                if item_id and href:
+                    item_map[item_id] = href
+            elif local == "itemref":
+                idref = elem.get("idref")
+                if idref:
+                    spine_ids.append(idref)
 
-        # Take every Nth chapter so we cover the whole book
+        # Sample evenly across the full spine, including the last chapter.
         samples = []
-        stride = max(1, len(spine_ids) // max_chapters)
-        selected_ids = spine_ids[::stride][:max_chapters]
+        sample_count = min(max_chapters, len(spine_ids))
+        if sample_count == 0:
+            return []
+        if sample_count == 1:
+            selected_ids = [spine_ids[0]]
+        else:
+            selected_ids = [
+                spine_ids[(i * (len(spine_ids) - 1)) // (sample_count - 1)]
+                for i in range(sample_count)
+            ]
+        per_sample_chars = max(1, max_chars // sample_count)
 
         for sid in selected_ids:
             href = item_map.get(sid)
             if not href:
                 continue
-            chapter_path = (opf_dir + "/" + href) if opf_dir else href
-            chapter_path = chapter_path.replace("\\", "/")
+            href_path = unquote(urlsplit(href).path).replace("\\", "/")
+            chapter_path = posixpath.normpath(
+                posixpath.join(opf_dir, href_path) if opf_dir else href_path
+            )
             if chapter_path not in names:
                 # try without opf_dir
-                if href in names:
-                    chapter_path = href
+                if href_path in names:
+                    chapter_path = href_path
                 else:
                     continue
             raw = z.read(chapter_path).decode("utf-8", errors="ignore")
             text = re.sub(r"<[^>]+>", " ", raw)
-            text = re.sub(r"\s+", " ", text).strip()
+            text = re.sub(r"\s+", " ", html.unescape(text)).strip()
             if text:
-                samples.append({"id": sid, "title": sid, "text": text[:max_chars // max_chapters]})
+                samples.append({"id": sid, "title": sid, "text": text[:per_sample_chars]})
     return samples
 
 
@@ -154,7 +185,7 @@ def detect_characters_in_chapter_html(html_text: str, chapter_id: str = "chapter
     Returns the same JSON shape as `detect_characters`.
     """
     text = re.sub(r"<[^>]+>", " ", html_text)
-    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\s+", " ", html.unescape(text)).strip()
     if not text:
         return {"characters": [], "total_dialogue_lines": 0,
                 "language": "unknown", "narrator_gender_hint": "unknown",
@@ -228,6 +259,7 @@ def _run_detection(sample_blob: str, scope: str) -> dict:
 
     # Ensure each character has the required fields
     cleaned = []
+    allowed_tones = {"calm", "cheerful", "cold", "mysterious", "serious", "angry", "sad", "warm", "unknown"}
     for c in data.get("characters", []):
         if not isinstance(c, dict): continue
         name = c.get("name") or c.get("character") or ""
@@ -241,15 +273,33 @@ def _run_detection(sample_blob: str, scope: str) -> dict:
         age = str(c.get("age", "unknown")).strip().lower()
         if age not in ("young", "mature", "old"):
             age = "unknown"
+        raw_aliases = c.get("aliases") if isinstance(c.get("aliases"), list) else []
+        aliases: list[str] = []
+        seen_aliases = {_vi_canonical(name)}
+        for alias in raw_aliases:
+            if not isinstance(alias, str):
+                continue
+            value = alias.strip().strip(".,;:\"'")
+            key = _vi_canonical(value)
+            if not value or len(value) > 60 or not key or key in seen_aliases:
+                continue
+            seen_aliases.add(key)
+            aliases.append(value)
+            if len(aliases) >= 8:
+                break
+        tone = str(c.get("tone", "unknown")).strip().lower()
+        if tone not in allowed_tones:
+            tone = "unknown"
+        raw_samples = c.get("sample_lines") if isinstance(c.get("sample_lines"), list) else []
         cleaned.append({
             "name": name,
-            "aliases": [a for a in (c.get("aliases") or []) if isinstance(a, str) and a.strip()][:8],
+            "aliases": aliases,
             "gender": c.get("gender", "unknown") if c.get("gender") in ("male","female","unknown") else "unknown",
             "age": age,
-            "tone": str(c.get("tone", "unknown")).strip()[:30] or "unknown",
+            "tone": tone,
             "role": role,
-            "lines_estimate": int(c.get("lines_estimate") or 0),
-            "sample_lines": [s for s in (c.get("sample_lines") or []) if isinstance(s, str)][:2],
+            "lines_estimate": _safe_nonnegative_int(c.get("lines_estimate")),
+            "sample_lines": [s.strip()[:240] for s in raw_samples if isinstance(s, str) and s.strip()][:2],
         })
 
     # ── Merge near-duplicate names (OCR-degraded variants, LLM re-spellings) ──
@@ -263,9 +313,18 @@ def _run_detection(sample_blob: str, scope: str) -> dict:
         "characters": cleaned,
         "narrator_gender_hint": data.get("narrator_gender_hint", "unknown"),
         "language": data.get("language", "vi"),
-        "total_dialogue_lines": int(data.get("total_dialogue_lines") or 0),
-        "summary": data.get("summary", ""),
+        "total_dialogue_lines": _safe_nonnegative_int(data.get("total_dialogue_lines")),
+        "summary": str(data.get("summary", ""))[:500],
     }
+
+
+def _safe_nonnegative_int(value: Any, maximum: int = 1_000_000) -> int:
+    """Coerce noisy LLM numerics without letting one bad field abort a run."""
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return max(0, min(maximum, number))
 
 
 def _parse_json_anywhere(raw: str) -> dict:
@@ -360,7 +419,7 @@ def _merge_duplicate_characters(characters: list[dict]) -> list[dict]:
         def _score(c: dict):
             n = c.get("name", "")
             has_dia = any("À" <= ch <= "ỹ" for ch in n)
-            return (has_dia, int(c.get("lines_estimate") or 0), len(n))
+            return (has_dia, _safe_nonnegative_int(c.get("lines_estimate")), len(n))
         primary = max((characters[m] for m in members), key=_score)
 
         # Fold every other name in the cluster into aliases.
@@ -376,7 +435,7 @@ def _merge_duplicate_characters(characters: list[dict]) -> list[dict]:
 
         # Keep the highest lines_estimate across the cluster.
         primary["lines_estimate"] = max(
-            int(characters[m].get("lines_estimate") or 0) for m in members
+            _safe_nonnegative_int(characters[m].get("lines_estimate")) for m in members
         )
 
         # Union sample_lines (dedup, cap at 2).
@@ -502,18 +561,30 @@ if __name__ == "__main__":
     target = sys.argv[1]
     t0 = time.time()
 
+    # Mode 0: chapter HTML on stdin (target "-"). This lets the Next.js
+    # route avoid temp files that were orphaned on cancellation/restart.
     # Mode 1: single chapter HTML/XHTML file
     # Mode 2: EPUB file (samples chapters)
-    is_single_chapter = (
+    is_stdin_chapter = target == "-"
+    is_single_chapter = is_stdin_chapter or (
         target.lower().endswith(('.html', '.xhtml', '.htm'))
         and not target.lower().endswith('.epub')
     )
 
     if is_single_chapter:
-        chapter_id = os.path.basename(target).rsplit('.', 1)[0]
-        print(f"[character_detector] Single-chapter mode: {target}", file=sys.stderr)
-        with open(target, 'r', encoding='utf-8', errors='ignore') as f:
-            html_text = f.read()
+        chapter_id = (
+            os.environ.get("CHARACTER_DETECTOR_CHAPTER_ID", "chapter")
+            if is_stdin_chapter
+            else os.path.basename(target).rsplit('.', 1)[0]
+        )
+        print(f"[character_detector] Single-chapter mode: {chapter_id}", file=sys.stderr)
+        if is_stdin_chapter:
+            html_text = sys.stdin.read(5 * 1024 * 1024 + 1)
+            if len(html_text) > 5 * 1024 * 1024:
+                raise RuntimeError("stdin chapter HTML exceeds 5 MiB")
+        else:
+            with open(target, 'r', encoding='utf-8', errors='ignore') as f:
+                html_text = f.read()
         result = detect_characters_in_chapter_html(html_text, chapter_id)
     else:
         print(f"[character_detector] EPUB mode: {target}", file=sys.stderr)

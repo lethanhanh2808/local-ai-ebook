@@ -40,52 +40,65 @@ model Job {
   report                      String? // JSON blob – validation / repair report
   createdAt                   DateTime @default(now())
   updatedAt                   DateTime @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
 }
 
 // Ebook library – stores managed books after conversion
 model Book {
-  id                   String               @id @default(uuid())
-  title                String
+  id                     String                  @id @default(uuid())
+  title                  String
   // Optional Vietnamese title override — used by the cover generator so
   // bìa sách prints the Vietnamese title even when the imported `title`
   // is the original-language title (e.g. Chinese for translated tu tiểu
   // thuyệt). Falls back to `title` when null.
-  titleVi              String?
-  author               String
-  language             String               @default("vi")
-  description          String?
-  publisher            String?
-  publishDate          String?
-  identifier           String? // ISBN or other identifier
-  series               String? // Series name
-  seriesIndex          Float? // Position within series (e.g. 1, 2, 2.5)
-  rating               Int? // 1-10 (Calibre-style, displayed as 1-5 stars)
-  coverPath            String? // path to extracted cover image
-  filePath             String // absolute path to EPUB file in library dir
-  fileSize             Int // bytes
-  originalFilename     String
-  tags                 String? // JSON: string[]
-  notes                String?
-  readProgress         Int                  @default(0) // 0-100
-  readStatus           String               @default("unread") // unread | reading | read | archived
-  isFavorite           Boolean              @default(false)
-  lastRead             DateTime?
-  watermarks           String? // JSON: string[] – phrases to strip when serving chapters
+  titleVi                String?
+  author                 String
+  language               String                  @default("vi")
+  description            String?
+  publisher              String?
+  publishDate            String?
+  identifier             String? // ISBN or other identifier
+  series                 String? // Series name
+  seriesIndex            Float? // Position within series (e.g. 1, 2, 2.5)
+  rating                 Int? // 1-10 (Calibre-style, displayed as 1-5 stars)
+  coverPath              String? // path to extracted cover image
+  filePath               String // absolute path to EPUB file in library dir
+  fileSize               Int // bytes
+  originalFilename       String
+  tags                   String? // JSON: string[]
+  notes                  String?
+  readProgress           Int                     @default(0) // 0-100
+  readStatus             String                  @default("unread") // unread | reading | read | archived
+  isFavorite             Boolean                 @default(false)
+  lastRead               DateTime?
+  watermarks             String? // JSON: string[] – phrases to strip when serving chapters
   // Pre-generated audiobook support
-  ttsBackend           String               @default("vieneu") // vieneu | piper | moss-nano
-  audiobookStatus      String               @default("none") // none | generating | ready | partial | failed
-  audiobookGeneratedAt DateTime?
-  audiobookDurationMs  Int? // total duration across all generated chapters
-  addedAt              DateTime             @default(now())
-  updatedAt            DateTime             @updatedAt
+  ttsBackend             String                  @default("vieneu") // vieneu | piper | moss-nano
+  audiobookStatus        String                  @default("none") // none | generating | ready | partial | failed
+  audiobookGeneratedAt   DateTime?
+  audiobookDurationMs    Int? // total duration across all generated chapters
+  addedAt                DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
   // Shelf memberships
-  shelfBooks           ShelfBook[]
+  shelfBooks             ShelfBook[]
   // Pre-generation data
-  voices               Voice[]
-  characters           Character[]
-  audiobookChapters    AudiobookChapter[]
-  illustrations        Illustration[]
-  chapterAttributions  ChapterAttribution[]
+  voices                 Voice[]
+  characters             Character[]
+  audiobookChapters      AudiobookChapter[]
+  illustrations          Illustration[]
+  chapterAttributions    ChapterAttribution[]
+  characterRelationships CharacterRelationship[]
+  pendingBibleDiffs      PendingBibleDiff[]
+  bibleRefreshLogs       BibleRefreshLog[]
+  conversationState      BookConversationState?
+
+  @@index([addedAt])
+  @@index([language])
+  @@index([readStatus])
+  @@index([lastRead])
+  @@index([isFavorite])
 }
 
 // ── TTS Voice & Character ───────────────────────────────────────────────────
@@ -162,8 +175,10 @@ model Character {
   // (1:1), CharacterChapterAppearance (1:N). CharacterRelationship has its
   // own (bookId, fromCharId, toCharId) keys and doesn't need Character refs.
 
-  profile         CharacterProfile?
-  appearances     CharacterChapterAppearance[]
+  profile           CharacterProfile?
+  appearances       CharacterChapterAppearance[]
+  relationshipsFrom CharacterRelationship[]      @relation("RelationshipFrom")
+  relationshipsTo   CharacterRelationship[]      @relation("RelationshipTo")
 
   @@unique([bookId, name])
   @@index([bookId])
@@ -189,28 +204,32 @@ model CharacterProfile {
   // Same JSON shape as fieldSources above; tracks whether visualDescription
   // was set by the LLM or hand-edited by the user.
   visualSource      String?  @default("llm")
-  fieldSources String? // JSON: { description?: 'llm'|'user', personality?: 'llm'|'user', speechStyle?: 'llm'|'user', visualDescription?: 'llm'|'user' }
-  source       String   @default("llm") // 'llm' | 'user' | 'mixed'
-  version      Int      @default(1)
-  updatedAt    DateTime @updatedAt
+  fieldSources      String? // JSON: { description?: 'llm'|'user', personality?: 'llm'|'user', speechStyle?: 'llm'|'user', visualDescription?: 'llm'|'user' }
+  source            String   @default("llm") // 'llm' | 'user' | 'mixed'
+  version           Int      @default(1)
+  updatedAt         DateTime @updatedAt
 
-  character    Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
 }
 
 // Directed graph edges between two characters (e.g. parent / sibling /
 // ally / rival). Composite-unique on (bookId, from, to, relationship) so
 // duplicate upserts collapse.
 model CharacterRelationship {
-  id            String   @id @default(uuid())
-  bookId        String
-  fromCharId    String
-  toCharId      String
-  relationship  String
-  notes         String?
-  source        String   @default("llm") // 'llm' | 'user' | 'mixed'
+  id             String   @id @default(uuid())
+  bookId         String
+  fromCharId     String
+  toCharId       String
+  relationship   String
+  notes          String?
+  source         String   @default("llm") // 'llm' | 'user' | 'mixed'
   asOfChapterIdx Int?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  book          Book      @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  fromCharacter Character @relation("RelationshipFrom", fields: [fromCharId], references: [id], onDelete: Cascade)
+  toCharacter   Character @relation("RelationshipTo", fields: [toCharId], references: [id], onDelete: Cascade)
 
   @@unique([bookId, fromCharId, toCharId, relationship])
   @@index([bookId])
@@ -220,13 +239,13 @@ model CharacterRelationship {
 // (characterId, chapterIndex) so duplicate upserts collapse and the
 // mentions counter can be incremented atomically.
 model CharacterChapterAppearance {
-  id            String   @id @default(uuid())
-  characterId   String
-  chapterIndex  Int
-  mentions      Int      @default(1)
-  analyzedAt    DateTime @default(now())
+  id           String   @id @default(uuid())
+  characterId  String
+  chapterIndex Int
+  mentions     Int      @default(1)
+  analyzedAt   DateTime @default(now())
 
-  character     Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
 
   @@unique([characterId, chapterIndex])
   @@index([characterId])
@@ -238,10 +257,12 @@ model CharacterChapterAppearance {
 model PendingBibleDiff {
   id        String   @id @default(uuid())
   bookId    String
-  patch     String   // JSON: BibleDiffPatch — full LLM proposal
+  patch     String // JSON: BibleDiffPatch — full LLM proposal
   status    String   @default("pending") // pending | applied | rejected | stale
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
+
+  book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
 
   @@index([bookId, status])
 }
@@ -259,8 +280,12 @@ model BibleRefreshLog {
   queuedCount   Int      @default(0)
   conflictCount Int      @default(0)
   durationMs    Int      @default(0)
+  lastError     String?
+  analyzedAt    DateTime @default(now())
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+
+  book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
 
   @@id([bookId, chapterIndex])
   @@index([bookId])
@@ -274,9 +299,12 @@ model BibleRefreshLog {
 model BookConversationState {
   bookId           String   @id
   lastChapterIndex Int
-  payload          String   // JSON: ConversationStateSnapshot
+  payload          String // JSON: ConversationStateSnapshot
   parserVersion    String
+  createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+
+  book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
 }
 
 // One row per chapter of a book. Tracks pre-generated audio for fast playback.
@@ -311,6 +339,8 @@ model Shelf {
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
   books       ShelfBook[]
+
+  @@index([sortOrder])
 }
 
 model ShelfBook {
@@ -372,7 +402,7 @@ model Settings {
   // NEXT batch of the currently-running job (no worker restart needed).
   // Bound between 1 and 16 — higher values saturate Apple Silicon KV
   // cache on a 9B 4Bit model and slow overall throughput.
-  aiEnhanceConcurrency     Int    @default(3)
+  aiEnhanceConcurrency Int @default(3)
 
   // ── Image generation (chapter illustrations + AI covers) ────────────────
   imageProvider   String  @default("none") // none | openai | minimax | custom
@@ -408,23 +438,23 @@ model Settings {
 // to pre-seed the memory before any uploads, or to remove false-positives
 // the auto-detector picked up (e.g. legitimate repeating phrases).
 model WatermarkMemory {
-  id           String   @id @default(uuid())
+  id          String   @id @default(uuid())
   // The phrase to strip. Stored verbatim (case-insensitive equality on read).
-  phrase       String   @unique
+  phrase      String   @unique
   // Where this phrase came from: 'auto' (detected by regex on a prior job),
   // 'user' (manually added in /settings), or 'imported' (seeded by an
   // initial script). Drives the UI badge color.
-  source       String   @default("auto") // auto | user | imported
+  source      String   @default("auto") // auto | user | imported
   // Total number of books this phrase has been stripped from. Helps the UI
   // sort by "most common watermark". On every successful strip we do
   // `increment hitCount`, lastSeenAt=now.
-  hitCount     Int      @default(1)
-  lastSeenAt   DateTime @default(now())
-  firstSeenAt  DateTime @default(now())
+  hitCount    Int      @default(1)
+  lastSeenAt  DateTime @default(now())
+  firstSeenAt DateTime @default(now())
   // When this row was first created (alias of firstSeenAt but kept distinct
   // so audit logs don't tie creation time to detection history).
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([hitCount])
   @@index([source])

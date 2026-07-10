@@ -17,7 +17,7 @@ import {
   ChevronRight, ListChecks, Zap, Languages, BookCheck, Server, RefreshCw,
   Play, Square, Check,
 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Button, buttonClasses } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { useToast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
@@ -124,7 +124,7 @@ export default function ConvertPage() {
     <div className="mx-auto max-w-7xl px-4 py-8 space-y-8">
       {/* ── Worker status banner (only shown when offline) ─────────────── */}
       {workerStatus && !workerStatus.online && (
-        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 flex items-start gap-3">
+        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 flex flex-wrap items-start gap-3">
           <Server className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-amber-700 dark:text-amber-400">
@@ -171,7 +171,7 @@ export default function ConvertPage() {
             )}
             Khởi động worker
           </Button>
-          <Button size="sm" variant="outline" onClick={() => { void fetchWorkerStatus(); }} className="shrink-0">
+          <Button size="sm" variant="outline" onClick={() => { void fetchWorkerStatus(); }} className="shrink-0" aria-label="Refresh worker status">
             <RefreshCw className="h-3.5 w-3.5" />
           </Button>
         </div>
@@ -239,16 +239,12 @@ export default function ConvertPage() {
             sửa chữa cấu trúc, làm sạch watermark, và xuất ra EPUB3 chuẩn cho máy đọc sách.
           </p>
           <div className="flex flex-wrap gap-2 pt-1">
-            <Link href="/settings">
-              <Button variant="outline" size="sm">
-                <Settings className="h-3.5 w-3.5 mr-1.5" /> Cài đặt AI
-              </Button>
+            <Link href="/settings" className={buttonClasses({ variant: 'outline', size: 'sm' })}>
+              <Settings className="h-3.5 w-3.5 mr-1.5" /> Cài đặt AI
             </Link>
-            <a href="#queue">
-              <Button variant="ghost" size="sm">
-                <ListChecks className="h-3.5 w-3.5 mr-1.5" /> Xem hàng đợi ({stats.total})
-                <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
-              </Button>
+            <a href="#queue" className={buttonClasses({ variant: 'ghost', size: 'sm' })}>
+              <ListChecks className="h-3.5 w-3.5 mr-1.5" /> Xem hàng đợi ({stats.total})
+              <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
             </a>
           </div>
         </div>
@@ -274,7 +270,7 @@ export default function ConvertPage() {
           title="Thống kê chuyển đổi"
           icon={<Zap className="h-4 w-4" />}
           actions={
-            <Button size="sm" variant="ghost" onClick={fetchJobs}>
+            <Button size="sm" variant="ghost" onClick={fetchJobs} aria-label="Refresh conversion statistics">
               <Loader2 className={cn(loading && 'animate-spin', 'h-3.5 w-3.5')} />
             </Button>
           }
@@ -319,7 +315,7 @@ export default function ConvertPage() {
           description="Các file đang được AI xử lý. Click vào job để xem chi tiết / download kết quả."
           icon={<ListChecks className="h-4 w-4" />}
           actions={
-            <Button size="sm" variant="ghost" onClick={() => setRefreshKey((k) => k + 1)}>
+            <Button size="sm" variant="ghost" onClick={() => setRefreshKey((k) => k + 1)} aria-label="Refresh conversion queue">
               <Loader2 className={cn(loading && 'animate-spin', 'h-3.5 w-3.5')} />
             </Button>
           }

@@ -796,6 +796,17 @@ export interface ConversationAttributionInput {
   parserOut?: ChapterAttributionMap;
   regexOut?: ChapterAttributionMap;
   llmOut?: ChapterAttributionMap;
+  /** Final state from an earlier chapter. The caller is responsible for
+   * rejecting future/stale or parser-version-mismatched snapshots. */
+  seedState?: ConversationStateSnapshot;
+}
+
+export interface ConversationChapterResult {
+  attribution: ChapterAttributionMap;
+  finalState: ConversationStateSnapshot;
+  seedApplied: boolean;
+  seedReason: 'fresh' | 'seed-applied' | 'no-characters';
+  potentialNewCharacters: string[];
 }
 
 const TEXT_SPEECH_VERBS =
@@ -807,6 +818,43 @@ const OBJECT_OR_RECIPIENT_RE =
 const RECIPIENT_RE = /\s(?:với|cho|nói với|hỏi|đáp|trả lời|gọi)\s/iu;
 const SCENE_TRANSITION_RE =
   /(?:^|\s)(?:hôm sau|ngày hôm sau|sáng hôm sau|đêm đó|lúc này|trong khi đó|một lúc lâu sau|vài ngày sau|một lát sau|sau đó|ở một nơi khác|bên ngoài|trong phòng|trên đường)(?:\s|[,.:;!?…]|$)/iu;
+const SILENT_QUOTE_CUE_RE =
+  /(?:nghĩ thầm|thầm nghĩ|tự nhủ|thầm nhủ|tự hỏi|trong (?:lòng|đầu)|ý nghĩ|suy nghĩ|nghĩ rằng|nghĩ bụng)/iu;
+const WRITTEN_QUOTE_CUE_RE =
+  /(?:bức thư|lá thư|thư viết|tin nhắn|dòng chữ|tấm biển|biển báo|tiêu đề|tựa đề|cuốn sách|quyển sách|tác phẩm|đoạn trích|trích dẫn|mật khẩu|cụm từ)(?=$|[^\p{L}\p{N}_])/iu;
+const AUDIBLE_QUOTE_CUE_RE = new RegExp(TEXT_SPEECH_VERBS, 'iu');
+
+function lastMatchEnd(pattern: RegExp, text: string): number {
+  const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
+  const re = new RegExp(pattern.source, flags);
+  let end = -1;
+  for (const match of text.matchAll(re)) end = (match.index ?? 0) + match[0].length;
+  return end;
+}
+
+function quoteIsNonSpoken(text: string, quote: QuoteSpan, previousEnd: number): boolean {
+  const lineStart = text.lastIndexOf('\n', quote.start - 1) + 1;
+  const before = text.slice(Math.max(previousEnd, lineStart, quote.start - 180), quote.start);
+  const after = text.slice(quote.end, Math.min(text.length, quote.end + 100)).split('\n', 1)[0];
+  const silentEnd = lastMatchEnd(SILENT_QUOTE_CUE_RE, before);
+  const audibleEnd = lastMatchEnd(AUDIBLE_QUOTE_CUE_RE, before);
+  if (silentEnd >= 0 && silentEnd > audibleEnd) return true;
+  const writtenEnd = lastMatchEnd(WRITTEN_QUOTE_CUE_RE, before);
+  if (writtenEnd >= 0 && audibleEnd <= writtenEnd) return true;
+  const silentAfter = SILENT_QUOTE_CUE_RE.exec(after);
+  const audibleAfter = AUDIBLE_QUOTE_CUE_RE.exec(after);
+  return !!silentAfter && (!audibleAfter || silentAfter.index < audibleAfter.index);
+}
+
+/** True only when every quote in the paragraph is silent thought or written
+ * material. Such paragraphs must use the narrator even if conversation
+ * history or a permissive parser suggests a character. */
+export function isNonSpokenQuotedParagraph(text: string): boolean {
+  const quotes = findQuoteSpans(text);
+  if (quotes.length === 0) return false;
+  return quotes.every((quote, index) =>
+    quoteIsNonSpoken(text, quote, index > 0 ? quotes[index - 1].end : 0));
+}
 
 function clamp01(v: number): number {
   return Math.max(0, Math.min(1, v));
@@ -894,6 +942,121 @@ function createConversationState(): ConversationState {
     dialogueHistory: [],
     paragraphsSinceDialogue: 0,
   };
+}
+
+function emptyConversationSnapshot(): ConversationStateSnapshot {
+  return {
+    sceneId: 0,
+    activeCharacters: [],
+    currentSpeaker: null,
+    previousSpeaker: null,
+    currentFocusCharacter: null,
+    lastActionCharacter: null,
+    lastMentionedCharacters: [],
+    dialogueHistory: [],
+  };
+}
+
+/** Hydrate a new chapter with the bounded, persistable state from the
+ * preceding chapter. Names that are no longer in the roster are discarded so
+ * a deleted/merged character cannot keep winning attribution indefinitely. */
+function applySeedToState(
+  state: ConversationState,
+  seed: ConversationStateSnapshot,
+  ctx: ConversationContext,
+): void {
+  const canonical = (name: string | null | undefined): string | null =>
+    normalizeSpeakerName(name, ctx);
+
+  state.sceneId = Number.isFinite(seed.sceneId) ? Math.max(0, seed.sceneId) : 0;
+  state.currentSpeaker = canonical(seed.currentSpeaker);
+  state.previousSpeaker = canonical(seed.previousSpeaker);
+  state.currentFocusCharacter = canonical(seed.currentFocusCharacter);
+  state.lastActionCharacter = canonical(seed.lastActionCharacter);
+  state.lastMentionedCharacters = (seed.lastMentionedCharacters ?? [])
+    .map(canonical)
+    .filter((name): name is string => !!name)
+    .slice(-4);
+  state.dialogueHistory = (seed.dialogueHistory ?? [])
+    .map((turn) => ({
+      paragraphIndex: Number.isFinite(turn.paragraphIndex) ? turn.paragraphIndex : -1,
+      speaker: canonical(turn.speaker),
+    }))
+    .filter((turn): turn is DialogueTurn => !!turn.speaker)
+    .slice(-10);
+  state.paragraphsSinceDialogue = 0;
+
+  for (const rawName of seed.activeCharacters ?? []) {
+    const name = canonical(rawName);
+    if (!name || state.activeCharacters.has(name)) continue;
+    state.activeCharacters.set(name, {
+      score: 0.5,
+      lastMentionParagraph: -1,
+      spokenCount: 0,
+    });
+  }
+}
+
+const PROPER_NAME_RE =
+  /(?:^|[^\p{L}\p{N}_])(\p{Lu}\p{L}*(?:\s+\p{Lu}\p{L}*){1,5})(?=\s|[,.:;!?…]|$)/gu;
+
+function isKnownSurfaceName(surface: string, ctx: ConversationContext): boolean {
+  const normalized = surface.toLocaleLowerCase('vi').trim();
+  if (!normalized) return false;
+  if (ctx.aliasToCanonical.has(normalized)) return true;
+
+  const canonicalSurface = nameCanonical(surface);
+  const surfaceWords = canonicalSurface.split(/\s+/).filter(Boolean);
+  if (surfaceWords.length === 0) return false;
+
+  return ctx.profiles.some((profile) =>
+    [profile.name, ...profile.aliases].some((storedName) => {
+      const storedCanonical = nameCanonical(storedName);
+      if (storedCanonical === canonicalSurface || g2pMatch(storedName, surface)) {
+        return true;
+      }
+      const storedWords = storedCanonical.split(/\s+/).filter(Boolean);
+      // Treat a multi-word registered name and a longer/shorter prefix as the
+      // same surface. This catches e.g. "Y Đằng Long" vs "Y Đằng" without
+      // allowing a one-word common noun to suppress a candidate.
+      if (storedWords.length >= 2 && storedWords.length <= surfaceWords.length) {
+        return storedWords.every((word, index) => word === surfaceWords[index]);
+      }
+      if (surfaceWords.length >= 2 && surfaceWords.length <= storedWords.length) {
+        return surfaceWords.every((word, index) => word === storedWords[index]);
+      }
+      return false;
+    }),
+  );
+}
+
+/** Find capitalised, multi-word Vietnamese name candidates that are not in the
+ * current roster. This is intentionally a suggestion list: places and titles
+ * may appear and remain subject to user review. */
+export function collectNovelNames(
+  paragraphs: ParagraphRange[],
+  characters: CharacterLite[],
+): string[] {
+  const ctx = buildConversationContext(characters);
+  const candidates = new Map<string, { display: string; count: number }>();
+
+  for (const paragraph of paragraphs) {
+    PROPER_NAME_RE.lastIndex = 0;
+    for (const match of paragraph.text.matchAll(PROPER_NAME_RE)) {
+      const display = (match[1] ?? '').trim();
+      if (!display || isKnownSurfaceName(display, ctx)) continue;
+      const key = nameCanonical(display) || display.toLocaleLowerCase('vi');
+      const previous = candidates.get(key);
+      candidates.set(key, {
+        display: previous?.display ?? display,
+        count: (previous?.count ?? 0) + 1,
+      });
+    }
+  }
+
+  return [...candidates.values()]
+    .sort((a, b) => b.count - a.count || a.display.localeCompare(b.display, 'vi'))
+    .map((candidate) => candidate.display);
 }
 
 function resetScene(state: ConversationState): void {
@@ -1128,6 +1291,14 @@ export function attributeByConversation(
     const roles = detectTimelineRoles(paragraph.text, mentions);
 
     if (!hasQuote) {
+      updateStateAfterParagraph(state, paragraph, mentions, roles, null);
+      continue;
+    }
+
+    if (isNonSpokenQuotedParagraph(paragraph.text)) {
+      // Do not let parser/regex/history evidence turn thoughts, letters or
+      // quoted titles into character speech. Absence from the map is the
+      // established narrator fallback contract.
       updateStateAfterParagraph(state, paragraph, mentions, roles, null);
       continue;
     }

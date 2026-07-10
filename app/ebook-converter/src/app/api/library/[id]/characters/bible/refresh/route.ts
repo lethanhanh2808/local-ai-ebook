@@ -26,10 +26,8 @@ export const dynamic = 'force-dynamic';
 // Allow this SSE handler to run long enough for a LLM call.
 export const maxDuration = 600; // 10 min
 
-export async function POST(
-  req: NextRequest,
-  { params }: { params: { id: string } },
-) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const book = await getBook(params.id);
   if (!book) {
     return new Response(JSON.stringify({ error: 'Not found' }), {
@@ -68,7 +66,7 @@ export async function POST(
   if (
     body.chapterIndex == null ||
     typeof body.chapterIndex !== 'number' ||
-    !Number.isFinite(body.chapterIndex) ||
+    !Number.isInteger(body.chapterIndex) ||
     body.chapterIndex < 0
   ) {
     return new Response(

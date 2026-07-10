@@ -5,6 +5,7 @@ import { Page, expect } from '@playwright/test';
 
 const DEFAULT_BOOK_ID = 'ffa65ac0-4010-40ea-9239-2fcea39c848f';
 const BOOK_ID = process.env.E2E_BOOK_ID ?? DEFAULT_BOOK_ID;
+const BASE_URL = (process.env.E2E_BASE_URL ?? 'http://localhost:3100').replace(/\/$/, '');
 
 export interface E2EBook {
   id: string;
@@ -204,11 +205,10 @@ export async function attributeChapterViaApi(
  * hooks in the cross-chapter specs.
  */
 export async function clearConversationStateForBook(bookId: string): Promise<void> {
-  // We can't pass a request context here because this helper is called
-  // outside Playwright's page fixtures in some specs. We use the global
-  // fetch with a relative URL — Playwright sets up a baseURL for tests
-  // so a path-only fetch works.
-  const r = await fetch(`/api/library/${bookId}/conversation-state?force=true`, {
+  // This helper is also called outside Playwright fixtures, so use Node's
+  // global fetch with an absolute URL. Playwright's baseURL only applies to
+  // page/request fixtures; it does not patch Node's native fetch.
+  const r = await fetch(`${BASE_URL}/api/library/${bookId}/conversation-state?force=true`, {
     method: 'DELETE',
   });
   if (!r.ok && r.status !== 404) {
@@ -234,7 +234,7 @@ export interface ConversationStateRow {
 export async function getConversationStateForBook(
   bookId: string,
 ): Promise<ConversationStateRow | null> {
-  const r = await fetch(`/api/library/${bookId}/conversation-state`);
+  const r = await fetch(`${BASE_URL}/api/library/${bookId}/conversation-state`);
   if (r.status === 404) return null;
   if (!r.ok) {
     throw new Error(`getConversationStateForBook ${bookId} → ${r.status}: ${await r.text()}`);

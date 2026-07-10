@@ -1,9 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
-  experimental: {
-    serverComponentsExternalPackages: ['yauzl', 'yazl', 'xmldom', 'xpath'],
-  },
+  serverExternalPackages: ['yauzl', 'yazl'],
   webpack: (config) => {
     config.externals = [...(config.externals || []), { canvas: 'canvas' }];
     return config;

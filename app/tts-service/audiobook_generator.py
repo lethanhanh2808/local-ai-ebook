@@ -11,6 +11,7 @@ character and which built-in VieNeu voices are available.
 Run as:  python audiobook_generator.py --book-id X --chapter-file Y ...
 """
 import argparse
+import html
 import io
 import json
 import os
@@ -41,13 +42,30 @@ UNIFIED_TTS_URL = os.environ.get("UNIFIED_TTS_URL", "http://127.0.0.1:5010")
 EBOOK_ROOT = Path(os.environ.get("EBOOK_ROOT", "/Volumes/EXT-SSD/Users/anhl/Local-AI/app/ebook-converter"))
 DATA_DIR = EBOOK_ROOT / "data" / "audiobooks"
 
+_VALID_ATTRIBUTION_ENGINES = frozenset({"conversation_v3", "legacy"})
+_requested_attribution_engine = os.environ.get(
+    "ATTRIBUTION_ENGINE", "conversation_v3"
+).strip().lower()
+if _requested_attribution_engine not in _VALID_ATTRIBUTION_ENGINES:
+    print(
+        f"[attribution_engine] unknown ATTRIBUTION_ENGINE="
+        f"{_requested_attribution_engine!r}; using conversation_v3",
+        file=sys.stderr,
+    )
+    _requested_attribution_engine = "conversation_v3"
+ATTRIBUTION_ENGINE = _requested_attribution_engine
+print(f"[attribution_engine] active={ATTRIBUTION_ENGINE}", file=sys.stderr)
+
 QUOTE_OPEN_CHARS = "\u201c\u300c\u300e\""  # Vietnamese & ASCII double quotes
 QUOTE_CLOSE_CHARS = "\u201d\u300d\u300f\""
 QUOTE_OPEN = QUOTE_OPEN_CHARS[0]   # kept for back-compat
 QUOTE_CLOSE = QUOTE_CLOSE_CHARS[0]
 
-# Match any of: " " 「 」 『 』 < >
-QUOTE_RE = re.compile(f"([{re.escape(QUOTE_OPEN_CHARS)}]|\\<\\<)([^{''.join(QUOTE_OPEN_CHARS)}{''.join(QUOTE_CLOSE_CHARS)}]{{3,400}}?)([{re.escape(QUOTE_CLOSE_CHARS)}]|\\>\\>)", re.DOTALL)
+# Match any of: " " 「 」 『 』 << >>. One-character answers such as “Ừ” are
+# valid dialogue; the old 3-character minimum silently sent them to the
+# narrator. The upper bound protects the regex from consuming a malformed,
+# chapter-spanning quote.
+QUOTE_RE = re.compile(f"([{re.escape(QUOTE_OPEN_CHARS)}]|\\<\\<)([^{''.join(QUOTE_OPEN_CHARS)}{''.join(QUOTE_CLOSE_CHARS)}]{{1,1200}}?)([{re.escape(QUOTE_CLOSE_CHARS)}]|\\>\\>)", re.DOTALL)
 
 
 # ── Strict speaker attribution (port of EbookReader.tsx findSpeakerForQuote) ──
@@ -198,7 +216,9 @@ def find_quote_spans(text: str) -> list[tuple[int, int, str]]:
     """Return [(start, end, content), ...] for every quoted span in text."""
     spans = []
     for m in QUOTE_RE.finditer(text):
-        spans.append((m.start(2), m.end(2), m.group(2)))
+        # Boundaries cover the delimiters so emitted narration never contains
+        # a dangling opening/closing quote; content remains delimiter-free.
+        spans.append((m.start(), m.end(), m.group(2)))
     return spans
 
 
@@ -211,24 +231,26 @@ def split_paragraphs_with_offsets(plain: str) -> list[tuple[int, int, str]]:
     if not plain:
         return []
     paragraphs: list[tuple[int, int, str]] = []
-    # Split on 2+ newlines or a single newline (Vietnamese EPUBs often use a
-    # single \n between paragraphs after strip_html + WS_RE.sub(" ", ...)).
-    # Since WS_RE collapses whitespace, the only paragraph separator that
-    # survives is double-newline. We try both for robustness.
-    for m in re.finditer(r"[^\n]+(?:\n(?!\s*\n)[^\n]*)*", plain):
-        text = m.group(0).strip()
+    # ``strip_html`` preserves visible block boundaries as newlines. Each
+    # non-empty line is therefore an independently attributable paragraph.
+    # The previous expression accidentally *consumed* single newlines and
+    # merged adjacent blocks into one paragraph.
+    for m in re.finditer(r"[^\n]+", plain):
+        raw = m.group(0)
+        text = raw.strip()
         if not text:
             continue
-        paragraphs.append((m.start(), m.end(), text))
+        leading = len(raw) - len(raw.lstrip())
+        trailing = len(raw) - len(raw.rstrip())
+        paragraphs.append((m.start() + leading, m.end() - trailing, text))
     # If the regex split produced a single mega-paragraph (no newlines),
     # fall back to sentence-boundary splitting.
     if len(paragraphs) <= 1 and len(plain) > 1500:
+        paragraphs = []
         sentence_re = re.compile(r"([^.!?\n]{1,400}[.!?…\"]+)\s+")
         pos = 0
         for m in sentence_re.finditer(plain):
             s, e = m.start(1), m.end(1)
-            if e - s < 50:  # skip tiny fragments
-                continue
             paragraphs.append((s, e, plain[s:e]))
             pos = e
         if pos < len(plain):
@@ -252,7 +274,6 @@ def paragraph_index_at(offset: int,
         return len(paragraph_offsets) - 1
     # Offset is before the first paragraph's start → assign to first
     return 0
-    return spans
 
 
 # Narration chunk target — keep synthesized chunks under ~1500 chars so
@@ -306,6 +327,37 @@ KEYWORD_EMOTIONS = [
     # Onomatopoeic choked/sobbing markers in the text
     (re.compile(r"\bsniff\s*sniff\b|\bsniff\b", re.IGNORECASE), " [hắng giọng] "),
 ]
+
+# VieNeu currently documents exactly these inline non-verbal cues. Treat the
+# model and source text as untrusted input: unsupported short bracket tokens
+# can otherwise be spoken literally or interpreted unpredictably by a backend.
+PERMITTED_EMOTION_MARKERS = frozenset({
+    "[cười]",
+    "[thở dài]",
+    "[hắng giọng]",
+})
+_SHORT_BRACKET_TOKEN_RE = re.compile(r"\[([^\[\]\r\n]{1,16})\]")
+
+
+def _strip_off_list_markers(text: str) -> str:
+    """Remove unsupported short ``[marker]`` tokens, preserving real prose.
+
+    Long bracketed passages (footnotes/citations) are source content rather
+    than TTS control tokens and therefore remain untouched. The operation is
+    deliberately idempotent because segments may pass through multiple
+    emotion layers.
+    """
+    if not text or "[" not in text:
+        return text
+
+    def replace(match: re.Match[str]) -> str:
+        token = match.group(0)
+        return token if token in PERMITTED_EMOTION_MARKERS else ""
+
+    swept = _SHORT_BRACKET_TOKEN_RE.sub(replace, text)
+    # Removing a token between words must not leave doubled horizontal
+    # whitespace; preserve newlines because they encode audiobook pauses.
+    return re.sub(r"[ \t]{2,}", " ", swept).strip()
 
 # Per-character-tone → emotion markers (applied once at the start of the
 # segment, BUT only as a last-resort fallback — content evidence in the
@@ -560,14 +612,14 @@ def inject_emotions(text: str, segment_kind: str, character_tone: Optional[str] 
     # If Tier 1 matched anything, we're done — content evidence beats the
     # weaker signals below.
     if out.lstrip().startswith("["):
-        return out
+        return _strip_off_list_markers(out)
 
     # ── Tier 2: LLM-derived marker (per-segment). Applied as prefix. ─────
     llm = (llm_marker or "").strip()
     if llm:
         out = (llm + " " + out).strip()
         if out.lstrip().startswith("["):
-            return out
+            return _strip_off_list_markers(out)
 
     # ── Tone fallback: only for dialogue. The character's default tone is a
     # weak signal and must NOT override content evidence or LLM classification.
@@ -575,7 +627,7 @@ def inject_emotions(text: str, segment_kind: str, character_tone: Optional[str] 
         tone_marker = TONE_TO_EMOTION.get(character_tone, "")
         if tone_marker:
             out = (tone_marker + out).strip()
-    return out
+    return _strip_off_list_markers(out)
 
 # Built-in VieNeu voices — used when CHARACTER_MAP says a character has no
 # custom voice but their "name" matches one of these.
@@ -671,12 +723,94 @@ def _resolve_segment_voice(char_name: Optional[str], cmap: dict, default_voice_i
 
 
 # ── Chapter splitting ──────────────────────────────────────────────────────
+BLOCK_TAG_RE = re.compile(
+    r"</?(?:address|article|aside|blockquote|br|dd|div|dl|dt|figcaption|figure|"
+    r"footer|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|table|td|th|tr|ul)\b[^>]*>",
+    re.IGNORECASE,
+)
 TAG_RE = re.compile(r"<[^>]+>")
-WS_RE = re.compile(r"\s+")
+HORIZONTAL_WS_RE = re.compile(r"[^\S\r\n]+")
+EXCESS_NEWLINES_RE = re.compile(r"\n\s*\n+")
 
 
 def strip_html(html: str) -> str:
-    return TAG_RE.sub(" ", html)
+    """Convert XHTML to readable text while retaining block boundaries.
+
+    Attribution is paragraph-indexed. Flattening every tag and then applying
+    ``\s+`` used to collapse a chapter into one mega-paragraph, so a parser
+    result for one speaker could leak to every quote. Entity decoding also
+    prevents the synthesizer from literally reading ``&amp;``/``&quot;``.
+    """
+    text = re.sub(r"<(?:script|style|head)\b[^>]*>[\s\S]*?</(?:script|style|head)>", " ", html, flags=re.IGNORECASE)
+    text = BLOCK_TAG_RE.sub("\n", text)
+    text = TAG_RE.sub(" ", text)
+    text = html_module_unescape(text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = HORIZONTAL_WS_RE.sub(" ", text)
+    text = re.sub(r" *\n *", "\n", text)
+    return EXCESS_NEWLINES_RE.sub("\n\n", text).strip()
+
+
+def html_module_unescape(text: str) -> str:
+    """Small wrapper kept separate for focused tests/mocking."""
+    return html.unescape(text)
+
+
+# Explicitly non-spoken quoted text must stay on the narrator voice. These
+# cues cover silent thought/inner monologue and written/displayed material;
+# audible cues such as "thì thầm", "lẩm bẩm" and "nói thầm" intentionally
+# remain in SPEECH_VERBS and are still eligible for character voices.
+SILENT_QUOTE_CUE_RE = re.compile(
+    r"(?:nghĩ thầm|thầm nghĩ|tự nhủ|thầm nhủ|tự hỏi|trong (?:lòng|đầu)|"
+    r"ý nghĩ|suy nghĩ|nghĩ rằng|nghĩ bụng)",
+    re.IGNORECASE,
+)
+WRITTEN_QUOTE_CUE_RE = re.compile(
+    r"(?:bức thư|lá thư|thư viết|tin nhắn|dòng chữ|tấm biển|biển báo|"
+    r"tiêu đề|tựa đề|cuốn sách|quyển sách|tác phẩm|đoạn trích|trích dẫn|"
+    r"mật khẩu|cụm từ)\b",
+    re.IGNORECASE,
+)
+AUDIBLE_QUOTE_CUE_RE = re.compile(SPEECH_VERBS, re.IGNORECASE)
+
+
+def _last_match_end(pattern: re.Pattern[str], text: str) -> int:
+    matches = list(pattern.finditer(text))
+    return matches[-1].end() if matches else -1
+
+
+def is_non_spoken_quote(
+    plain: str,
+    q_start: int,
+    q_end: int,
+    prev_quote_end: int = 0,
+) -> bool:
+    """Return true for thoughts, letters, titles and other silent quotes.
+
+    If a later audible verb follows a thought cue (``nghĩ rồi nói: “…”``),
+    the audible cue wins. For post-quote attributions, the first nearby cue
+    wins (``“…” cô nghĩ`` versus ``“…” cô nói``).
+    """
+    before_start = max(prev_quote_end, q_start - 180, plain.rfind("\n", 0, q_start) + 1)
+    before = plain[before_start:q_start]
+    after = plain[q_end:min(len(plain), q_end + 100)].split("\n", 1)[0]
+
+    silent_end = _last_match_end(SILENT_QUOTE_CUE_RE, before)
+    audible_end = _last_match_end(AUDIBLE_QUOTE_CUE_RE, before)
+    if silent_end >= 0 and silent_end > audible_end:
+        return True
+
+    # Written/displayed text is narrator material unless explicitly read
+    # aloud or spoken after the written-material cue.
+    written_end = _last_match_end(WRITTEN_QUOTE_CUE_RE, before)
+    if written_end >= 0 and audible_end <= written_end:
+        return True
+
+    silent_after = SILENT_QUOTE_CUE_RE.search(after)
+    audible_after = AUDIBLE_QUOTE_CUE_RE.search(after)
+    if silent_after and (not audible_after or silent_after.start() < audible_after.start()):
+        return True
+    return False
 
 
 def split_into_segments(html_body: str, cmap: dict) -> list[dict]:
@@ -701,7 +835,6 @@ def split_into_segments(html_body: str, cmap: dict) -> list[dict]:
     character attribution where the parser is more confident.
     """
     plain = strip_html(html_body)
-    plain = WS_RE.sub(" ", plain).strip()
     if not plain:
         return []
 
@@ -710,7 +843,7 @@ def split_into_segments(html_body: str, cmap: dict) -> list[dict]:
     # map and every quote falls through to the regex layer.
     tier3b_attribution: dict[int, dict] = {}
     paragraph_offsets: list[tuple[int, int, str]] = []
-    if _TIER3B_AVAILABLE:
+    if ATTRIBUTION_ENGINE == "conversation_v3" and _TIER3B_AVAILABLE:
         paragraph_offsets = split_paragraphs_with_offsets(plain)
         paragraphs_text = [t for (_, _, t) in paragraph_offsets]
         try:
@@ -1392,56 +1525,16 @@ def _regex_segment_chapter(
         if action_subject is not None:
             return char_aliases[action_subject.lower()]
 
-        # ── BARE EXCLAMATION fallback: thought-verb + reactive-action ─────
-        # When the BEFORE window contains a thought verb ("X cảm thán /
-        # nghĩ / thì thầm / âm thầm …") or a reactive action ("X nháy mắt
-        # / vỗ vai / ghé tai …") AND no SPEECH_VERBS match, attribute the
-        # upcoming quote to the SUBJECT of that verb (the thinker / doer).
-        #
-        # Uses a WIDER window (ATTR_THOUGHT_WINDOW_BEFORE = 500 chars) than
-        # the closest-name pass because thought verbs ("Y Đằng Long …
-        # âm thầm cảm thán: …") can sit much further back than 80 chars,
-        # and the thinker is the speaker of the following reaction quote.
-        #
-        # Real-world example from a Vietnamese web-novel translation:
-        #   "Ngay cả Y Đằng Long đang vội vàng đón tiếp khách khứa cũng
-        #    không thể không âm thầm cảm thán: Tiểu Ưu Nhi thật sự trưởng
-        #    thành rồi!"
-        #   "Quỷ nghịch ngợm!"    ← spoken by Long to his sister, NOT by
-        #                            Ưu Nhi (the object of cảm thán)
-        #
-        # Without this pass the closest-name logic would either pick Ưu Nhi
-        # (closer to the quote) or fall back to the default narrator voice,
-        # both wrong. The thought-verb predicate identifies the THINKER as
-        # the speaker of any following dialogue — common in VN/EN novels
-        # where internal monologue bleeds into spoken address.
+        # ── BARE EXCLAMATION fallback: reactive action only ──────────────
+        # Silent thoughts are deliberately excluded: inner monologue must use
+        # the narrator voice. A concrete reactive action ("X nháy mắt / vỗ
+        # vai / ghé tai …") can still introduce a short spoken reaction.
         thought_start = max(prev_quote_end, q_start - ATTR_THOUGHT_WINDOW_BEFORE)
         wide_before = plain[thought_start:q_start]
-        re_thought = re.compile(
-            rf"(?:^|{WB})({names_alt})({WB}[^{''.join(QUOTE_OPEN_CHARS)}{''.join(QUOTE_CLOSE_CHARS)}]{{0,120}}?){THOUGHT_VERBS}",
-            re.IGNORECASE,
-        )
         re_reactive = re.compile(
             rf"(?:^|{WB})({names_alt})({WB}[^{''.join(QUOTE_OPEN_CHARS)}{''.join(QUOTE_CLOSE_CHARS)}]{{0,40}}?){REACTIVE_ACTIONS}",
             re.IGNORECASE,
         )
-
-        # Among all thought-verb matches, prefer the one whose subject (Name)
-        # is closest to the END of the BEFORE window (i.e. the latest
-        # name+verb pair — most recently expressed thought wins).
-        thought_matches = list(re_thought.finditer(wide_before))
-        if thought_matches:
-            best = max(thought_matches, key=lambda m: m.start(1))
-            thinker = best.group(1)
-            # Skip if thinker is an OBJECT of an earlier verb (e.g.
-            # "nhìn Y Đằng Long ... rồi cảm thán" — Long is object of nhìn,
-            # not subject of cảm thán). Check the 12 chars just before
-            # the name start for an object marker.
-            before_name = wide_before[max(0, best.start(1) - 12):best.start(1)]
-            if not OBJECT_MARKER_RE.search(before_name):
-                return char_aliases[thinker.lower()]
-            # If the closest thinker is an object, fall through to the
-            # earlier-name scan which may still find a valid thinker.
 
         reactive_matches = list(re_reactive.finditer(wide_before))
         if reactive_matches:
@@ -2002,6 +2095,9 @@ def _regex_segment_chapter(
         if narr_text.strip():
             _update_state(narr_text, narr_mentions, narr_roles, None, p_idx_for_quote)
         emit_narration(narr_text)
+        non_spoken = is_non_spoken_quote(
+            plain, q_start, q_end, forward_prev_quote_end[q_idx]
+        )
         # ── Tier 3b: parser-driven override for this quote's paragraph ──
         # When the VnCoreNLP layer has a confident (>0.7) speaker for this
         # paragraph AND the regex layer can't find a stronger signal, use
@@ -2010,7 +2106,7 @@ def _regex_segment_chapter(
         tier3b_speaker: Optional[str] = None
         tier3b_source = ""
         tier3b_conf = 0.0
-        if tier3b_attribution and paragraph_offsets:
+        if not non_spoken and tier3b_attribution and paragraph_offsets:
             p_idx = p_idx_for_quote
             entry = tier3b_attribution.get(p_idx)
             if entry and entry.get("speaker") and entry.get("confidence", 0) >= 0.7:
@@ -2018,7 +2114,7 @@ def _regex_segment_chapter(
                 tier3b_source = "parser"
                 tier3b_conf = float(entry.get("confidence", 0) or 0)
         # The quoted dialogue itself — regex pass.
-        regex_speaker = find_speaker_for_quote(
+        regex_speaker = None if non_spoken else find_speaker_for_quote(
             q_start, q_end, forward_prev_quote_end[q_idx]
         )
         # Strip leading/trailing quotes from content
@@ -2027,28 +2123,36 @@ def _regex_segment_chapter(
             clean_content = clean_content.strip(qc).strip()
         after_context = plain[q_end:min(len(plain), q_end + ATTR_WINDOW_AFTER)]
         context_text = f"{narr_text} {after_context}".strip()
-        speaker_name, attribution_source, evidence, confidence = _fuse_speaker(
-            regex_speaker,
-            tier3b_speaker,
-            tier3b_conf,
-            context_text,
-            clean_content,
-            p_idx_for_quote,
-            tier3b_source,
-        )
+        if non_spoken:
+            speaker_name, attribution_source, evidence, confidence = (
+                None, "narrator-non-spoken-quote", [], 1.0
+            )
+        else:
+            speaker_name, attribution_source, evidence, confidence = _fuse_speaker(
+                regex_speaker,
+                tier3b_speaker,
+                tier3b_conf,
+                context_text,
+                clean_content,
+                p_idx_for_quote,
+                tier3b_source,
+            )
         vid, vname, _ = _resolve_segment_voice(speaker_name, cmap, default_voice_id)
         char_tone = char_tones.get(speaker_name) if speaker_name else None
         # First pass: Tier 1 (keyword) + character-tone only. Tier 2 marker is
         # applied in a post-pass after we batch-classify all dialogue segments.
-        injected = inject_emotions(clean_content, "dialogue", char_tone, llm_marker="")
+        segment_kind = "narration" if non_spoken else "dialogue"
+        injected = inject_emotions(clean_content, segment_kind, char_tone, llm_marker="")
         seg: dict = {
-            "kind": "dialogue",
+            "kind": segment_kind,
             "text": injected,
             "character": speaker_name,
             "voice_id": vid,
             "voice_name": vname,
         }
-        if tier3b_source:
+        if non_spoken:
+            seg["attribution_source"] = attribution_source
+        elif tier3b_source:
             seg["attribution_source"] = attribution_source or tier3b_source
         elif attribution_source:
             seg["attribution_source"] = attribution_source
@@ -2202,7 +2306,13 @@ def generate_chapter(
                                      speed=speed)
         except Exception as e:
             print(f"  [seg {i+1}/{len(segments)}] FAILED: {e}", file=sys.stderr)
-            continue
+            # Never publish an audiobook chapter with missing sentences. A
+            # partial success used to be concatenated and marked "ready",
+            # silently deleting failed dialogue/narration from playback.
+            # Bubble the failure so BullMQ can retry the complete chapter.
+            raise RuntimeError(
+                f"segment {i + 1}/{len(segments)} failed; chapter output discarded"
+            ) from e
         wav_parts.append(wav)
         chars_done += len(seg["text"])
         if on_progress:

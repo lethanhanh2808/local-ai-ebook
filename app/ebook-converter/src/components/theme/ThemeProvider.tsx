@@ -125,9 +125,14 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // Track prefers-reduced-motion live.
   useEffect(() => {
     const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const forcedMq = window.matchMedia('(forced-colors: active)');
     const handler = () => applyAccessibilityModes();
     mq.addEventListener('change', handler);
-    return () => mq.removeEventListener('change', handler);
+    forcedMq.addEventListener('change', handler);
+    return () => {
+      mq.removeEventListener('change', handler);
+      forcedMq.removeEventListener('change', handler);
+    };
   }, []);
 
   const setTheme = useCallback((next: ThemeMode) => {

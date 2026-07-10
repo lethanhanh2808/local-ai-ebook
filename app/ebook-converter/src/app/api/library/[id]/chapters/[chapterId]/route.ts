@@ -532,8 +532,9 @@ function stripWatermarks(html: string, watermarks: string[]): string {
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string; chapterId: string } },
+  props: { params: Promise<{ id: string; chapterId: string }> }
 ) {
+  const params = await props.params;
   const book = await getBook(params.id);
   if (!book) {
     const theme = req.nextUrl.searchParams.get('theme') ?? 'sepia';

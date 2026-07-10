@@ -21,14 +21,16 @@ export const dynamic = 'force-dynamic';
 
 const BUILTIN_VIENEU = new Set(BUILTIN_VIENEU_NAMES);
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const book = await getBook(params.id);
   if (!book) return NextResponse.json({ error: 'Book not found' }, { status: 404 });
   const chars = await listCharacters(params.id);
   return NextResponse.json({ characters: chars });
 }
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const book = await getBook(params.id);
   if (!book) return NextResponse.json({ error: 'Book not found' }, { status: 404 });
 
@@ -62,7 +64,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     tone?: string | null;
   }> = [];
   for (const c of body.characters) {
+    if (!c || typeof c.name !== 'string' || !c.name.trim()) {
+      return NextResponse.json({ error: 'Every character requires a non-empty name' }, { status: 400 });
+    }
+    if (c.aliases !== undefined && (!Array.isArray(c.aliases) || c.aliases.some((a) => typeof a !== 'string'))) {
+      return NextResponse.json({ error: `Invalid aliases for character ${c.name}` }, { status: 400 });
+    }
     let voiceId = c.voiceId;
+    if (voiceId !== undefined && voiceId !== null && typeof voiceId !== 'string') {
+      return NextResponse.json({ error: `Invalid voiceId for character ${c.name}` }, { status: 400 });
+    }
     if (!voiceId && c.voiceName && BUILTIN_VIENEU.has(c.voiceName)) {
       let voice = voiceByName.get(c.voiceName);
       if (!voice) {
@@ -94,8 +105,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       voiceId = voice.id;
     }
     resolved.push({
-      name: c.name,
-      aliases: c.aliases ?? [],
+      name: c.name.trim().slice(0, 120),
+      aliases: [...new Set((c.aliases ?? []).map((a) => a.trim()).filter(Boolean))].slice(0, 30),
       voiceId,
       role: c.role ?? 'supporting',
       age: c.age ?? null,
@@ -109,9 +120,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   return NextResponse.json({ characters: created }, { status: 201 });
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const id = req.nextUrl.searchParams.get('id');
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
+  const character = await prisma.character.findUnique({ where: { id }, select: { bookId: true } });
+  if (!character || character.bookId !== params.id) {
+    return NextResponse.json({ error: 'Character not found' }, { status: 404 });
+  }
   await deleteCharacter(id);
   await setBookAudiobookStatus(params.id, 'none');
   return NextResponse.json({ ok: true });

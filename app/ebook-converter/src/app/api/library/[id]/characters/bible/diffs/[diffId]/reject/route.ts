@@ -10,8 +10,9 @@ export const dynamic = 'force-dynamic';
 
 export async function POST(
   _req: NextRequest,
-  { params }: { params: { id: string; diffId: string } },
+  props: { params: Promise<{ id: string; diffId: string }> }
 ) {
+  const params = await props.params;
   const { id: bookId, diffId } = params;
   const diff = await prisma.pendingBibleDiff.findUnique({ where: { id: diffId } });
   if (!diff) return NextResponse.json({ error: 'Not found' }, { status: 404 });

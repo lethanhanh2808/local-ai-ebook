@@ -9,10 +9,8 @@ import fs from 'fs';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(
-  _req: NextRequest,
-  { params }: { params: { id: string } },
-) {
+export async function POST(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const job = await getJob(params.id);
   if (!job) return NextResponse.json({ error: 'Job not found' }, { status: 404 });
 

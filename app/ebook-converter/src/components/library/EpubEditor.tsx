@@ -215,7 +215,7 @@ export function EpubEditor({ bookId }: EpubEditorProps) {
   return (
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-20 border-b border-border bg-background/95 backdrop-blur">
-        <div className="flex h-14 items-center gap-2 px-4">
+        <div className="flex min-h-14 items-center gap-1.5 px-2 py-2 sm:gap-2 sm:px-4">
           <Link
             href={`/library/${bookId}/read`}
             title="Back to reader"
@@ -239,10 +239,11 @@ export function EpubEditor({ bookId }: EpubEditorProps) {
             size="sm"
             onClick={() => setIllustOpen(true)}
             title="Tạo ảnh cho chapters"
-            className="gap-1.5 relative"
+            aria-label="Tạo ảnh cho chapters"
+            className="gap-1.5 relative px-2 sm:px-3"
           >
             <ImagePlus className="h-3.5 w-3.5" />
-            Tạo ảnh
+            <span className="hidden sm:inline">Tạo ảnh</span>
             {illustCount === 0 && (
               <span
                 aria-label="Chưa có ảnh — bấm để tạo"
@@ -256,14 +257,14 @@ export function EpubEditor({ bookId }: EpubEditorProps) {
           <Link
             href={`/library/${bookId}`}
             title="Thông tin sách"
-            className="inline-flex h-8 items-center justify-center rounded-md border border-border bg-background px-2.5 text-xs font-medium hover:bg-accent hover:text-accent-foreground"
+            className="hidden h-8 items-center justify-center rounded-md border border-border bg-background px-2.5 text-xs font-medium hover:bg-accent hover:text-accent-foreground sm:inline-flex"
           >
             Thông tin sách
           </Link>
           {savedBookId && savedBookId !== bookId && (
             <Link
               href={`/library/${savedBookId}/read`}
-              className="inline-flex h-8 items-center justify-center rounded-md border border-border border-input bg-background px-3 text-xs font-medium hover:bg-accent hover:text-accent-foreground"
+              className="hidden h-8 items-center justify-center rounded-md border border-border border-input bg-background px-3 text-xs font-medium hover:bg-accent hover:text-accent-foreground md:inline-flex"
             >
               Open edited copy
             </Link>
@@ -273,20 +274,21 @@ export function EpubEditor({ bookId }: EpubEditorProps) {
               "Save" rewrites the current book on disk; "Save As…"
               duplicates the book into a new " - Edited" copy so the
               original is preserved untouched. */}
-          <Button onClick={() => save('save')} disabled={!dirty || saving || loading} size="sm" className="gap-1.5">
+          <Button onClick={() => save('save')} disabled={!dirty || saving || loading} size="sm" className="gap-1.5 px-2 sm:px-3" aria-label="Save changes">
             {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-            Save
+            <span className="hidden sm:inline">Save</span>
           </Button>
           <Button
             onClick={() => save('saveAs')}
             disabled={saving || loading}
             variant="outline"
             size="sm"
-            className="gap-1.5"
+            className="gap-1.5 px-2 sm:px-3"
             title="Create a new library copy titled '<book> - Edited'"
+            aria-label="Save as a new edited copy"
           >
             <CopyPlus className="h-3.5 w-3.5" />
-            Save As…
+            <span className="hidden sm:inline">Save As…</span>
           </Button>
         </div>
       </header>
@@ -322,7 +324,7 @@ export function EpubEditor({ bookId }: EpubEditorProps) {
           </div>
         </aside>
 
-        <main className="min-w-0 border-r border-border">
+        <section className="min-w-0 border-r border-border" aria-label="Chapter editor">
           <div className="sticky top-14 z-10 border-b border-border bg-background/95 px-4 py-2 backdrop-blur">
             <div className="flex flex-wrap items-center gap-1">
               {tools.map(({ title: toolTitle, icon: Icon, run }) => (
@@ -361,6 +363,9 @@ export function EpubEditor({ bookId }: EpubEditorProps) {
                 key={activeId}
                 ref={editorRef}
                 contentEditable
+                role="textbox"
+                aria-label="Chapter content"
+                aria-multiline="true"
                 suppressContentEditableWarning
                 lang="vi"
                 spellCheck={false}
@@ -384,7 +389,7 @@ export function EpubEditor({ bookId }: EpubEditorProps) {
               />
             )}
           </div>
-        </main>
+        </section>
 
         {/* Right-side illustrations rail — only on lg+. Below lg the
             rail collapses and the header "Tạo ảnh" button opens the

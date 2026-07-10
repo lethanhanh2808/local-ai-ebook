@@ -219,7 +219,7 @@ export function CharacterDetection({ bookId, existingCharacters, onApplied }: Pr
 
         {!result && !running && !error && (
           <p className="text-xs text-muted-foreground italic mt-2">
-            Click "Phân tích nhân vật" để AI quét vài chương đầu của sách. Mất khoảng 60-90 giây.
+            Click &ldquo;Phân tích nhân vật&rdquo; để AI quét vài chương đầu của sách. Mất khoảng 60-90 giây.
           </p>
         )}
       </Card>
@@ -333,7 +333,7 @@ export function CharacterDetection({ bookId, existingCharacters, onApplied }: Pr
                         )}
                         {sample && (
                           <p className="text-[10px] italic text-muted-foreground mt-1 truncate">
-                            "{sample}"
+                            &ldquo;{sample}&rdquo;
                           </p>
                         )}
                         {!isExisting && (

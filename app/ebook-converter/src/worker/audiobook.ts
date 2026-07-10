@@ -9,7 +9,7 @@ import path from 'path';
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local'), override: true });
 dotenv.config({ path: path.resolve(process.cwd(), '.env'), override: false });
 
-import { Worker, Job, Queue } from 'bullmq';
+import { Worker, Job } from 'bullmq';
 import IORedis from 'ioredis';
 import { spawn } from 'child_process';
 import fs from 'fs';
@@ -34,6 +34,9 @@ import {
   getAudiobookSummary,
 } from '../lib/db/audiobook';
 import { parseEpub } from '../lib/pipeline/epub-parser';
+import { resolveBookPath } from '../lib/storage';
+import { assertWithinRoots, pathRoots, SafePathError } from '../lib/storage/safe-path';
+import { kill, killAll, track } from './process-tracker';
 
 const PYTHON = process.env.TTS_PYTHON ?? '/Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11';
 
@@ -57,6 +60,26 @@ const GENERATOR = TTS_SERVICE ? path.join(TTS_SERVICE, 'audiobook_generator.py')
 const VENV_PY = TTS_SERVICE ? path.join(TTS_SERVICE, '.venv-moss-nano/bin/python') : null;
 const DATA_DIR = path.resolve(process.cwd(), 'data/audiobooks');
 const UNIFIED_TTS_URL = process.env.UNIFIED_TTS_URL ?? 'http://127.0.0.1:5010';
+const MAX_GENERATOR_LOG_BYTES = 1024 * 1024;
+const GENERATOR_TIMEOUT_MS = 30 * 60_000;
+
+class UserCancelledError extends Error {
+  constructor() {
+    super('Audiobook generation stopped by user');
+    this.name = 'UserCancelledError';
+  }
+}
+
+function generatorKey(bookId: string, chapterFile: string): string {
+  return `audiobook:${bookId}:${chapterFile}`;
+}
+
+function appendBounded(current: string, chunk: unknown): string {
+  const next = current + String(chunk);
+  return next.length > MAX_GENERATOR_LOG_BYTES
+    ? next.slice(-MAX_GENERATOR_LOG_BYTES)
+    : next;
+}
 
 // Belt-and-suspenders: coerce any stale/mistyped backend value to a known
 // one before spawning the Python subprocess. argparse in
@@ -104,12 +127,36 @@ async function runGenerator(opts: {
       env: { ...process.env, UNIFIED_TTS_URL, CHARACTER_MAP: opts.charactersJson },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    const key = generatorKey(opts.bookId, opts.chapterFile);
+    const release = track(key, proc);
     let stdout = '';
     let stderr = '';
-    proc.stdout.on('data', (d) => { stdout += d.toString(); });
-    proc.stderr.on('data', (d) => { stderr += d.toString(); });
-    proc.on('error', reject);
-    proc.on('close', (code) => resolve({ stdout, stderr, code: code ?? 1 }));
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      kill(key, `generator exceeded ${GENERATOR_TIMEOUT_MS}ms`);
+      release();
+      reject(new Error(`TTS generator timed out after ${GENERATOR_TIMEOUT_MS / 60_000} minutes`));
+    }, GENERATOR_TIMEOUT_MS);
+    timeout.unref();
+
+    proc.stdout.on('data', (d) => { stdout = appendBounded(stdout, d); });
+    proc.stderr.on('data', (d) => { stderr = appendBounded(stderr, d); });
+    proc.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      release();
+      reject(error);
+    });
+    proc.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      release();
+      resolve({ stdout, stderr, code: code ?? 1 });
+    });
   });
 }
 
@@ -118,13 +165,20 @@ function htmlBody(html: string): string {
   return m ? m[1] : html;
 }
 
-async function computeAudiobookConfigHash(bookId: string, backend: string): Promise<string> {
+async function computeAudiobookConfigHash(
+  bookId: string,
+  backend: string,
+  source: { path: string; size: number; mtimeMs: number },
+): Promise<string> {
   const [voices, characters] = await Promise.all([
     listVoices(bookId),
     listCharacters(bookId),
   ]);
   const payload = {
     backend,
+    // Voice settings alone are not enough: editing/replacing the EPUB must
+    // invalidate generated audio even when the cast is unchanged.
+    source,
     voices: voices.map((v) => ({
       id: v.id,
       name: v.name,
@@ -151,7 +205,12 @@ async function computeAudiobookConfigHash(bookId: string, backend: string): Prom
 
 function removeAudioFile(audioPath?: string | null): void {
   if (!audioPath) return;
-  try { if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath); } catch {}
+  try {
+    const safePath = assertWithinRoots(audioPath, [pathRoots().audiobooks]);
+    if (fs.existsSync(safePath)) fs.unlinkSync(safePath);
+  } catch (error) {
+    if (!(error instanceof SafePathError)) throw error;
+  }
 }
 
 /** Convert a WAV file to MP3 using ffmpeg. Returns the duration in ms
@@ -214,11 +273,27 @@ async function convertToMp3(
   });
 }
 
-async function generateOneChapter(bookId: string, chapterFile: string, backend: string, opts: { force?: boolean } = {}) {
+async function generateOneChapter(
+  bookId: string,
+  chapterFile: string,
+  backend: string,
+  opts: { force?: boolean; cancelOnStop?: boolean } = {},
+) {
   const book = await getBook(bookId);
   if (!book) throw new Error('book not found');
 
-  const configHash = await computeAudiobookConfigHash(bookId, backend);
+  const bookPath = await resolveBookPath(book);
+  let sourceStat: fs.Stats;
+  try {
+    sourceStat = fs.statSync(bookPath);
+  } catch (error) {
+    throw new Error(`EPUB source unavailable at ${bookPath}: ${String(error)}`);
+  }
+  const configHash = await computeAudiobookConfigHash(bookId, backend, {
+    path: bookPath,
+    size: sourceStat.size,
+    mtimeMs: sourceStat.mtimeMs,
+  });
   const existing = await getChapter(bookId, chapterFile);
   if (!opts.force && existing?.status === 'ready' && existing.configHash === configHash && existing.audioPath && fs.existsSync(existing.audioPath)) {
     console.log(`[audiobook] ${bookId}/${chapterFile} up-to-date; skipping`);
@@ -249,11 +324,18 @@ async function generateOneChapter(bookId: string, chapterFile: string, backend: 
   await updateChapter(row.id, { status: 'generating', progress: 5, errorMsg: null, configHash });
 
   // Parse the EPUB once and find the chapter HTML
-  const epub = await parseEpub(book.filePath);
+  let epub: Awaited<ReturnType<typeof parseEpub>>;
+  try {
+    epub = await parseEpub(bookPath);
+  } catch (error) {
+    const message = `Failed to parse EPUB: ${String(error)}`;
+    await updateChapter(row.id, { status: 'failed', errorMsg: message.slice(0, 1000) });
+    throw new Error(message);
+  }
   const htmlEntry = epub.entries.get(chapterFile);
   if (!htmlEntry) {
     await updateChapter(row.id, { status: 'failed', errorMsg: `Chapter file not in EPUB: ${chapterFile}` });
-    return;
+    throw new Error(`Chapter file not in EPUB: ${chapterFile}`);
   }
 
   // Load voices + characters
@@ -334,24 +416,62 @@ async function generateOneChapter(bookId: string, chapterFile: string, backend: 
   fs.mkdirSync(outDir, { recursive: true });
 
   try {
-    const { stdout, stderr, code } = await runGenerator({
-      bookId,
-      chapterFile,
-      backend,
-      language: book.language ?? 'vi',
-      chapterTextFile: tmpHtml,
-      outDir,
-      charactersJson,
-    });
+    let result: Awaited<ReturnType<typeof runGenerator>>;
+    let checkingCancellation = false;
+    const cancelTimer = opts.cancelOnStop
+      ? setInterval(async () => {
+          if (checkingCancellation) return;
+          checkingCancellation = true;
+          try {
+            const fresh = await getBook(bookId);
+            if (fresh && (fresh as { audiobookStatus?: string }).audiobookStatus === 'none') {
+              kill(generatorKey(bookId, chapterFile), 'stopped by user');
+            }
+          } catch (error) {
+            console.warn(`[audiobook] cancellation check failed: ${String(error)}`);
+          } finally {
+            checkingCancellation = false;
+          }
+        }, 750)
+      : null;
+    cancelTimer?.unref();
+    try {
+      result = await runGenerator({
+        bookId,
+        chapterFile,
+        backend,
+        language: book.language ?? 'vi',
+        chapterTextFile: tmpHtml,
+        outDir,
+        charactersJson,
+      });
+    } catch (error) {
+      const fresh = opts.cancelOnStop ? await getBook(bookId) : null;
+      if (fresh && (fresh as { audiobookStatus?: string }).audiobookStatus === 'none') {
+        await updateChapter(row.id, { status: 'pending', progress: 0, errorMsg: null });
+        throw new UserCancelledError();
+      }
+      const message = `TTS generator failed to start: ${String(error)}`;
+      await updateChapter(row.id, { status: 'failed', errorMsg: message.slice(0, 1000) });
+      throw new Error(message);
+    } finally {
+      if (cancelTimer) clearInterval(cancelTimer);
+    }
+    const { stdout, stderr, code } = result;
 
     if (code !== 0) {
+      const fresh = opts.cancelOnStop ? await getBook(bookId) : null;
+      if (fresh && (fresh as { audiobookStatus?: string }).audiobookStatus === 'none') {
+        await updateChapter(row.id, { status: 'pending', progress: 0, errorMsg: null });
+        throw new UserCancelledError();
+      }
       await updateChapter(row.id, {
         status: 'failed',
         errorMsg: (stderr || stdout).slice(0, 1000),
       });
       console.error(`[audiobook] ${bookId}/${chapterFile} FAILED (exit ${code})`);
       console.error(stderr.slice(-500));
-      return;
+      throw new Error(`audiobook generator exited ${code}: ${(stderr || stdout).slice(-500)}`);
     }
 
     // Generator wrote file. Find it.
@@ -359,7 +479,7 @@ async function generateOneChapter(bookId: string, chapterFile: string, backend: 
     const wavPath = path.join(outDir, `${safe}.wav`);
     if (!fs.existsSync(wavPath)) {
       await updateChapter(row.id, { status: 'failed', errorMsg: `output WAV not found at ${wavPath}` });
-      return;
+      throw new Error(`output WAV not found at ${wavPath}`);
     }
 
     // ── Convert WAV → MP3 (saves ~7.7× disk space) ──────────────────────
@@ -401,7 +521,8 @@ export async function generateEntireBook(bookId: string, backend: string) {
   const book = await getBook(bookId);
   if (!book) throw new Error('book not found');
 
-  const epub = await parseEpub(book.filePath);
+  const bookPath = await resolveBookPath(book);
+  const epub = await parseEpub(bookPath);
   const chapterFiles = epub.htmlFiles.filter((f) => !/cover\.(x?html?)$/i.test(f));
 
   console.log(`[audiobook] Book ${bookId}: ${chapterFiles.length} chapters to generate with ${backend}`);
@@ -421,7 +542,7 @@ export async function generateEntireBook(bookId: string, backend: string) {
       break;
     }
     try {
-      await generateOneChapter(bookId, chapterFile, backend);
+      await generateOneChapter(bookId, chapterFile, backend, { cancelOnStop: true });
       const row = await listChapters(bookId).then((rows) => rows.find((r) => r.chapterFile === chapterFile));
       if (row?.status === 'ready') {
         totalDurMs += row.durationMs ?? 0;
@@ -430,7 +551,12 @@ export async function generateEntireBook(bookId: string, backend: string) {
         firstError = row.errorMsg;
       }
     } catch (err) {
+      if (err instanceof UserCancelledError) {
+        stoppedByUser = true;
+        break;
+      }
       console.error(`[audiobook] chapter ${chapterFile} threw:`, err);
+      if (!firstError) firstError = err instanceof Error ? err.message : String(err);
     }
   }
 
@@ -447,6 +573,9 @@ export async function generateEntireBook(bookId: string, backend: string) {
   await setBookAudiobookStatus(bookId, status, { durationMs: totalDurMs, generatedAt: new Date() });
   console.log(`[audiobook] Book ${bookId} done: ${generatedCount}/${chapterFiles.length} ready${stoppedByUser ? ' (stopped)' : ''}, ${(totalDurMs/60000).toFixed(1)} min`);
   if (firstError && status === 'failed') console.error(`[audiobook] first error: ${firstError}`);
+  if (firstError && !stoppedByUser) {
+    throw new Error(`Audiobook generation incomplete: ${firstError}`);
+  }
 }
 
 // ── Start audiobook worker (call from index.ts or standalone) ─────────────
@@ -469,8 +598,14 @@ export async function startAudiobookWorker(): Promise<{ worker: Worker }> {
   worker.on('completed', (job) => console.log(`[audiobook-worker] ✓ ${job.id}`));
   worker.on('failed', (job, err) => console.error(`[audiobook-worker] ✗ ${job?.id}: ${err.message}`));
 
-  process.on('SIGTERM', async () => { await worker.close(); });
-  process.on('SIGINT',  async () => { await worker.close(); });
+  process.on('SIGTERM', async () => {
+    killAll('SIGTERM');
+    await worker.close();
+  });
+  process.on('SIGINT', async () => {
+    killAll('SIGINT');
+    await worker.close();
+  });
 
   console.log('[audiobook-worker] Listening on queue ebook-audiobook (concurrency=1)');
   return { worker };

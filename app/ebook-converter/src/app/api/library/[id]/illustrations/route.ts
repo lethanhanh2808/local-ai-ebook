@@ -20,6 +20,7 @@ import { getBook } from '@/lib/db/books';
 import { parseEpub } from '@/lib/pipeline/epub-parser';
 import { getSettings } from '@/lib/db/settings';
 import { generateImage, analyzeChapterForIllustration, characterSeed, normalizeImageStyle } from '@/lib/ai/image-generator';
+import { resolveBookPath } from '@/lib/storage';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,7 +28,8 @@ export const dynamic = 'force-dynamic';
 const ILLUSTRATIONS_DIR = path.resolve(process.cwd(), 'data/illustrations');
 
 // ── GET: list existing illustrations for a book ────────────────────────
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const book = await getBook(params.id);
   if (!book) return NextResponse.json({ error: 'Book not found' }, { status: 404 });
 
@@ -39,7 +41,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 // ── POST: analyze = AI reviews each chapter, returns the plan only ──────
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const book = await getBook(params.id);
   if (!book) return NextResponse.json({ error: 'Book not found' }, { status: 404 });
   const settings = await getSettings();
@@ -59,7 +62,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   };
 
   // Parse the EPUB once
-  const epub = await parseEpub(book.filePath);
+  const bookPath = await resolveBookPath(book);
+  if (!fs.existsSync(bookPath)) {
+    return NextResponse.json({ error: 'Book file not found on disk' }, { status: 404 });
+  }
+  const epub = await parseEpub(bookPath);
 
   // Strip <body> from each chapter file → plain text-ish body
   const chapters: Array<{ index: number; title: string; bodyText: string }> = [];

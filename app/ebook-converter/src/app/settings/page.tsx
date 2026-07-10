@@ -8,13 +8,13 @@
 // Sub-components are stateless wrappers around `settings` + `update()`.
 'use client';
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useState, type ReactNode } from 'react';
 import {
   Settings as SettingsIcon, Cpu, KeyRound, Sparkles, Volume2,
   Eye, EyeOff, Loader2, Save, Check, AlertCircle, RefreshCw,
   Mic, Languages, Wand2, ShieldOff, ExternalLink,
   Cloud, Server, Wrench, Trash2, Image as ImageIcon, Zap, Activity, Smartphone,
-  Plus, Database, Bookmark,
+  Plus, Database, Bookmark, Palette, Monitor, Sun, Moon, BookOpen,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -25,6 +25,10 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { cn } from '@/lib/utils';
 import { ServiceHealth } from '@/components/status/ServiceHealth';
+import { ErrorState } from '@/components/layout/ErrorState';
+import { useToast } from '@/components/ui/toast';
+import { useTheme, type ThemeMode } from '@/components/theme/ThemeProvider';
+import Link from 'next/link';
 
 interface Settings {
   id: string;
@@ -82,9 +86,14 @@ const TTS_PROVIDERS = [
 ];
 
 export default function SettingsPage() {
+  const toast = useToast();
+  const { theme, setTheme } = useTheme();
   const [settings, setSettings] = useState<Settings | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [activeTab, setActiveTab] = useState('ai');
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [showKey, setShowKey] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -120,15 +129,32 @@ export default function SettingsPage() {
 
   const fetchSettings = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
-      const s = await fetch('/api/settings').then((r) => r.json());
+      const res = await fetch('/api/settings');
+      const s = await res.json().catch(() => ({})) as Settings & { error?: string };
+      if (!res.ok) throw new Error(s.error ?? `HTTP ${res.status}`);
       setSettings(s);
+      if (s.theme === 'light' || s.theme === 'dark' || s.theme === 'system') setTheme(s.theme);
+      setDirty(false);
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [setTheme]);
 
   useEffect(() => { void fetchSettings(); }, [fetchSettings]);
+
+  useEffect(() => {
+    const syncHash = () => {
+      const next = window.location.hash.slice(1);
+      if (['ai', 'tts', 'conversion', 'watermarks', 'image', 'appearance'].includes(next)) setActiveTab(next);
+    };
+    syncHash();
+    window.addEventListener('hashchange', syncHash);
+    return () => window.removeEventListener('hashchange', syncHash);
+  }, []);
 
   const save = async () => {
     if (!settings) return;
@@ -196,14 +222,19 @@ export default function SettingsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const updated = await res.json();
+      const updated = await res.json().catch(() => ({})) as Settings & { error?: string };
+      if (!res.ok) throw new Error(updated.error ?? `Không thể lưu (HTTP ${res.status})`);
       setSettings(updated);
       setSavedAt(new Date());
+      setDirty(false);
+      toast.success('Đã lưu cài đặt');
       // Auto-refresh the available models list with the new API key
       void fetchModels('text');
       if (updated.imageProvider && updated.imageProvider !== 'none') {
         void fetchModels('image');
       }
+    } catch (e) {
+      toast.error('Không thể lưu cài đặt', { description: e instanceof Error ? e.message : String(e) });
     } finally {
       setSaving(false);
     }
@@ -231,6 +262,16 @@ export default function SettingsPage() {
     if (!settings) return;
     setSettings({ ...settings, [key]: value });
     setSavedAt(null);
+    setDirty(true);
+  };
+
+  const clearSavedKey = (kind: 'ai' | 'image') => {
+    if (!settings) return;
+    setSettings(kind === 'ai'
+      ? { ...settings, aiApiKey: '', aiApiKeyMasked: null }
+      : { ...settings, imageApiKey: '', imageApiKeyMasked: null });
+    setSavedAt(null);
+    setDirty(true);
   };
 
   const pickProviderDefaults = (providerId: string) => {
@@ -240,7 +281,7 @@ export default function SettingsPage() {
       ...settings,
       aiProvider: providerId,
       aiModel: p.defaultModel,
-      aiBaseUrl: settings.aiBaseUrl ?? p.defaultUrl,
+      aiBaseUrl: p.defaultUrl,
       aiMaxTokens: p.defaultMaxTokens,
     });
     // Clear stale model list / error from the previous provider
@@ -248,9 +289,22 @@ export default function SettingsPage() {
     setImageModels([]);
     setModelsError(null);
     setSavedAt(null);
+    setDirty(true);
   };
 
-  if (loading || !settings) {
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
+
+  const setAppTheme = (next: ThemeMode) => {
+    update('theme', next);
+    setTheme(next);
+  };
+
+  if (loading && !settings) {
     return (
       <div className="mx-auto max-w-7xl px-4 py-8">
         <PageHeader eyebrow="Cài đặt" title="Đang tải…" icon={<SettingsIcon className="h-4 w-4" />} />
@@ -258,6 +312,17 @@ export default function SettingsPage() {
       </div>
     );
   }
+
+  if (loadError && !settings) {
+    return (
+      <div className="mx-auto max-w-7xl px-4 py-8">
+        <PageHeader eyebrow="Cài đặt" title="Cài đặt" icon={<SettingsIcon className="h-4 w-4" />} />
+        <ErrorState title="Không thể tải cài đặt" message={loadError} details={loadError} onRetry={() => void fetchSettings()} retrying={loading} />
+      </div>
+    );
+  }
+
+  if (!settings) return null;
 
   const aiProvider = AI_PROVIDERS.find((p) => p.id === settings.aiProvider) ?? AI_PROVIDERS[0];
   const ttsProvider = TTS_PROVIDERS.find((p) => p.id === settings.ttsProvider) ?? TTS_PROVIDERS[0];
@@ -267,7 +332,7 @@ export default function SettingsPage() {
       <PageHeader
         breadcrumbs={[{ label: 'Cài đặt' }]}
         title="Cài đặt"
-        description="Chọn AI provider, cấu hình TTS, và tuỳ chỉnh các tuỳ chọn mặc định. Tất cả thay đổi có hiệu lực ngay lập tức."
+        description="Chọn AI provider, cấu hình TTS, giao diện và các tuỳ chọn mặc định. Thay đổi có hiệu lực sau khi lưu."
         icon={<SettingsIcon className="h-4 w-4" />}
         actions={
           <>
@@ -276,10 +341,11 @@ export default function SettingsPage() {
                 <Check className="h-3 w-3" /> Đã lưu {savedAt.toLocaleTimeString()}
               </span>
             )}
-            <Button variant="outline" size="sm" onClick={fetchSettings} title="Tải lại">
+            {dirty && <span className="text-xs font-medium text-amber-600 dark:text-amber-400">Chưa lưu</span>}
+            <Button variant="outline" size="sm" onClick={() => void fetchSettings()} title="Tải lại" aria-label="Tải lại cài đặt">
               <RefreshCw className="h-3.5 w-3.5" />
             </Button>
-            <Button onClick={save} disabled={saving} size="sm">
+            <Button onClick={save} disabled={saving || !dirty} size="sm">
               {saving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Save className="h-3.5 w-3.5 mr-1.5" />}
               Lưu
             </Button>
@@ -287,8 +353,20 @@ export default function SettingsPage() {
         }
       />
 
-      <Tabs defaultValue="ai">
-        <TabsList className="w-full overflow-x-auto flex-nowrap sm:flex-wrap justify-start sm:justify-center">
+      {loadError && (
+        <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          Không thể tải lại cài đặt: {loadError}
+        </div>
+      )}
+
+      <Tabs
+        value={activeTab}
+        onValueChange={(next) => {
+          setActiveTab(next);
+          window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${next}`);
+        }}
+      >
+        <TabsList className="h-auto min-h-9 w-full justify-start overflow-x-auto flex-nowrap lg:justify-center" aria-label="Nhóm cài đặt">
           <TabsTrigger value="ai" className="gap-1.5">
             <Cpu className="h-3.5 w-3.5" /> AI Provider
           </TabsTrigger>
@@ -303,6 +381,9 @@ export default function SettingsPage() {
           </TabsTrigger>
           <TabsTrigger value="image" className="gap-1.5">
             <ImageIcon className="h-3.5 w-3.5" /> Image generation
+          </TabsTrigger>
+          <TabsTrigger value="appearance" className="gap-1.5">
+            <Palette className="h-3.5 w-3.5" /> Giao diện
           </TabsTrigger>
         </TabsList>
 
@@ -329,7 +410,7 @@ export default function SettingsPage() {
                 const Icon = p.Icon;
                 const selected = settings.aiProvider === p.id;
                 return (
-                  <button key={p.id} onClick={() => pickProviderDefaults(p.id)}
+                  <button key={p.id} type="button" onClick={() => pickProviderDefaults(p.id)} aria-pressed={selected}
                     className={cn('text-left rounded-lg border border-border p-3 transition-all',
                       selected ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'hover:bg-muted/30',
                     )}>
@@ -355,12 +436,13 @@ export default function SettingsPage() {
             {/* Provider-specific config */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-border">
               <div className="space-y-1.5 sm:col-span-2">
-                <label className="text-xs font-medium flex items-center gap-1.5">
+                <label htmlFor="settings-ai-key" className="text-xs font-medium flex items-center gap-1.5">
                   <KeyRound className="h-3 w-3" />
                   API Key {aiProvider.needsKey && <span className="text-destructive">*</span>}
                 </label>
                 <div className="flex gap-2">
                   <Input
+                    id="settings-ai-key"
                     type={showKey ? 'text' : 'password'}
                     value={settings.aiApiKey ?? ''}
                     onChange={(e) => update('aiApiKey', e.target.value)}
@@ -379,7 +461,7 @@ export default function SettingsPage() {
                       size="sm"
                       variant="outline"
                       type="button"
-                      onClick={() => { update('aiApiKey', ''); }}
+                      onClick={() => clearSavedKey('ai')}
                       title="Xoá key hiện tại"
                       className="text-destructive"
                     >
@@ -436,13 +518,13 @@ export default function SettingsPage() {
 
               {(settings.aiProvider === 'custom' || settings.aiBaseUrl) && (
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium flex items-center gap-1.5">
+                  <label htmlFor="settings-ai-url" className="text-xs font-medium flex items-center gap-1.5">
                     Base URL
-                    <a href="https://platform.openai.com/docs/api-reference" target="_blank" rel="noreferrer" className="text-muted-foreground hover:text-foreground">
+                    <a href="https://platform.openai.com/docs/api-reference" target="_blank" rel="noreferrer" aria-label="Open AI API documentation in a new tab" className="text-muted-foreground hover:text-foreground">
                       <ExternalLink className="h-3 w-3" />
                     </a>
                   </label>
-                  <Input type="text" value={settings.aiBaseUrl ?? ''}
+                  <Input id="settings-ai-url" type="url" value={settings.aiBaseUrl ?? ''}
                     onChange={(e) => update('aiBaseUrl', e.target.value)}
                     placeholder="https://api.example.com/v1"
                     className="font-mono"
@@ -451,17 +533,18 @@ export default function SettingsPage() {
               )}
 
               <div className="space-y-1.5">
-                <label className="text-xs font-medium">Max tokens</label>
-                <Input type="number" min={64} max={32000} step={64} value={settings.aiMaxTokens}
+                <label htmlFor="settings-ai-max-tokens" className="text-xs font-medium">Max tokens</label>
+                <Input id="settings-ai-max-tokens" type="number" min={64} max={32000} step={64} value={settings.aiMaxTokens}
                   onChange={(e) => update('aiMaxTokens', parseInt(e.target.value, 10) || 4096)}
                 />
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-medium">
+                <label htmlFor="settings-ai-temperature" className="text-xs font-medium">
                   Temperature <span className="font-mono text-muted-foreground">{settings.aiTemperature.toFixed(2)}</span>
                 </label>
-                <input type="range" min={0} max={2} step={0.05} value={settings.aiTemperature}
+                <input id="settings-ai-temperature" type="range" min={0} max={2} step={0.05} value={settings.aiTemperature}
+                  aria-valuetext={settings.aiTemperature.toFixed(2)}
                   onChange={(e) => update('aiTemperature', parseFloat(e.target.value))}
                   className="w-full"
                 />
@@ -477,7 +560,7 @@ export default function SettingsPage() {
                 </Button>
                 {testResult?.ok && (
                   <span className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
-                    <Check className="h-3 w-3" /> OK ({testResult.ms}ms): "{testResult.response}"
+                    <Check className="h-3 w-3" /> OK ({testResult.ms}ms): &ldquo;{testResult.response}&rdquo;
                   </span>
                 )}
               </div>
@@ -516,7 +599,7 @@ export default function SettingsPage() {
               {TTS_PROVIDERS.map((p) => {
                 const selected = settings.ttsProvider === p.id;
                 return (
-                  <button key={p.id} onClick={() => update('ttsProvider', p.id)}
+                  <button key={p.id} type="button" onClick={() => update('ttsProvider', p.id)} aria-pressed={selected}
                     className={cn('text-left rounded-lg border border-border p-3 transition-all',
                       selected ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'hover:bg-muted/30',
                     )}>
@@ -552,7 +635,7 @@ export default function SettingsPage() {
                   <label className="text-xs font-medium">Max parallel jobs</label>
                   <span className="text-xs font-mono text-muted-foreground">{settings.workerConcurrency}</span>
                 </div>
-                <input type="range" min={1} max={8} step={1}
+                <input type="range" min={1} max={8} step={1} aria-label="Max parallel jobs"
                   value={settings.workerConcurrency}
                   onChange={(e) => update('workerConcurrency', parseInt(e.target.value, 10) || 2)}
                   className="w-full" />
@@ -568,7 +651,7 @@ export default function SettingsPage() {
                   <label className="text-xs font-medium">Chapter concurrency (per job)</label>
                   <span className="text-xs font-mono text-muted-foreground">{settings.workerChapterConcurrency}</span>
                 </div>
-                <input type="range" min={1} max={8} step={1}
+                <input type="range" min={1} max={8} step={1} aria-label="Chapter concurrency per job"
                   value={settings.workerChapterConcurrency}
                   onChange={(e) => update('workerChapterConcurrency', parseInt(e.target.value, 10) || 1)}
                   className="w-full" />
@@ -594,7 +677,7 @@ export default function SettingsPage() {
                 <label className="text-xs font-medium">Parallel chapter LLM calls</label>
                 <span className="text-xs font-mono text-muted-foreground">{settings.aiEnhanceConcurrency}</span>
               </div>
-              <input type="range" min={1} max={16} step={1}
+              <input type="range" min={1} max={16} step={1} aria-label="Parallel chapter LLM calls"
                 value={settings.aiEnhanceConcurrency}
                 onChange={(e) => update('aiEnhanceConcurrency', parseInt(e.target.value, 10) || 3)}
                 className="w-full" />
@@ -649,7 +732,7 @@ export default function SettingsPage() {
                 Ngôn ngữ mặc định cho EPUB mới
               </label>
               <Select value={settings.defaultLanguage} onValueChange={(v) => update('defaultLanguage', v)}>
-                <SelectTrigger className="w-full">
+                <SelectTrigger className="w-full" aria-label="Ngôn ngữ mặc định cho EPUB mới">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -687,14 +770,14 @@ export default function SettingsPage() {
               </span>
             </div>
             <p className="text-[10px] text-muted-foreground -mt-2">
-              AI generates black-and-white illustrations for "highlight" chapters of novels.
+              AI generates black-and-white illustrations for &ldquo;highlight&rdquo; chapters of novels.
               Output style adapts to the story (e.g. ink-wash for tu tiểu thuyết, manga for modern web novels).
             </p>
 
             {/* Provider cards */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {(['none', 'openai', 'minimax', 'custom'] as const).map((p) => (
-                <button key={p} onClick={() => update('imageProvider', p)}
+                <button key={p} type="button" onClick={() => update('imageProvider', p)} aria-pressed={settings.imageProvider === p}
                   className={cn('rounded-lg border border-border p-2.5 text-left transition-all text-xs',
                     settings.imageProvider === p
                       ? 'border-primary bg-primary/5 ring-1 ring-primary'
@@ -715,17 +798,25 @@ export default function SettingsPage() {
               <>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-border">
                   <div className="space-y-1.5">
-                    <label className="text-xs font-medium flex items-center gap-1.5">
+                    <label htmlFor="settings-image-key" className="text-xs font-medium flex items-center gap-1.5">
                       <KeyRound className="h-3 w-3" />
                       Image API Key
                     </label>
-                    <Input
-                      type="password"
-                      value={settings.imageApiKey ?? ''}
-                      onChange={(e) => update('imageApiKey', e.target.value)}
-                      placeholder={settings.imageApiKeyMasked ? `Hiện: ${settings.imageApiKeyMasked}` : 'sk-...'}
-                      className="font-mono"
-                    />
+                    <div className="flex gap-2">
+                      <Input
+                        id="settings-image-key"
+                        type="password"
+                        value={settings.imageApiKey ?? ''}
+                        onChange={(e) => update('imageApiKey', e.target.value)}
+                        placeholder={settings.imageApiKeyMasked ? `Hiện: ${settings.imageApiKeyMasked}` : 'sk-...'}
+                        className="font-mono"
+                      />
+                      {settings.imageApiKeyMasked && (
+                        <Button type="button" size="sm" variant="outline" onClick={() => clearSavedKey('image')} className="text-destructive" aria-label="Xoá Image API key đã lưu">
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                    </div>
                   </div>
 
                   <ModelField
@@ -746,8 +837,8 @@ export default function SettingsPage() {
 
                   {(settings.imageProvider === 'custom' || settings.imageBaseUrl) && (
                     <div className="space-y-1.5 sm:col-span-2">
-                      <label className="text-xs font-medium">Base URL</label>
-                      <Input type="text" value={settings.imageBaseUrl ?? ''}
+                      <label htmlFor="settings-image-url" className="text-xs font-medium">Base URL</label>
+                      <Input id="settings-image-url" type="url" value={settings.imageBaseUrl ?? ''}
                         onChange={(e) => update('imageBaseUrl', e.target.value)}
                         placeholder="https://api.example.com/v1"
                         className="font-mono"
@@ -766,7 +857,7 @@ export default function SettingsPage() {
                   <div className="space-y-1.5">
                     <label className="text-xs font-medium">Art style</label>
                     <Select value={settings.imageStyle} onValueChange={(v) => update('imageStyle', v)}>
-                      <SelectTrigger className="w-full">
+                      <SelectTrigger className="w-full" aria-label="Art style">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -793,8 +884,8 @@ export default function SettingsPage() {
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="text-xs font-medium">Max illustrations per book</label>
-                    <Input type="number" min={0} max={50} value={settings.imageMaxPerBook}
+                    <label htmlFor="settings-image-max" className="text-xs font-medium">Max illustrations per book</label>
+                    <Input id="settings-image-max" type="number" min={0} max={50} value={settings.imageMaxPerBook}
                       onChange={(e) => update('imageMaxPerBook', parseInt(e.target.value, 10) || 0)}
                     />
                   </div>
@@ -804,6 +895,53 @@ export default function SettingsPage() {
                 </p>
               </>
             )}
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="appearance" className="space-y-4 outline-none">
+          <Card className="p-5 space-y-4">
+            <div>
+              <h2 className="text-sm font-semibold flex items-center gap-2">
+                <Palette className="h-4 w-4 text-primary" /> Giao diện ứng dụng
+              </h2>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Chọn giao diện cố định hoặc tự động theo cài đặt của hệ điều hành.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" role="group" aria-label="Giao diện ứng dụng">
+              {([
+                { id: 'system' as const, label: 'Theo hệ thống', description: 'Tự đổi sáng/tối theo thiết bị', Icon: Monitor },
+                { id: 'light' as const, label: 'Sáng', description: 'Nền sáng, độ tương phản cao', Icon: Sun },
+                { id: 'dark' as const, label: 'Tối', description: 'Dịu mắt trong môi trường tối', Icon: Moon },
+              ]).map(({ id: mode, label, description, Icon }) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setAppTheme(mode)}
+                  aria-pressed={theme === mode}
+                  className={cn(
+                    'rounded-lg border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                    theme === mode ? 'border-primary bg-primary/5 ring-1 ring-primary/40' : 'border-border hover:bg-muted/40',
+                  )}
+                >
+                  <span className="flex items-center gap-2 text-sm font-semibold"><Icon className="h-4 w-4" />{label}</span>
+                  <span className="mt-1 block text-[10px] text-muted-foreground">{description}</span>
+                </button>
+              ))}
+            </div>
+          </Card>
+
+          <Card className="p-5 space-y-3">
+            <h2 className="text-sm font-semibold flex items-center gap-2">
+              <BookOpen className="h-4 w-4 text-primary" /> Tuỳ chỉnh trình đọc
+            </h2>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              Kiểu trang, font, cỡ chữ, giãn dòng, thụt đầu dòng và lề được lưu riêng trên thiết bị này.
+              Mở một cuốn sách rồi chọn biểu tượng cài đặt trong thanh công cụ; nhấn <kbd className="rounded border px-1 py-0.5 font-mono">?</kbd> để xem phím tắt.
+            </p>
+            <Link href="/library" className="inline-flex h-8 items-center justify-center rounded-md border border-input bg-background px-3 text-xs font-medium hover:bg-accent hover:text-accent-foreground">
+              Mở thư viện
+            </Link>
           </Card>
         </TabsContent>
       </Tabs>
@@ -836,10 +974,11 @@ function ModelField({
   placeholder: string;
   helpText?: ReactNode;
 }) {
+  const fieldId = useId();
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between">
-        <label className="text-xs font-medium">{label}</label>
+        <label htmlFor={fieldId} className="text-xs font-medium">{label}</label>
         <div className="flex items-center gap-1">
           {omlxHint && models.length > 0 && onPickFast && (
             <button
@@ -865,7 +1004,7 @@ function ModelField({
         // Radix Select reserves "" for "clear selection / placeholder", so coerce
         // an empty stored model to the same sentinel rather than passing value="".
         <Select value={current || '_placeholder'} onValueChange={(v) => onChange(v === '_placeholder' ? '' : v)}>
-          <SelectTrigger className="w-full font-mono">
+          <SelectTrigger id={fieldId} className="w-full font-mono">
             <SelectValue placeholder="Chọn model" />
           </SelectTrigger>
           <SelectContent>
@@ -878,7 +1017,7 @@ function ModelField({
           </SelectContent>
         </Select>
       ) : (
-        <Input type="text" value={current}
+        <Input id={fieldId} type="text" value={current}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
           className="font-mono"
@@ -899,6 +1038,8 @@ function ModelField({
  * regex passes instead of O(chapters × blocks).
  * ──────────────────────────────────────────────────────────────────────── */
 function WatermarkMemoryPanel() {
+  const toast = useToast();
+  const phraseInputId = useId();
   const [rows, setRows] = useState<WatermarkRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [newPhrase, setNewPhrase] = useState('');
@@ -943,20 +1084,27 @@ function WatermarkMemoryPanel() {
     }
   };
 
-  const delPhrase = async (phrase: string) => {
-    if (!confirm(`Xoá phrase khỏi memory?\n\n"${phrase}"`)) return;
-    setError(null);
-    try {
-      const r = await fetch(`/api/watermarks/${encodeURIComponent(phrase)}`, { method: 'DELETE' });
-      if (!r.ok) {
-        const data = await r.json().catch(() => ({}));
-        setError(data.error ?? `HTTP ${r.status}`);
-        return;
-      }
-      await reload();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
+  const delPhrase = (phrase: string) => {
+    toast.confirm({
+      title: 'Xoá phrase khỏi memory?',
+      description: phrase,
+      confirmLabel: 'Xoá',
+      destructive: true,
+      onConfirm: async () => {
+        setError(null);
+        try {
+          const r = await fetch(`/api/watermarks/${encodeURIComponent(phrase)}`, { method: 'DELETE' });
+          if (!r.ok) {
+            const data = await r.json().catch(() => ({})) as { error?: string };
+            setError(data.error ?? `HTTP ${r.status}`);
+            return;
+          }
+          await reload();
+        } catch (e) {
+          setError(e instanceof Error ? e.message : String(e));
+        }
+      },
+    });
   };
 
   const filtered = filter === 'all' ? rows : rows.filter((r) => r.source === filter);
@@ -988,12 +1136,13 @@ function WatermarkMemoryPanel() {
 
         {/* Add new phrase */}
         <div className="space-y-1.5 pt-2 border-t border-border">
-          <label className="text-xs font-medium flex items-center gap-1.5">
+          <label htmlFor={phraseInputId} className="text-xs font-medium flex items-center gap-1.5">
             <Plus className="h-3 w-3" />
             Thêm phrase thủ công (vd: footer nhà xuất bản)
           </label>
           <div className="flex gap-2">
             <Input
+              id={phraseInputId}
               type="text"
               value={newPhrase}
               onChange={(e) => setNewPhrase(e.target.value)}
@@ -1049,7 +1198,7 @@ function WatermarkMemoryPanel() {
               {rows.length === 0 ? (
                 <>
                   <Database className="h-6 w-6 mx-auto mb-1 opacity-40" />
-                  Chưa có phrase nào trong memory. Bật "AI Watermark Cleanup" khi convert, hoặc thêm phrase thủ công ở trên.
+                  Chưa có phrase nào trong memory. Bật &ldquo;AI Watermark Cleanup&rdquo; khi convert, hoặc thêm phrase thủ công ở trên.
                 </>
               ) : (
                 <>Không có phrase {filter} nào.</>
@@ -1119,12 +1268,7 @@ function ToggleRow({
 }: { icon: React.ReactNode; label: string; description: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <div
-      role="button"
-      tabIndex={0}
       onClick={() => onChange(!checked)}
-      onKeyDown={(e) => {
-        if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); onChange(!checked); }
-      }}
       className={cn('w-full flex items-start gap-3 rounded-lg border border-border p-3 text-left transition-all cursor-pointer',
         checked ? 'bg-primary/5 ring-1 ring-primary/40 border-primary/20' : 'hover:bg-muted/30',
       )}>

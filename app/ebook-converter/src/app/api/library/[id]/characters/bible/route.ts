@@ -12,10 +12,8 @@ import { prisma } from '@/lib/db/client';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(
-  _req: NextRequest,
-  { params }: { params: { id: string } },
-) {
+export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const book = await getBook(params.id);
   if (!book) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   const [bible, characters] = await Promise.all([

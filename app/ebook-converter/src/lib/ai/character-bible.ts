@@ -128,7 +128,7 @@ export async function refreshBible(
   // on RefreshBibleOptions.chapterIndex). Reject anything that isn't a
   // concrete chapter index so callers can't accidentally request a giant
   // prompt.
-  if (!Number.isFinite(opts.chapterIndex) || opts.chapterIndex < 0) {
+  if (!Number.isInteger(opts.chapterIndex) || opts.chapterIndex < 0) {
     await emit({ kind: 'error', message: 'chapterIndex is required and must be >= 0' });
     throw new Error('refreshBible: chapterIndex is required and must be >= 0 (whole-book scans are disabled)');
   }
@@ -755,6 +755,14 @@ export async function applyBiblePatch(
     return { applied: false, isConflict: true };
   }
 
+  // Manual refresh is review-only. The old implementation applied profile
+  // and relationship patches before it looked at autoMerge, even though the
+  // API promised that autoMerge=false writes only PendingBibleDiff rows.
+  if (!autoMerge) {
+    await queueDiff(bookId, { ...patch, autoReason: 'user-hold' });
+    return { applied: false, isConflict: false };
+  }
+
   if (patch.kind === 'new') {
     const nc = patch.newCharacter;
     if (!nc) return { applied: false, isConflict: false };
@@ -768,8 +776,6 @@ export async function applyBiblePatch(
       });
       return { applied: true, isConflict: false };
     }
-    // Manual path still queues so the user can review
-    await queueDiff(bookId, patch);
     return { applied: false, isConflict: false };
   }
 
@@ -777,10 +783,13 @@ export async function applyBiblePatch(
     if (!patch.characterId || !patch.updateFields) return { applied: false, isConflict: false };
     const { applied, skipped, conflicts } = await mergeLlmProfilePatch({
       characterId: patch.characterId,
-      description: patch.updateFields.description ?? null,
-      personality: patch.updateFields.personality ?? null,
-      speechStyle: patch.updateFields.speechStyle ?? null,
-      visualDescription: patch.updateFields.visualDescription ?? null,
+      // Preserve absence. Converting an omitted field to null made a
+      // description-only patch erase (or conflict with) personality and
+      // speech style.
+      description: patch.updateFields.description,
+      personality: patch.updateFields.personality,
+      speechStyle: patch.updateFields.speechStyle,
+      visualDescription: patch.updateFields.visualDescription,
     });
     // Three buckets:
     //   1) Non-conflicting fields written → treat as applied
@@ -880,7 +889,6 @@ export async function applyBiblePatch(
       });
       return { applied: true, isConflict: false };
     }
-    await queueDiff(bookId, patch);
     return { applied: false, isConflict: false };
   }
 
@@ -912,6 +920,13 @@ export async function setUserProfile(args: {
   speechStyle?: string | null;
   visualDescription?: string | null;
 }): Promise<void> {
+  const fieldSources: Partial<Record<
+    'description' | 'personality' | 'speechStyle' | 'visualDescription',
+    'user'
+  >> = {};
+  for (const field of ['description', 'personality', 'speechStyle', 'visualDescription'] as const) {
+    if (args[field] !== undefined) fieldSources[field] = 'user';
+  }
   await setProfile({
     characterId: args.characterId,
     description: args.description,
@@ -919,8 +934,114 @@ export async function setUserProfile(args: {
     speechStyle: args.speechStyle,
     visualDescription: args.visualDescription,
     source: 'user',
+    fieldSources,
     force: true,
   });
+}
+
+/** Apply a diff the user explicitly accepted.
+ *
+ * This is intentionally separate from `applyBiblePatch(autoMerge=false)`:
+ * the latter means "preview/queue only", while this function means "commit
+ * and make the accepted values user-authoritative". Both single-apply and
+ * bulk-apply routes use this path so a status can never be flipped to
+ * `applied` without actually mutating the bible.
+ */
+export async function applyAcceptedBiblePatch(
+  bookId: string,
+  patch: BibleDiffPatch,
+): Promise<{ applied: boolean; reason?: string }> {
+  if (patch.kind === 'new') {
+    if (!patch.newCharacter?.name.trim()) return { applied: false, reason: 'new-character-missing-name' };
+    await ensureCharacter({
+      bookId,
+      name: patch.newCharacter.name.trim(),
+      aliases: patch.newCharacter.aliases,
+      gender: patch.newCharacter.gender ?? null,
+      role: patch.newCharacter.role ?? 'supporting',
+    });
+    return { applied: true };
+  }
+
+  if (patch.kind === 'update') {
+    if (!patch.characterId || !patch.updateFields || Object.keys(patch.updateFields).length === 0) {
+      return { applied: false, reason: 'update-missing-target-or-fields' };
+    }
+    const character = await prisma.character.findFirst({
+      where: { id: patch.characterId, bookId },
+      select: { id: true },
+    });
+    if (!character) return { applied: false, reason: 'update-target-not-in-book' };
+    const fields = patch.updateFields;
+    const fieldSources: Partial<Record<
+      'description' | 'personality' | 'speechStyle' | 'visualDescription',
+      'user'
+    >> = {};
+    for (const field of ['description', 'personality', 'speechStyle', 'visualDescription'] as const) {
+      if (fields[field] !== undefined) fieldSources[field] = 'user';
+    }
+    await setProfile({
+      characterId: patch.characterId,
+      description: fields.description,
+      personality: fields.personality,
+      speechStyle: fields.speechStyle,
+      visualDescription: fields.visualDescription,
+      source: 'user',
+      fieldSources,
+      force: true,
+    });
+    return { applied: true };
+  }
+
+  if (patch.kind === 'relationship') {
+    const rel = patch.relationship;
+    if (!rel?.relationship) return { applied: false, reason: 'relationship-missing-label' };
+    let fromId = rel.fromCharId ?? null;
+    let toId = rel.toCharId ?? null;
+    if (!fromId && rel.fromName) {
+      fromId = (await ensureCharacter({ bookId, name: rel.fromName.trim(), role: 'supporting' })).id;
+    }
+    if (!toId && rel.toName) {
+      toId = (await ensureCharacter({ bookId, name: rel.toName.trim(), role: 'supporting' })).id;
+    }
+    if (!fromId || !toId || fromId === toId) {
+      return { applied: false, reason: 'relationship-invalid-endpoints' };
+    }
+    const endpointCount = await prisma.character.count({
+      where: { bookId, id: { in: [fromId, toId] } },
+    });
+    if (endpointCount !== 2) return { applied: false, reason: 'relationship-endpoint-not-in-book' };
+    await addOrUpdateRelationship({
+      bookId,
+      fromCharId: fromId,
+      toCharId: toId,
+      relationship: canonicalizeRelationship(rel.relationship),
+      asOfChapterIdx: rel.asOfChapterIdx ?? null,
+      notes: rel.notes ?? null,
+      source: 'user',
+      force: true,
+    });
+    return { applied: true };
+  }
+
+  if (patch.kind === 'appearance') {
+    if (!patch.characterId || !patch.appearance) {
+      return { applied: false, reason: 'appearance-missing-target' };
+    }
+    const character = await prisma.character.findFirst({
+      where: { id: patch.characterId, bookId },
+      select: { name: true },
+    });
+    if (!character) return { applied: false, reason: 'appearance-target-not-in-book' };
+    await recordAppearances({
+      bookId,
+      chapterIndex: patch.appearance.chapterIndex,
+      names: [character.name],
+    });
+    return { applied: true };
+  }
+
+  return { applied: false, reason: 'unsupported-patch-kind' };
 }
 
 // ── Chapter text fetching ────────────────────────────────────────────────
@@ -931,7 +1052,7 @@ async function fetchChapterInputs(
   chapterFile: string | null,
   maxChars: number,
 ): Promise<Array<{ chapterIndex: number; chapterFile: string; text: string }>> {
-  if (!Number.isFinite(chapterIndex) || chapterIndex < 0) {
+  if (!Number.isInteger(chapterIndex) || chapterIndex < 0) {
     throw new Error(`fetchChapterInputs: chapterIndex must be a non-negative integer (got ${chapterIndex})`);
   }
   const book = await prisma.book.findUnique({ where: { id: bookId } });
@@ -943,11 +1064,13 @@ async function fetchChapterInputs(
   const { parseEpub } = await import('@/lib/pipeline/epub-parser');
 
   const fs = await import('node:fs/promises');
+  const { resolveBookPath } = await import('@/lib/storage');
+  const bookPath = await resolveBookPath(book);
   let pathExists = false;
-  try { await fs.access(book.filePath); pathExists = true; } catch { pathExists = false; }
+  try { await fs.access(bookPath); pathExists = true; } catch { pathExists = false; }
   if (!pathExists) return [];
 
-  const epub = await parseEpub(book.filePath);
+  const epub = await parseEpub(bookPath);
   const candidates: Array<{ idx: number; file: string }> = [];
   // Per-chapter only — whole-novel scans are deliberately not supported.
   if (chapterFile) {

@@ -51,6 +51,10 @@ export function AudiobookPlayer({ bookId, chapters, initialChapterIdx, onClose, 
   const [playbackRate, setPlaybackRate] = useState(1.0);
   const [muted, setMuted] = useState(false);
   const [volume, setVolume] = useState(1.0);
+  const playingRef = useRef(false);
+  const playbackRateRef = useRef(1.0);
+  const mutedRef = useRef(false);
+  const volumeRef = useRef(1.0);
   const [savedProgress, setSavedProgress] = useState<SavedAudiobookProgress | null>(null);
   const [bookmarks, setBookmarks] = useState<AudiobookBookmark[]>([]);
   const [sleepUntil, setSleepUntil] = useState<number | null>(null);
@@ -157,7 +161,7 @@ export function AudiobookPlayer({ bookId, chapters, initialChapterIdx, onClose, 
       setPlaying(false);
     });
     return () => { audio.pause(); audio.src = ''; audioRef.current = null; };
-  }, [chapters.length, chapterIdx, onProgress, persistProgress]);
+  }, [bookId, chapters.length, chapterIdx, onProgress, persistProgress]);
 
   // When chapter changes, load new src
   useEffect(() => {
@@ -168,19 +172,20 @@ export function AudiobookPlayer({ bookId, chapters, initialChapterIdx, onClose, 
     setLoading(true);
     audio.src = currentAudioUrl;
     audio.load();
-    audio.playbackRate = playbackRate;
-    audio.muted = muted;
-    audio.volume = volume;
+    audio.playbackRate = playbackRateRef.current;
+    audio.muted = mutedRef.current;
+    audio.volume = volumeRef.current;
     audio.oncanplay = () => {
       setLoading(false);
-      if (playing) audio.play().catch(() => setPlaying(false));
+      if (playingRef.current) audio.play().catch(() => setPlaying(false));
     };
   }, [chapterIdx, currentChapter, currentAudioUrl]);
 
   // Apply playback rate / volume changes live
-  useEffect(() => { if (audioRef.current) audioRef.current.playbackRate = playbackRate; }, [playbackRate]);
-  useEffect(() => { if (audioRef.current) audioRef.current.muted = muted; }, [muted]);
-  useEffect(() => { if (audioRef.current) audioRef.current.volume = volume; }, [volume]);
+  useEffect(() => { playingRef.current = playing; }, [playing]);
+  useEffect(() => { playbackRateRef.current = playbackRate; if (audioRef.current) audioRef.current.playbackRate = playbackRate; }, [playbackRate]);
+  useEffect(() => { mutedRef.current = muted; if (audioRef.current) audioRef.current.muted = muted; }, [muted]);
+  useEffect(() => { volumeRef.current = volume; if (audioRef.current) audioRef.current.volume = volume; }, [volume]);
 
   const togglePlay = useCallback(async () => {
     const audio = audioRef.current;
@@ -233,12 +238,12 @@ export function AudiobookPlayer({ bookId, chapters, initialChapterIdx, onClose, 
     else stop();
   };
 
-  const skip = (seconds: number) => {
+  const skip = useCallback((seconds: number) => {
     const audio = audioRef.current;
     if (!audio) return;
     audio.currentTime = Math.max(0, Math.min(duration, audio.currentTime + seconds));
     persistProgress(chapterIdx, audio.currentTime, duration);
-  };
+  }, [chapterIdx, duration, persistProgress]);
 
   const addBookmark = () => {
     const audio = audioRef.current;
@@ -301,8 +306,10 @@ export function AudiobookPlayer({ bookId, chapters, initialChapterIdx, onClose, 
       // Arrow/Space paging.
       if (!root.contains(document.activeElement) && document.activeElement !== document.body) {
         // Only honor shortcuts that originated WITHIN the player.
+        return;
       }
       if (isEditable(e.target)) return;
+      if (e.target instanceof HTMLElement && ['BUTTON', 'A'].includes(e.target.tagName)) return;
       // Don't hijack modifier-combos.
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       switch (e.key) {

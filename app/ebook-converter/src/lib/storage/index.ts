@@ -2,6 +2,7 @@
 // File-system helpers for uploads, outputs, and the ebook library
 import fs from 'fs';
 import path from 'path';
+import { assertWithinRoots } from './safe-path';
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR
   ? path.resolve(process.env.UPLOAD_DIR)
@@ -91,8 +92,10 @@ export { UPLOAD_DIR, OUTPUT_DIR, LIBRARY_DIR, COVERS_DIR, JOB_LOG_DIR };
 // We lazily import the prisma client to avoid a circular dep at module-load
 // time (storage is imported very early in the request pipeline).
 export async function resolveBookPath(book: { id: string; filePath: string }): Promise<string> {
-  if (fs.existsSync(book.filePath)) return book.filePath;
-  const fallback = libraryPath(book.id);
+  if (fs.existsSync(book.filePath)) {
+    return assertWithinRoots(book.filePath, [LIBRARY_DIR]);
+  }
+  const fallback = assertWithinRoots(libraryPath(book.id), [LIBRARY_DIR]);
   if (fs.existsSync(fallback)) {
     try {
       const { prisma } = await import('@/lib/db/client');
@@ -105,5 +108,30 @@ export async function resolveBookPath(book: { id: string; filePath: string }): P
     }
     return fallback;
   }
-  return book.filePath;
+  // Return the canonical safe location even when the file is missing. This
+  // avoids handing a stale host/container path to callers and guarantees
+  // every subsequent filesystem access stays within the library root.
+  return fallback;
+}
+
+/** Resolve a persisted cover path across host/container mounts while keeping
+ * the result inside the library covers directory. Returns null when the book
+ * has no stored cover or neither location exists. */
+export async function resolveCoverPath(book: { id: string; coverPath?: string | null }): Promise<string | null> {
+  if (!book.coverPath) return null;
+  if (fs.existsSync(book.coverPath)) {
+    return assertWithinRoots(book.coverPath, [COVERS_DIR]);
+  }
+
+  const ext = path.extname(book.coverPath).replace(/^\./, '') || 'jpg';
+  const fallback = assertWithinRoots(coverPath(book.id, ext), [COVERS_DIR]);
+  if (!fs.existsSync(fallback)) return null;
+
+  try {
+    const { prisma } = await import('@/lib/db/client');
+    await prisma.book.update({ where: { id: book.id }, data: { coverPath: fallback } });
+  } catch {
+    /* best-effort path repair */
+  }
+  return fallback;
 }

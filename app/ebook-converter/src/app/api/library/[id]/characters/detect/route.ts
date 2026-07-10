@@ -11,6 +11,7 @@ import { getBook } from '@/lib/db/books';
 import { listCharacters, upsertCharacters, listVoices } from '@/lib/db/voices';
 import { pickBestBuiltInVoice, VIENEU_PROFILES } from '@/lib/ai/voice-selector';
 import { g2pMatch } from '@/lib/vi-text-qa';
+import { resolveBookPath } from '@/lib/storage';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -80,37 +81,39 @@ function suggestVoice(gender: string, tone: string, alreadyUsed: Set<string>, ag
 }
 
 /** Run the python character_detector.py and return parsed JSON. */
-async function runDetector(epubPath: string): Promise<any> {
-  return new Promise(async (resolve, reject) => {
-    const omlxKey = process.env.OMLX_API_KEY ?? '';
-    const py = resolvePython();
-    if (!DETECTOR) {
-      reject(new Error(
-        `character_detector.py not found. Searched in:\n` +
-        `  ${process.cwd()}/../tts-service\n` +
-        `  ${process.cwd()}/app/tts-service\n` +
-        `  ${process.cwd()}/tts-service\n` +
-        `  /Volumes/EXT-SSD/Users/anhl/Local-AI/app/tts-service\n` +
-        `Adjust TTS_SERVICE_DIR env var to point at the tts-service root.`
-      ));
-      return;
-    }
-    if (!fs.existsSync(DETECTOR)) {
-      reject(new Error(`Detector not found at ${DETECTOR}`));
-      return;
-    }
+const DETECTOR_TIMEOUT_MS = 170_000;
+const MAX_DETECTOR_STDOUT = 2 * 1024 * 1024;
+const MAX_DETECTOR_STDERR = 256 * 1024;
+
+async function runDetector(epubPath: string, signal?: AbortSignal): Promise<any> {
+  const omlxKey = process.env.OMLX_API_KEY ?? '';
+  const py = resolvePython();
+  if (!DETECTOR) {
+    throw new Error(
+      `character_detector.py not found. Searched in:\n` +
+      `  ${process.cwd()}/../tts-service\n` +
+      `  ${process.cwd()}/app/tts-service\n` +
+      `  ${process.cwd()}/tts-service\n` +
+      `  /Volumes/EXT-SSD/Users/anhl/Local-AI/app/tts-service\n` +
+      `Adjust TTS_SERVICE_DIR env var to point at the tts-service root.`
+    );
+  }
+  if (!fs.existsSync(DETECTOR)) throw new Error(`Detector not found at ${DETECTOR}`);
+
+  let omlxModel: string;
+  try {
+    const { getSettings } = await import('@/lib/db/settings');
+    const settings = await getSettings();
+    omlxModel = settings.aiModel?.trim() || process.env.OMLX_MODEL || '';
+  } catch {
+    omlxModel = process.env.OMLX_MODEL || '';
+  }
+
+  return new Promise((resolve, reject) => {
     // Read the user's selected model from the Settings DB (same source
     // chapter-enhancer / chapter-formatter / epub-analyzer use), so the
     // character detection respects whatever the user picked in /settings.
     // Falls back to OMLX_MODEL env var only if the DB row is empty.
-    let omlxModel: string;
-    try {
-      const { getSettings } = await import('@/lib/db/settings');
-      const settings = await getSettings();
-      omlxModel = settings.aiModel?.trim() || process.env.OMLX_MODEL || '';
-    } catch {
-      omlxModel = process.env.OMLX_MODEL || '';
-    }
     // Pass model as a CLI arg (after the epub path) so the Python script
     // gets an explicit value — env-var-only passing was unreliable.
     const proc = spawn(py, [DETECTOR, epubPath, omlxModel], {
@@ -118,10 +121,39 @@ async function runDetector(epubPath: string): Promise<any> {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = ''; let stderr = '';
-    proc.stdout.on('data', (d) => { stdout += d.toString(); });
-    proc.stderr.on('data', (d) => { stderr += d.toString(); });
-    proc.on('error', reject);
+    let settled = false;
+    const finishError = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      try { proc.kill('SIGTERM'); } catch {}
+      reject(error);
+    };
+    const onAbort = () => finishError(new Error('Character detection cancelled'));
+    const timer = setTimeout(
+      () => finishError(new Error(`Character detector timed out after ${DETECTOR_TIMEOUT_MS / 1000}s`)),
+      DETECTOR_TIMEOUT_MS,
+    );
+    signal?.addEventListener('abort', onAbort, { once: true });
+    proc.stdout.on('data', (d) => {
+      stdout += d.toString();
+      if (Buffer.byteLength(stdout) > MAX_DETECTOR_STDOUT) {
+        finishError(new Error('Character detector output exceeded 2 MiB'));
+      }
+    });
+    proc.stderr.on('data', (d) => {
+      stderr += d.toString();
+      if (Buffer.byteLength(stderr) > MAX_DETECTOR_STDERR) {
+        finishError(new Error('Character detector error output exceeded 256 KiB'));
+      }
+    });
+    proc.on('error', (error) => finishError(error));
     proc.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       if (code !== 0) {
         reject(new Error(`detector exit ${code}: ${stderr.slice(-500)}`));
         return;
@@ -135,16 +167,18 @@ async function runDetector(epubPath: string): Promise<any> {
   });
 }
 
-export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const book = await getBook(params.id);
   if (!book) return NextResponse.json({ error: 'Book not found' }, { status: 404 });
-  if (!fs.existsSync(book.filePath)) {
+  const bookPath = await resolveBookPath(book);
+  if (!fs.existsSync(bookPath)) {
     return NextResponse.json({ error: 'Book file missing on disk' }, { status: 404 });
   }
 
   let result: any;
   try {
-    result = await runDetector(book.filePath);
+    result = await runDetector(bookPath, req.signal);
   } catch (e) {
     console.error('[characters/detect] failed:', e);
     return NextResponse.json({ error: String(e) }, { status: 500 });

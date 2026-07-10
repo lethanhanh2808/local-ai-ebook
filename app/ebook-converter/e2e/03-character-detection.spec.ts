@@ -14,8 +14,8 @@ test.describe('Character Detection panel', () => {
     await page.waitForLoadState('domcontentloaded');
 
     // Open audiobook panel → voices tab
-    await page.getByTitle(/Audiobook/i).first().click();
-    await page.getByRole('button', { name: /Giọng & nhân vật/i }).click();
+    await page.getByRole('button', { name: /Audio, đọc thành tiếng và giọng/i }).click();
+    await page.getByRole('tab', { name: 'Nhân vật', exact: true }).click();
 
     // AI Character Detection header
     await expect(page.getByText('AI Character Detection').first()).toBeVisible();
@@ -28,8 +28,8 @@ test.describe('Character Detection panel', () => {
     await page.goto(`/library/${TEST_BOOK_ID}/read`);
     await page.waitForLoadState('domcontentloaded');
 
-    await page.getByTitle(/Audiobook/i).first().click();
-    await page.getByRole('button', { name: /Giọng & nhân vật/i }).click();
+    await page.getByRole('button', { name: /Audio, đọc thành tiếng và giọng/i }).click();
+    await page.getByRole('tab', { name: 'Nhân vật', exact: true }).click();
 
     // Click "Phân tích nhân vật" (initial button)
     const analyzeBtn = page.getByRole('button', { name: /Phân tích nhân vật/i }).first();
@@ -53,8 +53,8 @@ test.describe('Character Detection panel', () => {
     await page.waitForLoadState('domcontentloaded');
 
     // Open voices tab
-    await page.getByTitle(/Audiobook/i).first().click();
-    await page.getByRole('button', { name: /Giọng & nhân vật/i }).click();
+    await page.getByRole('button', { name: /Audio, đọc thành tiếng và giọng/i }).click();
+    await page.getByRole('tab', { name: 'Nhân vật', exact: true }).click();
 
     // Wait for characters to load
     await expect(page.getByText(/Âu Sùng Viễn/i).first()).toBeVisible({ timeout: 15_000 });
@@ -74,8 +74,8 @@ test.describe('Character Detection panel', () => {
     await page.goto(`/library/${TEST_BOOK_ID}/read`);
     await page.waitForLoadState('domcontentloaded');
 
-    await page.getByTitle(/Audiobook/i).first().click();
-    await page.getByRole('button', { name: /Giọng & nhân vật/i }).click();
+    await page.getByRole('button', { name: /Audio, đọc thành tiếng và giọng/i }).click();
+    await page.getByRole('tab', { name: 'Nhân vật', exact: true }).click();
 
     // Run detection
     await page.getByRole('button', { name: /Phân tích nhân vật/i }).first().click();

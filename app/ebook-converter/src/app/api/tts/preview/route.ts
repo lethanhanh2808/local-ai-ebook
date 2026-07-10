@@ -34,8 +34,11 @@ export async function POST(req: NextRequest) {
   if (!voice) {
     return NextResponse.json({ error: 'voice required' }, { status: 400 });
   }
-  const text = body.text?.trim() || DEFAULT_PREVIEW;
-  const speed = body.speed ?? 1.0;
+  const text = (body.text?.trim() || DEFAULT_PREVIEW).slice(0, 1_000);
+  const rawSpeed = body.speed ?? 1.0;
+  const speed = typeof rawSpeed === 'number' && Number.isFinite(rawSpeed)
+    ? Math.min(2, Math.max(0.5, rawSpeed))
+    : 1.0;
 
   let refPath: string | undefined;
   let language = body.language ?? 'vi';

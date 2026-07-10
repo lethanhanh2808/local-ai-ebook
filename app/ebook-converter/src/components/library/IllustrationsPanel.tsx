@@ -9,7 +9,7 @@
 // the surrounding page so adding/removing is one mount line.
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import { ImageIcon, Loader2, Sparkles, Trash2, AlertCircle, ExternalLink, RefreshCw, Plus, Dices } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -48,6 +48,7 @@ interface IllustrationsPanelProps {
 }
 
 export function IllustrationsPanel({ bookId, variant = 'card' }: IllustrationsPanelProps) {
+  const maxInputId = useId();
   const isRail = variant === 'rail';
   const titleText = isRail ? 'Tạo ảnh' : 'AI Illustrations';
   const toast = useToast();
@@ -180,7 +181,7 @@ export function IllustrationsPanel({ bookId, variant = 'card' }: IllustrationsPa
           </h2>
           {!isRail && (
             <p className="text-[11px] text-muted-foreground mt-1.5 leading-relaxed">
-              AI generates black-and-white illustrations for "highlight" chapters (đại cảnh —
+              AI generates black-and-white illustrations for &ldquo;highlight&rdquo; chapters (đại cảnh —
               breakthrough scenes, màn động phủ opening, thiên kiếp, gặp gỡ nhân vật).
               Portrait format fits Vietnamese-novel reader layouts.
             </p>
@@ -219,8 +220,9 @@ export function IllustrationsPanel({ bookId, variant = 'card' }: IllustrationsPa
           <div className="flex items-end gap-2">
             {!isRail && (
               <div className="flex-1">
-                <label className="text-xs font-medium">Số ảnh tối đa / sách</label>
+                <label htmlFor={maxInputId} className="text-xs font-medium">Số ảnh tối đa / sách</label>
                 <input
+                  id={maxInputId}
                   type="number"
                   min={1}
                   max={20}
@@ -232,8 +234,9 @@ export function IllustrationsPanel({ bookId, variant = 'card' }: IllustrationsPa
             )}
             {isRail && (
               <div className="flex-1">
-                <label className="text-[10px] text-muted-foreground">Tối đa / sách</label>
+                <label htmlFor={maxInputId} className="text-[10px] text-muted-foreground">Tối đa / sách</label>
                 <input
+                  id={maxInputId}
                   type="number"
                   min={1}
                   max={20}

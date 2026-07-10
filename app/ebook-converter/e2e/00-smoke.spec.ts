@@ -51,8 +51,9 @@ test.describe('Local app smoke + GUI validation', () => {
     await expect(page.getByPlaceholder(/Search title, author, series/i)).toBeVisible();
 
     await page.goto('/settings');
+    await page.getByRole('tab', { name: 'TTS', exact: true }).click();
     await expect(page.getByText(/Local service health/i).first()).toBeVisible();
-    await expect(page.getByText(/VieNeu/i).first()).toBeVisible();
+    await expect(page.getByText(/Vietnamese Voice/i).first()).toBeVisible();
   });
 
   test('reader opens a real book and exposes read-aloud controls', async ({ page }) => {
@@ -66,12 +67,12 @@ test.describe('Local app smoke + GUI validation', () => {
     await expect(page.getByText(book.title).first()).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('iframe[title]').first()).toBeVisible({ timeout: 15_000 });
 
-    const readAloudButton = page.getByTitle(/Read aloud/i).first();
-    await expect(readAloudButton).toBeVisible();
-    await readAloudButton.click();
+    const audioButton = page.getByRole('button', { name: /Audio, đọc thành tiếng và giọng/i });
+    await expect(audioButton).toBeVisible();
+    await audioButton.click();
 
-    await expect(page.getByText(/Đọc to/i).first()).toBeVisible();
-    await expect(page.getByText(/Giọng đọc/i).first()).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Read aloud', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Giọng đọc/i }).first()).toBeVisible();
     await expect(page.getByRole('button', { name: /Cài đặt/i }).first()).toBeVisible();
   });
 
@@ -83,11 +84,11 @@ test.describe('Local app smoke + GUI validation', () => {
     await page.goto(`/library/${book.id}/read`);
     await page.waitForLoadState('domcontentloaded');
 
-    await page.getByTitle(/Audiobook/i).first().click();
-    await expect(page.getByText(/Audiobook/i).first()).toBeVisible();
-    await expect(page.getByRole('button', { name: /Pre-generation/i })).toBeVisible();
+    await page.getByRole('button', { name: /Audio, đọc thành tiếng và giọng/i }).click();
+    await page.getByRole('tab', { name: 'Audiobook', exact: true }).click();
+    await expect(page.getByRole('heading', { name: /Audiobook đọc trước/i })).toBeVisible();
 
-    await page.getByRole('button', { name: /Giọng & nhân vật/i }).click();
+    await page.getByRole('tab', { name: 'Nhân vật', exact: true }).click();
     await expect(page.getByText(/AI Character Detection/i).first()).toBeVisible();
 
     const voiceCommandButton = page.getByTitle(/lệnh giọng nói|không hỗ trợ nhận lệnh/i).first();
@@ -105,7 +106,8 @@ test.describe('Local app smoke + GUI validation', () => {
     await expect(page.getByText(book.title).first()).toBeVisible({ timeout: 15_000 });
     await expect(page.getByLabel(/Chapter title/i)).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('[contenteditable="true"]').first()).toBeVisible();
-    await expect(page.getByRole('button', { name: /Save copy/i })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Save changes', exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Save as a new edited copy', exact: true })).toBeEnabled();
   });
 
   test('audiobook player exposes resume, bookmark, and sleep-timer controls when audio is ready', async ({ page }) => {
@@ -126,7 +128,9 @@ test.describe('Local app smoke + GUI validation', () => {
 
     await page.goto(`/library/${selected!.id}/read`);
     await page.waitForLoadState('domcontentloaded');
-    await page.getByTitle(/Audiobook/i).first().click();
+    await page.getByRole('button', { name: /Audio, đọc thành tiếng và giọng/i }).click();
+    await page.getByRole('tab', { name: 'Audiobook', exact: true }).click();
+    await expect(page.getByRole('heading', { name: /Audiobook đọc trước/i })).toBeVisible();
 
     const listenButton = page.getByRole('button', { name: /Nghe audiobook/i }).first();
     await expect(listenButton).toBeVisible({ timeout: 15_000 });
@@ -134,6 +138,6 @@ test.describe('Local app smoke + GUI validation', () => {
 
     await expect(page.getByTitle(/Đánh dấu thời điểm/i)).toBeVisible();
     await expect(page.getByTitle(/Nghe lại từ đầu/i)).toBeVisible();
-    await expect(page.getByRole('button', { name: /15m/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Sleep timer 15 minutes/i })).toBeVisible();
   });
 });

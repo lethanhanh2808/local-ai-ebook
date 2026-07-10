@@ -82,20 +82,20 @@ export async function updateBook(
     titleVi: string | null;
     author: string;
     language: string;
-    description: string;
-    publisher: string;
-    publishDate: string;
-    identifier: string;
-    series: string;
-    seriesIndex: number;
-    rating: number;
+    description: string | null;
+    publisher: string | null;
+    publishDate: string | null;
+    identifier: string | null;
+    series: string | null;
+    seriesIndex: number | null;
+    rating: number | null;
     tags: string[];
-    notes: string;
+    notes: string | null;
     readProgress: number;
     readStatus: string;
     isFavorite: boolean;
-    lastRead: Date;
-    coverPath: string;
+    lastRead: Date | null;
+    coverPath: string | null;
     // File-related fields — only set by the in-place editor save.
     // (Save-As creates a brand-new Book row instead.)
     filePath: string;
@@ -214,7 +214,9 @@ export async function addBookToShelf(shelfId: string, bookId: string) {
 }
 
 export async function removeBookFromShelf(shelfId: string, bookId: string) {
-  return prisma.shelfBook.delete({ where: { shelfId_bookId: { shelfId, bookId } } });
+  // Idempotent delete keeps repeated UI actions/retries from surfacing as
+  // Prisma P2025 errors.
+  return prisma.shelfBook.deleteMany({ where: { shelfId, bookId } });
 }
 
 // ── Library stats ─────────────────────────────────────────────────────────────
@@ -289,4 +291,3 @@ function hydrateBook(book: {
     lastRead: book.lastRead?.toISOString() ?? null,
   };
 }
-

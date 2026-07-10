@@ -45,30 +45,66 @@ function resolvePython(ttsDir: string): string {
   return process.env.TTS_PYTHON ?? '/Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11';
 }
 
-/** Run python character_detector.py on the given HTML text (single-chapter mode). */
-function runDetector(htmlText: string, chapterId: string, model: string): Promise<any> {
+const DETECTOR_TIMEOUT_MS = 170_000;
+const MAX_STDOUT_BYTES = 2 * 1024 * 1024;
+const MAX_STDERR_BYTES = 256 * 1024;
+const MAX_CHAPTER_HTML_BYTES = 5 * 1024 * 1024;
+
+/** Run character_detector.py with chapter HTML on stdin. No temp file is
+ * created, so navigation cancellation and dev-server restarts cannot orphan
+ * data/tmp-chars artifacts. */
+function runDetector(htmlText: string, chapterId: string, model: string, signal?: AbortSignal): Promise<any> {
   const ttsDir = resolveTtsServiceDir();
   if (!ttsDir) throw new Error('character_detector.py not found');
   const detector = path.join(ttsDir, 'character_detector.py');
   const py = resolvePython(ttsDir);
 
-  const tmpDir = path.join(process.cwd(), 'data', 'tmp-chars');
-  fs.mkdirSync(tmpDir, { recursive: true });
-  const tmpHtml = path.join(tmpDir, `${chapterId}-${Date.now()}.html`);
-  fs.writeFileSync(tmpHtml, htmlText, 'utf-8');
+  if (Buffer.byteLength(htmlText) > MAX_CHAPTER_HTML_BYTES) {
+    throw new Error('Chapter HTML exceeds 5 MiB detection limit');
+  }
 
   return new Promise((resolve, reject) => {
-    const proc = spawn(py, [detector, tmpHtml, model], {
-      env: { ...process.env, OMLX_API_KEY: process.env.OMLX_API_KEY ?? '' },
-      stdio: ['ignore', 'pipe', 'pipe'],
+    const proc = spawn(py, [detector, '-', model], {
+      env: {
+        ...process.env,
+        OMLX_API_KEY: process.env.OMLX_API_KEY ?? '',
+        CHARACTER_DETECTOR_CHAPTER_ID: chapterId.slice(0, 200),
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '';
     let stderr = '';
-    proc.stdout.on('data', (d) => { stdout += d.toString(); });
-    proc.stderr.on('data', (d) => { stderr += d.toString(); });
-    proc.on('error', reject);
+    let settled = false;
+    const onAbort = () => fail(new Error('Character detection cancelled'));
+    const timer = setTimeout(
+      () => fail(new Error(`Character detector timed out after ${DETECTOR_TIMEOUT_MS / 1000}s`)),
+      DETECTOR_TIMEOUT_MS,
+    );
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      try { proc.kill('SIGTERM'); } catch {}
+      reject(error);
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    proc.stdout.on('data', (d) => {
+      stdout += d.toString();
+      if (Buffer.byteLength(stdout) > MAX_STDOUT_BYTES) fail(new Error('Detector stdout exceeded 2 MiB'));
+    });
+    proc.stderr.on('data', (d) => {
+      stderr += d.toString();
+      if (Buffer.byteLength(stderr) > MAX_STDERR_BYTES) fail(new Error('Detector stderr exceeded 256 KiB'));
+    });
+    proc.on('error', fail);
     proc.on('close', (code) => {
-      try { fs.unlinkSync(tmpHtml); } catch { /* noop */ }
+      if (settled) return;
+      settled = true;
+      cleanup();
       if (code !== 0) {
         reject(new Error(`detector exit ${code}: ${stderr.slice(-500)}`));
         return;
@@ -85,10 +121,16 @@ function runDetector(htmlText: string, chapterId: string, model: string): Promis
       }
       reject(new Error(`No JSON in detector stdout. stderr: ${stderr.slice(-200)}`));
     });
+    proc.stdin.on('error', (error) => fail(error));
+    proc.stdin.end(htmlText, 'utf8');
   });
 }
 
-export async function POST(req: NextRequest, { params }: { params: { id: string; chapterId: string } }) {
+export async function POST(
+  req: NextRequest,
+  props: { params: Promise<{ id: string; chapterId: string }> }
+) {
+  const params = await props.params;
   const book = await getBook(params.id);
   if (!book) return NextResponse.json({ error: 'Book not found' }, { status: 404 });
 
@@ -114,7 +156,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
   // 3. Run detection on this chapter
   let result: any;
   try {
-    result = await runDetector(html, params.chapterId, model);
+    result = await runDetector(html, params.chapterId, model, req.signal);
   } catch (e) {
     console.error('[chapters/detect-characters] failed:', e);
     return NextResponse.json({ error: String(e) }, { status: 500 });

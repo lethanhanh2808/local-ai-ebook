@@ -119,7 +119,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
           uploading && 'pointer-events-none opacity-70',
         )}
       >
-        <input {...getInputProps()} />
+        <input {...getInputProps({ 'aria-label': 'Choose ebook files to upload' })} />
         <AnimatePresence mode="wait">
           {uploading ? (
             <motion.div key="loading" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}
@@ -157,7 +157,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
 
       {/* Auto-start toggle */}
       <Card className="rounded-xl border overflow-hidden">
-        <label className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none">
+        <div className="flex items-center gap-3 px-4 py-3 select-none">
           <Switch
             checked={autoStart}
             onCheckedChange={setAutoStart}
@@ -175,25 +175,14 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
                 : 'Files go to "Pending". Click ▶ Start in the queue below to begin.'}
             </p>
           </div>
-        </label>
+        </div>
       </Card>
 
       {/* AI Enhancement Options */}
       <Card className="rounded-xl border overflow-hidden divide-y divide-border">
         {/* Light AI enhance (fast) */}
-        <label className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none">
-          <div
-            onClick={(e) => { e.preventDefault(); setAiEnhance((v) => !v); }}
-            className={cn(
-              'relative w-9 h-5 rounded-full transition-colors duration-200 shrink-0',
-              aiEnhance ? 'bg-primary' : 'bg-muted-foreground/30',
-            )}
-          >
-            <div className={cn(
-              'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200',
-              aiEnhance ? 'translate-x-4' : 'translate-x-0',
-            )} />
-          </div>
+        <div className="flex items-center gap-3 px-4 py-3 select-none">
+          <Switch checked={aiEnhance} onCheckedChange={setAiEnhance} label="AI Enhancement" />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5">
               <Sparkles className="h-4 w-4 text-primary" />
@@ -204,22 +193,11 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
               Quick parallel pass: fixes watermarks, encoding, broken images. ~30s per book.
             </p>
           </div>
-        </label>
+        </div>
 
         {/* Deep format (slow, Vietnamese-novel optimized) */}
-        <label className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none">
-          <div
-            onClick={(e) => { e.preventDefault(); setDeepFormat((v) => !v); }}
-            className={cn(
-              'relative w-9 h-5 rounded-full transition-colors duration-200 shrink-0',
-              deepFormat ? 'bg-primary' : 'bg-muted-foreground/30',
-            )}
-          >
-            <div className={cn(
-              'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200',
-              deepFormat ? 'translate-x-4' : 'translate-x-0',
-            )} />
-          </div>
+        <div className="flex items-center gap-3 px-4 py-3 select-none">
+          <Switch checked={deepFormat} onCheckedChange={setDeepFormat} label="Deep Format" />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5">
               <Wand2 className="h-4 w-4 text-primary" />
@@ -230,22 +208,11 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
               <strong>Recommended cho tiểu thuyết.</strong> AI re-formats từng chương: gộp/tách đoạn văn, định dạng hội thoại (nháy cong), ngắt cảnh (&lt;hr/&gt;). ~2-5 phút/chương.
             </p>
           </div>
-        </label>
+        </div>
 
         {/* Reader-friendly (e-ink / Onyx Boox / Kobo safe) */}
-        <label className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none">
-          <div
-            onClick={(e) => { e.preventDefault(); setReaderFriendly((v) => !v); }}
-            className={cn(
-              'relative w-9 h-5 rounded-full transition-colors duration-200 shrink-0',
-              readerFriendly ? 'bg-emerald-600' : 'bg-muted-foreground/30',
-            )}
-          >
-            <div className={cn(
-              'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200',
-              readerFriendly ? 'translate-x-4' : 'translate-x-0',
-            )} />
-          </div>
+        <div className="flex items-center gap-3 px-4 py-3 select-none">
+          <Switch checked={readerFriendly} onCheckedChange={setReaderFriendly} label="Reader-friendly output" />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5">
               <Smartphone className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
@@ -256,7 +223,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
               <strong>Dùng khi sách chỉ hiện 1–2 trang trên máy đọc e-ink.</strong> Bỏ animation, blur, text-shadow, hyphens, background gradient, font custom. Dùng stylesheet tối giản — convert xong trong vài chục giây.
             </p>
           </div>
-        </label>
+        </div>
 
         {/* Custom prompt (shown when either AI option is on) */}
         {(aiEnhance || deepFormat) && (
@@ -279,6 +246,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
                   onChange={(e) => setAiPrompt(e.target.value)}
                   placeholder="vd: 'Bỏ qua các đoạn recap. Giữ nguyên tên riêng Nhật/Hán-Việt.'"
                   rows={3}
+                  aria-label="Custom AI prompt"
                   className="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 text-xs font-mono outline-none focus-visible:ring-2 focus-visible:ring-ring resize-y"
                 />
               )}
@@ -356,19 +324,8 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
 
       {/* AI Watermark Cleanup */}
       <Card className="rounded-xl border overflow-hidden">
-        <label className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none">
-          <div
-            onClick={(e) => { e.preventDefault(); setAiWatermarkClean((v) => !v); }}
-            className={cn(
-              'relative w-9 h-5 rounded-full transition-colors duration-200 shrink-0',
-              aiWatermarkClean ? 'bg-primary' : 'bg-muted-foreground/30',
-            )}
-          >
-            <div className={cn(
-              'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200',
-              aiWatermarkClean ? 'translate-x-4' : 'translate-x-0',
-            )} />
-          </div>
+        <div className="flex items-center gap-3 px-4 py-3 select-none">
+          <Switch checked={aiWatermarkClean} onCheckedChange={setAiWatermarkClean} label="AI Watermark Cleanup" />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5">
               <ShieldOff className="h-4 w-4 text-primary" />
@@ -379,12 +336,13 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
               Detects repeated watermark phrases in the ebook and removes them during conversion
             </p>
           </div>
-        </label>
+        </div>
       </Card>
 
       <AnimatePresence>
         {error && (
           <motion.p initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+            role="alert"
             className="rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive"
           >
             {error}

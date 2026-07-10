@@ -9,6 +9,7 @@ import { listBooks, createBook } from '@/lib/db/books';
 import { getJob } from '@/lib/db/jobs';
 import { libraryPath, coverPath, ensureDirs } from '@/lib/storage';
 import { extractCoverFromEpub } from '@/lib/pipeline/epub-cover';
+import { assertWithinRoots, pathRoots, SafePathError } from '@/lib/storage/safe-path';
 
 /** Convert a filename stem to a human-readable title.
  *  e.g. "bat-dau-100-trieu-nam-tu-vi" → "Bat Dau 100 Trieu Nam Tu Vi"
@@ -55,7 +56,19 @@ export async function POST(req: NextRequest) {
     if (job.status !== 'completed') {
       return NextResponse.json({ error: 'Job has not completed yet' }, { status: 400 });
     }
-    if (!job.outputPath || !fs.existsSync(job.outputPath)) {
+    if (!job.outputPath) {
+      return NextResponse.json({ error: 'Output file not found' }, { status: 404 });
+    }
+    let jobOutputPath: string;
+    try {
+      jobOutputPath = assertWithinRoots(job.outputPath, [pathRoots().output]);
+    } catch (error) {
+      if (error instanceof SafePathError) {
+        return NextResponse.json({ error: 'Output file not found' }, { status: 404 });
+      }
+      throw error;
+    }
+    if (!fs.existsSync(jobOutputPath)) {
       return NextResponse.json({ error: 'Output file not found' }, { status: 404 });
     }
 
@@ -64,7 +77,7 @@ export async function POST(req: NextRequest) {
     const dest = libraryPath(bookId);
 
     // Copy output EPUB to library directory
-    fs.copyFileSync(job.outputPath, dest);
+    fs.copyFileSync(jobOutputPath, dest);
     const fileSize = fs.statSync(dest).size;
 
     // Extract cover image from EPUB (best-effort)

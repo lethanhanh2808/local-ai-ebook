@@ -67,8 +67,7 @@ test.describe('Read-aloud playback pipeline (B+S audit)', () => {
     await page.waitForLoadState('domcontentloaded');
     // The reader title should be in the chrome
     await expect(page.locator('iframe[title]').first()).toBeVisible({ timeout: 30_000 });
-    // Read-aloud toolbar button has title="Read aloud"
-    await expect(page.getByTitle(/Read aloud/i).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('button', { name: /Audio, đọc thành tiếng và giọng/i })).toBeVisible({ timeout: 15_000 });
     // Services ready chip
     await expect(page.getByText(/Services ready/i).first()).toBeVisible({ timeout: 15_000 });
   });
@@ -76,7 +75,7 @@ test.describe('Read-aloud playback pipeline (B+S audit)', () => {
   test('opening read-aloud panel shows the 10 VieNeu voices + Xuân Vĩnh as default', async ({ page }) => {
     await page.goto(`/library/${BOOK_ID}/read`);
     await page.waitForLoadState('domcontentloaded');
-    await page.getByTitle(/Read aloud/i).first().click();
+    await page.getByRole('button', { name: /Audio, đọc thành tiếng và giọng/i }).click();
     // Wait for the panel to slide in
     await expect(page.getByText(/GIỌNG MẶC ĐỊNH/i).first()).toBeVisible({ timeout: 15_000 });
     // Xuân Vĩnh must be marked as "ĐANG DÙNG" (in use)

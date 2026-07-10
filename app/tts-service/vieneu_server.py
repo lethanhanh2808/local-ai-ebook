@@ -68,7 +68,8 @@ EMOTION_RE = re.compile(r"\[(cười|thở dài|hắng giọng)\]", re.IGNORECAS
 
 
 def synthesize(text: str, voice: Optional[str] = None, ref_audio: Optional[str] = None,
-               ref_text: Optional[str] = None, speed: float = 1.0) -> bytes:
+               ref_text: Optional[str] = None, speed: float = 1.0,
+               style: str = "doc_truyen") -> bytes:
     tts = get_tts()
     # VieNeu's infer returns a numpy array. Sample rate is typically 24 kHz
     # for v2 and 48 kHz for v3-turbo.
@@ -79,6 +80,9 @@ def synthesize(text: str, voice: Optional[str] = None, ref_audio: Optional[str] 
         kwargs["ref_audio"] = ref_audio
         if ref_text:
             kwargs["ref_text"] = ref_text
+    # v3-turbo ships a dedicated story-reading style with more appropriate
+    # novel cadence than the generic conversational default.
+    kwargs["style"] = style if style in {"doc_truyen", "tu_nhien"} else "doc_truyen"
 
     # Detect any inline emotion tags and pass them through
     has_emotion = bool(EMOTION_RE.search(text))
@@ -109,11 +113,14 @@ def synthesize(text: str, voice: Optional[str] = None, ref_audio: Optional[str] 
     audio = np.clip(audio, -1.0, 1.0)
 
     # Apply speed scaling via resampling if not 1.0
-    if speed and abs(speed - 1.0) > 0.01:
+    speed = max(0.5, min(2.0, float(speed or 1.0)))
+    if abs(speed - 1.0) > 0.01:
         try:
             import soxr
+            # Resample to fewer/more samples but KEEP the playback sample-rate
+            # in the WAV header. The old code changed both, cancelling the
+            # duration change entirely (speed=2 still played at 1x).
             audio = soxr.resample(audio, sr, int(sr / speed))
-            sr = int(sr / speed)
         except ImportError:
             pass  # soxr not available, return at original speed
 
@@ -137,6 +144,7 @@ class SynthesizeRequest(BaseModel):
     ref_audio: Optional[str] = None        # path on disk for voice cloning
     ref_text: Optional[str] = None
     speed: Optional[float] = 1.0
+    style: Optional[str] = "doc_truyen"
 
 
 @app.post("/synthesize")
@@ -144,8 +152,13 @@ async def synthesize_endpoint(req: SynthesizeRequest):
     text = (req.text or "").strip()
     if not text:
         raise HTTPException(400, "text is required")
+    if len(text) > 10_000:
+        raise HTTPException(413, "text is too long (maximum 10000 characters)")
     try:
-        wav = synthesize(text, req.voice, req.ref_audio, req.ref_text, req.speed or 1.0)
+        wav = synthesize(
+            text, req.voice, req.ref_audio, req.ref_text,
+            req.speed or 1.0, req.style or "doc_truyen",
+        )
     except Exception as e:
         raise HTTPException(500, str(e))
     return Response(

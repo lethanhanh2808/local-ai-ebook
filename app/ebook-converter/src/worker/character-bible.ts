@@ -38,7 +38,7 @@ export async function startCharacterBibleWorker(): Promise<{ worker: Worker }> {
     'ebook-character-bible',
     async (job: Job<CharacterBibleJobData>) => {
       const { bookId, chapterIndex, chapterFile, autoMerge, reason } = job.data;
-      if (!Number.isFinite(chapterIndex) || chapterIndex < 0) {
+      if (!Number.isInteger(chapterIndex) || chapterIndex < 0) {
         throw new Error(`character-bible-worker: invalid chapterIndex=${chapterIndex} on job ${job.id} — whole-book scans are not supported`);
       }
       const t0 = Date.now();

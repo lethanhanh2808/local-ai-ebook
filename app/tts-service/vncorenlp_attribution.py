@@ -38,6 +38,30 @@ from typing import Optional
 
 import httpx
 
+# Python's stdlib ``re`` has no ``\p{Lu}``/``\p{L}``, while the browser-side
+# attribution engine uses those Unicode properties to discover previously
+# unseen Vietnamese names.  Build the Vietnamese uppercase class from Unicode
+# case semantics instead of a broad code-point range: ranges such as ``À-Ỹ``
+# also contain lowercase ``đ``, ``ơ`` and ``ư`` and used to turn ordinary
+# prose into bogus character candidates.
+_UPPER_VI_CHARS = "".join(
+    chr(codepoint)
+    for codepoint in range(0x00C0, 0x1F00)
+    if chr(codepoint).isalpha() and chr(codepoint).isupper()
+)
+_CAP_LETTER_CLASS = f"[A-Z{re.escape(_UPPER_VI_CHARS)}]"
+_LETTER = r"[^\W\d_]"
+
+# Keep this in parity with PROPER_NAME_RE in src/lib/attribution.ts:
+# two-to-six capital-led words, with the leading separator excluded from the
+# capture and punctuation/whitespace terminating the candidate.
+PROPER_NAME_RE = re.compile(
+    rf"(?:^|[^\w])({_CAP_LETTER_CLASS}{_LETTER}*"
+    rf"(?:\s+{_CAP_LETTER_CLASS}{_LETTER}*){{1,5}})"
+    rf"(?=\s|[,.:;!?…]|$)",
+    re.UNICODE,
+)
+
 # ── Config ──────────────────────────────────────────────────────────────
 VNCORENLP_URL = os.environ.get("VNCORENLP_URL", "http://127.0.0.1:5030").rstrip("/")
 USE_VNCORENLP = os.environ.get("USE_VNCORENLP", "1").strip().lower() in ("1", "true", "yes", "on")

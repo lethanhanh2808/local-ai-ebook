@@ -18,10 +18,11 @@ import {
   BookOpen, Library, Upload, ArrowRight, BookCheck, Clock,
   Flame, Sparkles, Plus, RefreshCw, Loader2, Settings as SettingsIcon,
 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { buttonClasses } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { EmptyState, LoadingSkeleton } from '@/components/layout/EmptyState';
+import { ErrorState } from '@/components/layout/ErrorState';
 import { cn, formatBytes, formatDate } from '@/lib/utils';
 import type { BookSummary } from '@/components/library/BookCard';
 
@@ -38,27 +39,33 @@ export default function Dashboard() {
   const [recent, setRecent] = useState<BookSummary[]>([]);
   const [aiProvider, setAiProvider] = useState<string>('omlx-local');
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
-      const [books, settings] = await Promise.all([
-        fetch('/api/library?limit=200').then((r) => r.json()).catch(() => []) as Promise<BookSummary[]>,
-        fetch('/api/settings').then((r) => r.json()).catch(() => ({ aiProvider: 'omlx-local' })),
-      ]);
-      const total = books.length;
-      const read = books.filter((b) => b.readStatus === 'read').length;
-      const readingCount = books.filter((b) => b.readStatus === 'reading').length;
-      const favorites = books.filter((b) => b.isFavorite).length;
+      const booksRes = await fetch('/api/library?limit=200');
+      if (!booksRes.ok) throw new Error(`Không thể tải thư viện (HTTP ${booksRes.status})`);
+      const books = await booksRes.json() as unknown;
+      if (!Array.isArray(books)) throw new Error('Phản hồi thư viện không hợp lệ.');
+      const settings = await fetch('/api/settings')
+        .then(async (r) => r.ok ? r.json() : { aiProvider: 'omlx-local' })
+        .catch(() => ({ aiProvider: 'omlx-local' })) as { aiProvider?: string };
+      const typedBooks = books as BookSummary[];
+      const total = typedBooks.length;
+      const read = typedBooks.filter((b) => b.readStatus === 'read').length;
+      const readingCount = typedBooks.filter((b) => b.readStatus === 'reading').length;
+      const favorites = typedBooks.filter((b) => b.isFavorite).length;
 
       // Continue reading: progress 1-99%, sorted desc
-      const inProgress = books
+      const inProgress = typedBooks
         .filter((b) => b.readProgress > 0 && b.readProgress < 100)
         .sort((a, b) => b.readProgress - a.readProgress)
         .slice(0, 4);
 
       // Recently added (latest 6)
-      const recentBooks = [...books]
+      const recentBooks = [...typedBooks]
         .sort((a, b) => new Date(b.addedAt).getTime() - new Date(a.addedAt).getTime())
         .slice(0, 6);
 
@@ -66,6 +73,11 @@ export default function Dashboard() {
       setContinueReading(inProgress);
       setRecent(recentBooks);
       setAiProvider(settings.aiProvider ?? 'omlx-local');
+    } catch (e) {
+      setStats(null);
+      setContinueReading([]);
+      setRecent([]);
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
@@ -98,21 +110,19 @@ export default function Dashboard() {
                 Chào mừng trở lại 👋
               </h1>
               <p className="text-sm text-muted-foreground mt-1">
-                {stats
+                {error
+                  ? 'Không thể tải tổng quan thư viện.'
+                  : stats
                   ? `Thư viện có ${stats.total} cuốn sách${stats.reading ? `, đang đọc dở ${stats.reading} cuốn` : ''}.`
                   : 'Đang tải thư viện…'}
               </p>
             </div>
             <div className="flex flex-wrap gap-2 shrink-0">
-              <Link href="/convert">
-                <Button>
-                  <Upload className="h-4 w-4 mr-1.5" /> Thêm sách
-                </Button>
+              <Link href="/convert" className={buttonClasses()}>
+                <Upload className="h-4 w-4 mr-1.5" /> Thêm sách
               </Link>
-              <Link href="/library">
-                <Button variant="outline">
-                  <Library className="h-4 w-4 mr-1.5" /> Mở thư viện
-                </Button>
+              <Link href="/library" className={buttonClasses({ variant: 'outline' })}>
+                <Library className="h-4 w-4 mr-1.5" /> Mở thư viện
               </Link>
             </div>
           </div>
@@ -161,6 +171,10 @@ export default function Dashboard() {
         <div className="absolute -right-24 -bottom-12 h-48 w-48 rounded-full bg-primary/5 blur-3xl pointer-events-none" />
       </section>
 
+      {error ? (
+        <ErrorState title="Không thể tải dashboard" message={error} details={error} onRetry={() => void load()} retrying={loading} />
+      ) : (
+      <>
       {/* ── 2. Continue reading (the main focal point) ───────────────────── */}
       <section>
         <PageHeader
@@ -169,10 +183,8 @@ export default function Dashboard() {
           icon={<Clock className="h-4 w-4" />}
           actions={
             continueReading.length > 0 && (
-              <Link href="/library?status=reading">
-                <Button size="sm" variant="ghost">
-                  Xem tất cả <ArrowRight className="h-3.5 w-3.5 ml-1" />
-                </Button>
+              <Link href="/library?status=reading" className={buttonClasses({ size: 'sm', variant: 'ghost' })}>
+                Xem tất cả <ArrowRight className="h-3.5 w-3.5 ml-1" />
               </Link>
             )
           }
@@ -186,8 +198,8 @@ export default function Dashboard() {
             hint="Mở một cuốn sách từ thư viện và bắt đầu đọc để tiến độ hiển thị ở đây."
             action={
               stats?.total
-                ? <Link href="/library"><Button size="sm" variant="outline"><Library className="h-3.5 w-3.5 mr-1.5" />Mở thư viện</Button></Link>
-                : <Link href="/convert"><Button size="sm"><Upload className="h-3.5 w-3.5 mr-1.5" />Upload sách đầu tiên</Button></Link>
+                ? <Link href="/library" className={buttonClasses({ size: 'sm', variant: 'outline' })}><Library className="h-3.5 w-3.5 mr-1.5" />Mở thư viện</Link>
+                : <Link href="/convert" className={buttonClasses({ size: 'sm' })}><Upload className="h-3.5 w-3.5 mr-1.5" />Upload sách đầu tiên</Link>
             }
           />
         ) : (
@@ -207,10 +219,8 @@ export default function Dashboard() {
           icon={<Plus className="h-4 w-4" />}
           actions={
             recent.length > 0 && (
-              <Link href="/library">
-                <Button size="sm" variant="ghost">
-                  Xem tất cả <ArrowRight className="h-3.5 w-3.5 ml-1" />
-                </Button>
+              <Link href="/library" className={buttonClasses({ size: 'sm', variant: 'ghost' })}>
+                Xem tất cả <ArrowRight className="h-3.5 w-3.5 ml-1" />
               </Link>
             )
           }
@@ -223,8 +233,8 @@ export default function Dashboard() {
             title="Thư viện trống"
             hint="Upload file EPUB, HTML hoặc TXT đầu tiên để bắt đầu xây dựng thư viện."
             action={
-              <Link href="/convert">
-                <Button size="sm"><Upload className="h-3.5 w-3.5 mr-1.5" />Upload ngay</Button>
+              <Link href="/convert" className={buttonClasses({ size: 'sm' })}>
+                <Upload className="h-3.5 w-3.5 mr-1.5" />Upload ngay
               </Link>
             }
           />
@@ -236,6 +246,8 @@ export default function Dashboard() {
           </div>
         )}
       </section>
+      </>
+      )}
 
       {/* Footer with quick section links (single row) */}
       <footer className="border-t border-border pt-5 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">

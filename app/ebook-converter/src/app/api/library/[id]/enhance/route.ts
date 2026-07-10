@@ -10,29 +10,28 @@ import { parseEpub } from '@/lib/pipeline/epub-parser';
 import { buildEpub } from '@/lib/pipeline/epub-builder';
 import { buildChapterHtml, extractChapterBodyFragment } from '@/lib/pipeline/epub-styler';
 import { enhanceChaptersParallel } from '@/lib/ai/chapter-enhancer';
-import { libraryPath, coverPath, ensureDirs } from '@/lib/storage';
+import { libraryPath, coverPath, ensureDirs, resolveBookPath, resolveCoverPath } from '@/lib/storage';
 import { extractCoverFromEpub } from '@/lib/pipeline/epub-cover';
 import { auditMinimalPairs } from '@/lib/vi-text-qa';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(
-  req: NextRequest,
-  { params }: { params: { id: string } },
-) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const book = await getBook(params.id);
   if (!book) return NextResponse.json({ error: 'Book not found' }, { status: 404 });
-  if (!fs.existsSync(book.filePath)) {
+  const bookPath = await resolveBookPath(book);
+  if (!fs.existsSync(bookPath)) {
     return NextResponse.json({ error: 'Book file not found on disk' }, { status: 404 });
   }
 
   const body = await req.json().catch(() => ({})) as { customPrompt?: string };
-  const customPrompt = body.customPrompt?.trim() || undefined;
+  const customPrompt = body.customPrompt?.trim().slice(0, 8_000) || undefined;
 
   try {
     // Parse the existing epub
-    const epub = await parseEpub(book.filePath);
+    const epub = await parseEpub(bookPath);
 
     // Extract chapter bodies from the epub's HTML files
     const chapterInputs: Array<{ id: string; title: string; bodyHtml: string }> = [];
@@ -133,11 +132,14 @@ export async function POST(
       const coverDest = coverPath(newBookId);
       const extracted = await extractCoverFromEpub(outputFile, coverDest);
       if (extracted) cover = coverDest;
-      else if (book.coverPath && fs.existsSync(book.coverPath)) {
+      else {
+        const sourceCover = await resolveCoverPath(book);
+        if (sourceCover) {
         // Copy original cover
-        const ext = path.extname(book.coverPath);
+        const ext = path.extname(sourceCover);
         cover = coverPath(newBookId).replace(/\.[^.]+$/, ext);
-        fs.copyFileSync(book.coverPath, cover);
+        fs.copyFileSync(sourceCover, cover);
+        }
       }
     } catch { /* ok */ }
 

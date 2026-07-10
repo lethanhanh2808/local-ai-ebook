@@ -6,7 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { v4 as uuid } from 'uuid';
 import { getBook } from '@/lib/db/books';
-import { listVoices, createVoice, deleteVoice, getDefaultVoice } from '@/lib/db/voices';
+import { listVoices, createVoice, deleteVoice, getDefaultVoice, getVoice } from '@/lib/db/voices';
 import { setBookAudiobookStatus } from '@/lib/db/audiobook';
 
 export const runtime = 'nodejs';
@@ -20,7 +20,8 @@ function ensureVoicesDir() {
   fs.mkdirSync(VOICES_DIR, { recursive: true });
 }
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const book = await getBook(params.id);
   if (!book) return NextResponse.json({ error: 'Book not found' }, { status: 404 });
   const voices = await listVoices(params.id);
@@ -28,7 +29,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   return NextResponse.json({ voices, defaultVoiceId: defaultVoice?.id ?? null });
 }
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const book = await getBook(params.id);
   if (!book) return NextResponse.json({ error: 'Book not found' }, { status: 404 });
 
@@ -60,16 +62,26 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const buf = Buffer.from(await file.arrayBuffer());
     fs.writeFileSync(refPath, buf);
 
-    const voice = await createVoice({
-      bookId: params.id,
-      name,
-      description,
-      refAudioPath: refPath,
-      language,
-      isDefault,
-      defaultSpeed: Number.isFinite(defaultSpeed) ? defaultSpeed : undefined,
-      defaultEmotion,
-    });
+    let voice;
+    try {
+      voice = await createVoice({
+        bookId: params.id,
+        name: name.slice(0, 120),
+        description: description?.slice(0, 500),
+        refAudioPath: refPath,
+        language: language.slice(0, 16),
+        isDefault,
+        defaultSpeed: Number.isFinite(defaultSpeed)
+          ? Math.min(2, Math.max(0.5, defaultSpeed))
+          : undefined,
+        defaultEmotion: defaultEmotion?.slice(0, 40),
+      });
+    } catch (error) {
+      // The file is written before the DB transaction; roll it back if the
+      // row cannot be created so failed uploads do not leak storage.
+      try { fs.unlinkSync(refPath); } catch {}
+      throw error;
+    }
 
     // Mark audiobook as stale so it gets regenerated with the new voice.
     await setBookAudiobookStatus(params.id, 'none');
@@ -81,10 +93,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const voiceId = req.nextUrl.searchParams.get('voiceId');
   if (!voiceId) return NextResponse.json({ error: 'voiceId required' }, { status: 400 });
 
+  const existing = await getVoice(voiceId);
+  if (!existing || existing.bookId !== params.id) {
+    return NextResponse.json({ error: 'Voice not found' }, { status: 404 });
+  }
   const voice = await deleteVoice(voiceId);
   // Best-effort: remove ref audio
   try { if (voice && fs.existsSync((voice as { refAudioPath: string }).refAudioPath)) fs.unlinkSync((voice as { refAudioPath: string }).refAudioPath); } catch {}

@@ -88,6 +88,13 @@
   body { @apply bg-background text-foreground; }
 }
 
+/* Reliable keyboard focus for bespoke feature controls that do not use the
+   shared Button/Input primitives (reader chrome, shelf cards, editor tools). */
+:where(a, button, input, select, textarea, [role="button"]):focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
 /* Override Tailwind Preflight's hard-coded border-color (gray-200). Preflight
    emits `*, ::after, ::before { border-color: rgb(229, 231, 235) }` and that
    rule lands AFTER our @layer base border-border apply — so without this

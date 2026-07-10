@@ -65,9 +65,9 @@ def synthesize_piper(text: str, model: str = "vi_VN-vais1000-medium",
 
 def synthesize_vieneu(text: str, voice: Optional[str] = None,
                      ref_audio: Optional[str] = None, ref_text: Optional[str] = None,
-                     speed: float = 1.0) -> bytes:
+                     speed: float = 1.0, style: str = "doc_truyen") -> bytes:
     import httpx
-    body = {"text": text, "speed": speed}
+    body = {"text": text, "speed": speed, "style": style}
     if voice: body["voice"] = voice
     if ref_audio: body["ref_audio"] = ref_audio
     if ref_text: body["ref_text"] = ref_text
@@ -147,6 +147,7 @@ class SynthesizeRequest(BaseModel):
     speaker: Optional[int] = None
     reference_path: Optional[str] = None
     ref_text: Optional[str] = None
+    style: Optional[str] = "doc_truyen"
 
 
 @app.get("/backends")
@@ -179,11 +180,16 @@ async def synthesize(req: SynthesizeRequest):
     text = (req.text or "").strip()
     if not text:
         raise HTTPException(400, "text required")
+    if len(text) > 10_000:
+        raise HTTPException(413, "text is too long (maximum 10000 characters)")
     backend = pick_backend(req.backend, req.language, text, req.voice, req.reference_path)
     length_scale = round(1.0 / max(0.5, min(3.0, req.speed or 1.0)), 3)
 
     if backend == "vieneu":
-        wav = synthesize_vieneu(text, req.voice, req.reference_path, req.ref_text, req.speed or 1.0)
+        wav = synthesize_vieneu(
+            text, req.voice, req.reference_path, req.ref_text,
+            req.speed or 1.0, req.style or "doc_truyen",
+        )
     elif backend == "piper":
         wav = synthesize_piper(text, req.model or "vi_VN-vais1000-medium",
                               req.speaker, length_scale,

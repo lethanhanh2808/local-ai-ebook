@@ -18,8 +18,9 @@ export const dynamic = 'force-dynamic';
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { id: string; characterId: string } },
+  props: { params: Promise<{ id: string; characterId: string }> }
 ) {
+  const params = await props.params;
   const character = await prisma.character.findUnique({
     where: { id: params.characterId },
     select: { id: true, bookId: true },

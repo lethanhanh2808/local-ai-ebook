@@ -16,12 +16,14 @@ import { PageHeader } from '@/components/layout/PageHeader';
 import { Card } from '@/components/ui/card';
 import { buttonClasses } from '@/components/ui/button';
 
-export async function generateMetadata({ params }: { params: { id: string } }) {
+export async function generateMetadata(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const book = await getBook(params.id);
   return { title: book ? book.title : 'Book' };
 }
 
-export default async function BookDetailPage({ params }: { params: { id: string } }) {
+export default async function BookDetailPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const book = await getBook(params.id);
   if (!book) notFound();
 

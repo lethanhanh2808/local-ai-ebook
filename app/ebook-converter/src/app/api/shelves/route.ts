@@ -12,10 +12,26 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const body = await req.json() as { name: string; description?: string; isPublic?: boolean };
-  if (!body.name?.trim()) {
+  const body = await req.json().catch(() => null) as { name?: unknown; description?: unknown; isPublic?: unknown } | null;
+  if (!body || typeof body.name !== 'string' || !body.name.trim()) {
     return NextResponse.json({ error: 'Name is required' }, { status: 400 });
   }
-  const shelf = await createShelf({ name: body.name.trim(), description: body.description, isPublic: body.isPublic ?? false });
+  if (body.name.trim().length > 200) {
+    return NextResponse.json({ error: 'Name is too long' }, { status: 400 });
+  }
+  if (body.description !== undefined && typeof body.description !== 'string') {
+    return NextResponse.json({ error: 'Description must be a string' }, { status: 400 });
+  }
+  if (body.isPublic !== undefined && typeof body.isPublic !== 'boolean') {
+    return NextResponse.json({ error: 'isPublic must be a boolean' }, { status: 400 });
+  }
+  const description = typeof body.description === 'string'
+    ? body.description.trim().slice(0, 2_000) || undefined
+    : undefined;
+  const shelf = await createShelf({
+    name: body.name.trim(),
+    description,
+    isPublic: body.isPublic ?? false,
+  });
   return NextResponse.json(shelf, { status: 201 });
 }

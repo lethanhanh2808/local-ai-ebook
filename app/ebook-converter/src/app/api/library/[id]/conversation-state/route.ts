@@ -61,10 +61,8 @@ import { ATTRIBUTION_VERSION } from '@/lib/attribution';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(
-  _req: NextRequest,
-  { params }: { params: { id: string } },
-) {
+export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const bookId = params.id;
   // First make sure the book exists — returning 404 here is more useful
   // than letting loadConversationState silently report `no-row` for a
@@ -119,10 +117,8 @@ export async function GET(
 // destructive on missing rows — returns 200 either way. The `force=true`
 // query param exists so callers can opt into "even if the row looks
 // fresh, drop it" without ambiguity in the spec.
-export async function DELETE(
-  req: NextRequest,
-  { params }: { params: { id: string } },
-) {
+export async function DELETE(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const bookId = params.id;
   const book = await prisma.book.findUnique({ where: { id: bookId } });
   if (!book) {

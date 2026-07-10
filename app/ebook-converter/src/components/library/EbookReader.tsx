@@ -3,7 +3,7 @@
 // Professional EPUB reader: spread (two-column Apple Books) + scroll modes
 import { useEffect, useRef, useState, useCallback, lazy, Suspense } from 'react';
 import { createPortal } from 'react-dom';
-import { Button } from '@/components/ui/button';
+import { Button, buttonClasses } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Progress } from '@/components/ui/progress';
 import { KbdHint } from '@/components/ui/kbd-hint';
@@ -744,7 +744,7 @@ function AttributionDebugModal(props: {
     return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose]);
 
-  if (!data) return null;
+  if (!data || !open) return null;
 
   // The server ships `attribution` / `layers` with STRING keys (JSON object
   // keys are always strings, even when the original TS layer typed them as
@@ -841,6 +841,8 @@ function AttributionDebugModal(props: {
   return (
     <div
       data-testid="attribution-debug-modal"
+      role="dialog"
+      aria-label="Attribution debug"
       // Right-side slide-over panel (was a centered modal with a full-screen
       // backdrop, but that hid the Voice assignment debug panel on the
       // left). No backdrop now — both side panels stay visible at the same
@@ -848,7 +850,7 @@ function AttributionDebugModal(props: {
       className={cn(
         'fixed inset-y-0 right-0 z-[60] flex flex-col w-[min(640px,55vw)] max-w-full h-full shadow-2xl border-l overflow-hidden transition-transform duration-200 ease-in-out',
         panelCls,
-        open ? 'translate-x-0' : 'translate-x-full',
+        'translate-x-0',
       )}
       onClick={(e) => e.stopPropagation()}
     >
@@ -1053,6 +1055,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   const [chapters, setChapters]   = useState<Chapter[]>([]);
   const [currentIdx, setCurrentIdx] = useState(0);
   const [loading, setLoading]     = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [settings, setSettings]   = useState<ReaderSettings>(DEFAULT_SETTINGS);
   const [tocOpen, setTocOpen]     = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1497,6 +1500,11 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   // SSR safety for createPortal — only render portal client-side.
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
+  useEffect(() => {
+    const syncFullscreen = () => setFullscreen(document.fullscreenElement === wrapperRef.current);
+    document.addEventListener('fullscreenchange', syncFullscreen);
+    return () => document.removeEventListener('fullscreenchange', syncFullscreen);
+  }, []);
   const [pregenStatus, setPregenStatus] = useState<{ chapterId: string; done: number; total: number } | null>(null);
   // Ref mirrors chapters[currentIdx] so async callbacks (setTimeout) always
   // see the latest chapter even after React has re-rendered with a new
@@ -1678,25 +1686,45 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     voiceCommandHandlerRef.current = handleVoiceCommand;
   });
 
-  useEffect(() => {
-    fetch(`/api/library/${bookId}/chapters`)
-      .then((r) => r.json())
-      .then((data: Chapter[]) => {
-        setChapters(data);
-        const startIdx = initialChapter
-          ? Math.max(0, data.findIndex((c) => c.id === initialChapter))
-          : Math.max(0, Math.floor((initialProgress / 100) * (data.length - 1)));
-        setCurrentIdx(startIdx);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
+  const loadChapters = useCallback(async (signal?: AbortSignal) => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const res = await fetch(`/api/library/${bookId}/chapters`, { signal });
+      const payload = await res.json().catch(() => null) as Chapter[] | { error?: string } | null;
+      if (!res.ok) {
+        const message = payload && !Array.isArray(payload) ? payload.error : undefined;
+        throw new Error(message ?? `Không thể tải mục lục (HTTP ${res.status})`);
+      }
+      if (!Array.isArray(payload)) throw new Error('Phản hồi mục lục không hợp lệ.');
+      const data = payload.filter((chapter) => chapter && typeof chapter.id === 'string');
+      setChapters(data);
+      const requestedIdx = initialChapter ? data.findIndex((c) => c.id === initialChapter) : -1;
+      const startIdx = requestedIdx >= 0
+        ? requestedIdx
+        : Math.max(0, Math.floor((initialProgress / 100) * Math.max(0, data.length - 1)));
+      setCurrentIdx(startIdx);
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') return;
+      setChapters([]);
+      setLoadError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (!signal?.aborted) setLoading(false);
+    }
   }, [bookId, initialChapter, initialProgress]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadChapters(controller.signal);
+    return () => controller.abort();
+  }, [loadChapters]);
 
   useEffect(() => { setBookmarks(loadBookmarks(bookId)); }, [bookId]);
 
   // Handle postMessages from iframe (chapter navigation + spread pagination)
   useEffect(() => {
     const handler = (e: MessageEvent) => {
+      if (e.source !== iframeRef.current?.contentWindow) return;
       if (!e.data?.type) return;
       const { type } = e.data as { type: string; chapterId?: string; current?: number; total?: number };
       if (type === 'epub-navigate' && e.data.chapterId) {
@@ -1720,12 +1748,16 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      const target = e.target;
+      if (target instanceof HTMLElement) {
+        const tag = target.tagName;
+        if (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A'].includes(tag)) return;
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
       if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); handleNext(); }
       else if (e.key === 'ArrowLeft') { e.preventDefault(); handlePrev(); }
       else if (e.key === 'Escape') {
-        setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); setGalleryOpen(false); setVoiceDebugOpen(false);
+        setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); setGalleryOpen(false); setVoiceDebugOpen(false); setAbOpen(false); setTtsSettingsOpen(false); setAttributionDebugOpen(false);
         if (analysisModal) closeAnalysisModal();
         setShortcutsOpen(false);
       }
@@ -1762,6 +1794,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   }, [bookId]);
 
   function goToChapter(idx: number) {
+    if (chapters.length === 0) return;
     const clamped = Math.max(0, Math.min(chapters.length - 1, idx));
     setIframeLoading(true);
     setSpreadPage(0);
@@ -1773,6 +1806,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   }
 
   function handleNext() {
+    if (chapters.length === 0) return;
     if (settings.layout === 'spread') {
       iframeRef.current?.contentWindow?.postMessage({ type: 'next-page' }, '*');
     } else {
@@ -1780,6 +1814,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     }
   }
   function handlePrev() {
+    if (chapters.length === 0) return;
     if (settings.layout === 'spread') {
       iframeRef.current?.contentWindow?.postMessage({ type: 'prev-page' }, '*');
     } else {
@@ -2441,10 +2476,8 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
    * and refreshes the in-memory ttsCharacterMap so voice auto-switching
    * works for newly-discovered characters.
    *
-   * Fire-and-forget — caller doesn't await. Triggered:
-   *   1. When the user opens a chapter (in case previous AI-detect missed it)
-   *   2. In the background while TTS is playing the current chapter, for the
-   *      NEXT chapter — so by the time auto-advance reaches it, voices are ready
+   * Fire-and-forget — caller doesn't await. It starts only when the user
+   * explicitly starts read-aloud, never during ordinary chapter navigation.
    */
   const detectChapterInFlightRef = useRef<Set<string>>(new Set());  // chapterIds currently being detected
   async function detectChapterCharacters(chapterId: string, opts: { silent?: boolean } = {}) {
@@ -2989,6 +3022,9 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       }
     }
     return {};
+  // The attribution helpers are declared in the reader scope because they
+  // share its character maps; their effective inputs are covered below.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ttsUseCharacterVoice, chapters, currentIdx, ttsCharacterMap]);
 
     // ── TTS prefetch helpers ───────────────────────────────────────────────
@@ -3542,6 +3578,11 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       voicePreviewAudioRef.current = null;
       setPreviewingVoice(null);
     }
+
+    // Character discovery is expensive (often 20–60s). Start it only after
+    // the user explicitly asks for TTS; ordinary reading/navigation keeps the
+    // lightweight cached attribution path below and never wakes the LLM.
+    void detectChapterCharacters(myChapter.id);
 
     // Load current chapter's paragraphs (from cache if we have them)
     let paras = chapterParagraphsRef.current.get(myChapter.id);
@@ -4126,31 +4167,12 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   // different books can have different voice assignments)
   useEffect(() => { void loadTtsContext(); }, [bookId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Per-chapter character detection (background, automatic) ────────────
-  // Trigger detection for the CURRENT chapter when it changes (to fill in any
-  // characters missed by the initial book-wide detection).
+  // Load only cached attribution on navigation. Character discovery is much
+  // more expensive and is triggered from startTts() after an explicit action.
   useEffect(() => {
     const ch = chapters[currentIdx];
     if (!ch) return;
-    void detectChapterCharacters(ch.id, { silent: true });
-    // Fetch VnCoreNLP / regex / LLM attribution map for the current chapter
-    // so detectSpeaker() can use parser-resolved speakers on first play.
     void loadChapterAttribution(ch.id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentIdx, bookId]);
-
-  // Trigger detection for the NEXT chapter in the background while the user
-  // is reading the current one. This way, by the time auto-advance reaches
-  // the next chapter, its voices are already assigned.
-  useEffect(() => {
-    const nextCh = chapters[currentIdx + 1];
-    if (!nextCh) return;
-    // Run after a delay so we don't fire detection immediately on chapter load
-    // (the current chapter detection above is already running)
-    const timer = setTimeout(() => {
-      void detectChapterCharacters(nextCh.id, { silent: true });
-    }, 8000);  // 8s — gives current-chapter detection time to finish
-    return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentIdx, bookId]);
 
@@ -4188,13 +4210,15 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     : 0;
 
   const NavPanel = ({ side, open, children }: { side: 'left' | 'right'; open: boolean; children: React.ReactNode }) => (
+    !open ? null :
     <aside
       onClick={(e) => e.stopPropagation()}
+      aria-label={side === 'left' ? 'Reader navigation panel' : 'Reader settings panel'}
       className={cn(
         'absolute inset-y-0 z-20 flex flex-col shadow-2xl transition-transform duration-200 ease-in-out overflow-y-auto',
         panelCls,
         side === 'left' ? 'left-0 w-72 border-r' : 'right-0 w-80 border-l',
-        open ? 'translate-x-0' : side === 'left' ? '-translate-x-full' : 'translate-x-full',
+        'translate-x-0',
       )}
     >{children}</aside>
   );
@@ -4222,19 +4246,20 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
 
       {/* ── Header ── */}
       <header className={cn('flex items-center gap-1 px-2 py-1.5 border-b z-30 shrink-0 backdrop-blur-sm', headerCls)}>
-        <Link href="/library" title="Back">
-          <Button variant="ghost" size="icon" className="h-8 w-8"><Home className="h-4 w-4" /></Button>
+        <Link href="/library" title="Back to library" aria-label="Back to library" className={buttonClasses({ variant: 'ghost', size: 'icon', className: 'h-8 w-8' })}>
+          <Home className="h-4 w-4" />
         </Link>
-        <Link href={`/library/${bookId}`} title="Thông tin sách & AI Illustrations">
-          <Button variant="ghost" size="icon" className="h-8 w-8"><Info className="h-4 w-4" /></Button>
+        <Link href={`/library/${bookId}`} title="Thông tin sách & AI Illustrations" aria-label="Thông tin sách" className={buttonClasses({ variant: 'ghost', size: 'icon', className: 'hidden h-8 w-8 md:inline-flex' })}>
+          <Info className="h-4 w-4" />
         </Link>
         {/* Gallery of all AI-generated chapter illustrations. Click a
             thumbnail in the side panel to jump to that chapter. The
             panel sits on the right so the current chapter stays visible
             alongside, mirroring the Watermark / Bookmarks / TTS panels. */}
-        <Tooltip content={<span>Gallery ảnh (G)</span>} side="bottom">
-          <button onClick={() => { setGalleryOpen((o) => !o); setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); }}
+        <Tooltip content={<span>Gallery ảnh (G)</span>} side="bottom" className="hidden md:inline-flex">
+          <button type="button" onClick={() => { setGalleryOpen((o) => !o); setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); }}
             aria-label="Image gallery"
+            aria-expanded={galleryOpen}
             data-testid="gallery-toggle"
             className={cn('flex h-8 w-8 items-center justify-center rounded-md transition-colors border border-border', galleryOpen ? activeCls : `border-transparent ${hoverCls}`)}
             title="Gallery ảnh">
@@ -4242,9 +4267,10 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
           </button>
         </Tooltip>
         <Tooltip content={<span className="inline-flex items-center gap-1.5">Mục lục <KbdHint keys={['T']} /></span>} side="bottom">
-          <button onClick={() => { setTocOpen((o) => !o); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); }}
+          <button type="button" onClick={() => { setTocOpen((o) => !o); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); }}
             data-testid="toc-toggle"
             aria-label="Table of Contents"
+            aria-expanded={tocOpen}
             className={cn('flex h-8 w-8 items-center justify-center rounded-md transition-colors border border-border', tocOpen ? activeCls : `border-transparent ${hoverCls}`)}
             title="Mục lục (T)">
             <List className="h-4 w-4" />
@@ -4252,7 +4278,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         </Tooltip>
 
         <div className="flex-1 min-w-0 text-center px-2">
-          <p className="text-xs font-semibold truncate">{bookTitle}</p>
+              <h1 className="text-xs font-semibold truncate">{bookTitle}</h1>
           {current && (
             <p className={cn('text-[10px] truncate flex items-center justify-center gap-1', mutedCls)}>
               {current.title}
@@ -4270,7 +4296,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
           <form onSubmit={(e) => { e.preventDefault(); const n = parseInt(jumpInput, 10) - 1; if (!isNaN(n)) goToChapter(n); setJumpInput(''); }} className="hidden sm:flex items-center gap-1">
             <input type="number" min={1} max={chapters.length} value={jumpInput}
               onChange={(e) => setJumpInput(e.target.value)} placeholder={String(currentIdx + 1)}
-              className={cn('w-12 rounded border border-border text-center text-xs py-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring', inputCls)} title="Jump to chapter" />
+              className={cn('w-12 rounded border border-border text-center text-xs py-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring', inputCls)} title="Jump to chapter" aria-label="Số chương muốn mở" />
             <span className={cn('text-xs', mutedCls)}>/ {chapters.length}</span>
           </form>
         )}
@@ -4287,6 +4313,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
           {(['spread', 'scroll'] as Layout[]).map((l) => (
             <Tooltip key={l} content={l === 'spread' ? 'Hai cột (Apple Books)' : 'Cuộn dọc'} side="bottom">
               <button onClick={() => updateSetting('layout', l)} title={l === 'spread' ? 'Hai cột (Apple Books)' : 'Cuộn dọc'}
+                type="button" aria-label={l === 'spread' ? 'Hai cột' : 'Cuộn dọc'} aria-pressed={settings.layout === l}
                 className={cn('flex h-7 w-7 items-center justify-center border-r last:border-r-0 transition-colors', settings.layout === l ? activeCls : `border-transparent ${hoverCls}`)}>
                 {l === 'spread' ? <Columns className="h-3.5 w-3.5" /> : <ScrollText className="h-3.5 w-3.5" />}
               </button>
@@ -4294,23 +4321,27 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
           ))}
         </div>
 
-        <Tooltip content={<span className="inline-flex items-center gap-1.5">{isBookmarked ? 'Bỏ bookmark' : 'Bookmark'} <KbdHint keys={['B']} /></span>} side="bottom">
+        <Tooltip content={<span className="inline-flex items-center gap-1.5">{isBookmarked ? 'Bỏ bookmark' : 'Bookmark'} <KbdHint keys={['B']} /></span>} side="bottom" className="hidden md:inline-flex">
           <button onClick={toggleBookmark}
+            type="button" aria-label={isBookmarked ? 'Bỏ bookmark chương này' : 'Bookmark chương này'} aria-pressed={isBookmarked}
             className={cn('flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors', isBookmarked ? activeCls : `border-transparent ${hoverCls}`)}
             title={isBookmarked ? 'Bỏ bookmark (B)' : 'Bookmark (B)'}>
             {isBookmarked ? <BookmarkCheck className="h-4 w-4" /> : <Bookmark className="h-4 w-4" />}
           </button>
         </Tooltip>
-        <button onClick={() => { setBookmarksOpen((o) => !o); setTocOpen(false); setSettingsOpen(false); setWmOpen(false); }}
-          className={cn('flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors', bookmarksOpen ? activeCls : `border-transparent ${hoverCls}`)}>
+        <button type="button" onClick={() => { setBookmarksOpen((o) => !o); setTocOpen(false); setSettingsOpen(false); setWmOpen(false); }}
+          aria-label="Danh sách bookmark" aria-expanded={bookmarksOpen}
+          className={cn('hidden md:flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors', bookmarksOpen ? activeCls : `border-transparent ${hoverCls}`)}>
           <AlignLeft className="h-4 w-4" />
         </button>
-        <button onClick={() => { setSettingsOpen((o) => !o); setTocOpen(false); setBookmarksOpen(false); setWmOpen(false); setAbOpen(false); }}
-          className={cn('flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors', settingsOpen ? activeCls : `border-transparent ${hoverCls}`)}>
+        <button type="button" onClick={() => { setSettingsOpen((o) => !o); setTocOpen(false); setBookmarksOpen(false); setWmOpen(false); setAbOpen(false); }}
+          aria-label="Cài đặt trình đọc" aria-expanded={settingsOpen}
+          className={cn('hidden md:flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors', settingsOpen ? activeCls : `border-transparent ${hoverCls}`)}>
           <Settings2 className="h-4 w-4" />
         </button>
-        <button onClick={() => { setAbOpen((o) => !o); setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); setTtsSettingsOpen(false); }}
-          className={cn('flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors', abOpen ? activeCls : `border-transparent ${hoverCls}`)}
+        <button type="button" onClick={() => { setAbOpen((o) => !o); setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); setTtsSettingsOpen(false); }}
+          aria-label="Audio, đọc thành tiếng và giọng" aria-expanded={abOpen}
+          className={cn('hidden sm:flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors', abOpen ? activeCls : `border-transparent ${hoverCls}`)}
           title="Audio: Read aloud, Audiobook, Voices">
           <Headphones className="h-4 w-4" />
         </button>
@@ -4429,13 +4460,16 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
             </div>
           )}
         </div>
-        <button onClick={toggleFullscreen} className={cn('hidden sm:flex h-8 w-8 items-center justify-center rounded-md border border-border border-transparent', hoverCls)}>
+        <button type="button" onClick={toggleFullscreen} aria-label={fullscreen ? 'Thoát toàn màn hình' : 'Toàn màn hình'} aria-pressed={fullscreen} className={cn('hidden sm:flex h-8 w-8 items-center justify-center rounded-md border border-border border-transparent', hoverCls)}>
           {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
         </button>
         <button
+          type="button"
           onClick={toggleVoiceControl}
           disabled={!voiceControlSupported}
           title={voiceControlSupported ? (voiceControlOn ? 'Tắt nghe lệnh giọng nói' : 'Bật nghe lệnh giọng nói') : 'Trình duyệt không hỗ trợ nhận lệnh giọng nói'}
+          aria-label={voiceControlOn ? 'Tắt điều khiển giọng nói' : 'Bật điều khiển giọng nói'}
+          aria-pressed={voiceControlOn}
           className={cn('hidden md:flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
             voiceControlOn ? activeCls : `border-transparent ${hoverCls}`)}>
           <Mic className="h-4 w-4" />
@@ -4496,6 +4530,33 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="min-w-[14rem]">
+            <DropdownMenuItem asChild className="gap-2">
+              <Link href={`/library/${bookId}`}>
+                <Info className="h-3.5 w-3.5" /> Thông tin sách
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={() => { setGalleryOpen(true); setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); }}
+              className="gap-2"
+            >
+              <Images className="h-3.5 w-3.5" /> Gallery ảnh
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={toggleBookmark} className="gap-2">
+              {isBookmarked ? <BookmarkCheck className="h-3.5 w-3.5" /> : <Bookmark className="h-3.5 w-3.5" />}
+              {isBookmarked ? 'Bỏ bookmark chương này' : 'Bookmark chương này'}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={() => { setBookmarksOpen(true); setTocOpen(false); setSettingsOpen(false); setWmOpen(false); }}
+              className="gap-2"
+            >
+              <AlignLeft className="h-3.5 w-3.5" /> Danh sách bookmark
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={() => { setSettingsOpen(true); setTocOpen(false); setBookmarksOpen(false); setWmOpen(false); setAbOpen(false); }}
+              className="gap-2"
+            >
+              <Settings2 className="h-3.5 w-3.5" /> Cài đặt trình đọc
+            </DropdownMenuItem>
             <DropdownMenuItem
               onSelect={() => updateSetting('layout', settings.layout === 'spread' ? 'scroll' : 'spread')}
               className="gap-2"
@@ -4627,7 +4688,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
             {voiceCommandError || voiceCommandText || 'Sẵn sàng'}
           </span>
           {voiceCommandText && (
-            <button onClick={() => setVoiceCommandText('')} className={cn('rounded px-1.5 py-0.5', hoverCls)} title="Ẩn">
+            <button type="button" onClick={() => setVoiceCommandText('')} className={cn('rounded px-1.5 py-0.5', hoverCls)} title="Ẩn" aria-label="Ẩn lệnh giọng nói">
               <X className="h-3 w-3" />
             </button>
           )}
@@ -4654,9 +4715,11 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
                 Read-aloud: {ttsLastError}
               </span>
               <button
+                type="button"
                 onClick={() => setTtsLastError(null)}
                 className="rounded px-1 hover:bg-red-500/20"
                 title="Dismiss"
+                aria-label="Dismiss read-aloud error"
               >
                 <X className="h-3 w-3" />
               </button>
@@ -4677,21 +4740,21 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
             </span>
             <div className="hidden sm:flex items-center gap-1 shrink-0">
               {[0.75, 1.0, 1.25, 1.5].map((s) => (
-                <button key={s} onClick={() => setTtsSpeed(s)}
+                <button key={s} type="button" onClick={() => setTtsSpeed(s)} aria-label={`Tốc độ đọc ${s}x`} aria-pressed={ttsSpeed === s}
                   className={cn('rounded px-1.5 py-0.5 text-[10px] border border-border transition-colors',
                     ttsSpeed === s ? activeCls : `border-transparent ${hoverCls}`)}>
                   {s}×
                 </button>
               ))}
             </div>
-            <button onClick={toggleTtsPause}
+            <button type="button" onClick={toggleTtsPause}
               className={cn('flex h-6 w-6 items-center justify-center rounded border border-border', hoverCls)}
-              title={ttsState === 'paused' ? 'Tiếp tục' : 'Tạm dừng'}>
+              title={ttsState === 'paused' ? 'Tiếp tục' : 'Tạm dừng'} aria-label={ttsState === 'paused' ? 'Tiếp tục đọc' : 'Tạm dừng đọc'}>
               {ttsState === 'paused' ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
             </button>
-            <button onClick={stopTts}
+            <button type="button" onClick={stopTts}
               className={cn('flex h-6 w-6 items-center justify-center rounded border border-border', hoverCls)}
-              title="Dừng">
+              title="Dừng" aria-label="Dừng đọc thành tiếng">
               <Square className="h-3 w-3" />
             </button>
           </div>
@@ -4706,6 +4769,8 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
             className="w-full h-1.5 cursor-pointer"
             style={{ accentColor }}
             title="Chọn đoạn để đọc"
+            aria-label="Chọn đoạn để đọc"
+            aria-valuetext={ttsParagraphs.length ? `Đoạn ${ttsIndex + 1} trên ${ttsParagraphs.length}` : undefined}
           />
         </div>
       )}
@@ -4722,7 +4787,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
           <div className="px-3 py-2 shrink-0">
             <div className="relative">
               <Search className={cn('absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2', mutedCls)} />
-              <input type="search" placeholder="Search…" value={tocSearch} onChange={(e) => setTocSearch(e.target.value)}
+              <input type="search" placeholder="Search…" value={tocSearch} onChange={(e) => setTocSearch(e.target.value)} aria-label="Tìm chương"
                 className={cn('w-full rounded-md border border-border pl-8 pr-3 py-1.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring', inputCls)} />
             </div>
           </div>
@@ -4788,7 +4853,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         <NavPanel side="right" open={settingsOpen}>
           <div className={cn('flex items-center justify-between px-4 py-3 border-b shrink-0', dividerCls)}>
             <span className="font-semibold text-sm flex items-center gap-1.5"><Settings2 className="h-3.5 w-3.5" />Reading Settings</span>
-            <button onClick={() => setSettingsOpen(false)} className={cn('rounded p-1', hoverCls)}><X className="h-3.5 w-3.5" /></button>
+            <button type="button" onClick={() => setSettingsOpen(false)} aria-label="Đóng cài đặt trình đọc" className={cn('rounded p-1', hoverCls)}><X className="h-3.5 w-3.5" /></button>
           </div>
           <div className="flex-1 space-y-5 p-4 overflow-y-auto">
             {/* Layout */}
@@ -4797,7 +4862,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
               <div className="grid grid-cols-2 gap-2">
                 {[{ id: 'spread' as Layout, label: 'Book (2-col)', icon: Columns },
                   { id: 'scroll' as Layout, label: 'Scroll', icon: ScrollText }].map(({ id, label, icon: Icon }) => (
-                  <button key={id} onClick={() => updateSetting('layout', id)}
+                  <button key={id} type="button" onClick={() => updateSetting('layout', id)} aria-pressed={settings.layout === id}
                     className={cn('flex flex-col items-center gap-1 rounded-lg border border-border py-3 text-xs font-medium transition-all bg-transparent',
                       settings.layout === id ? activeCls : `${hoverCls} opacity-70`)}>
                     <Icon className="h-4 w-4" />{label}
@@ -4810,7 +4875,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
               <p className={cn('mb-2 text-[10px] font-semibold uppercase tracking-widest', mutedCls)}>Theme</p>
               <div className="flex gap-2">
                 {THEMES.map((t) => (
-                  <button key={t.id} onClick={() => updateSetting('theme', t.id)}
+                  <button key={t.id} type="button" onClick={() => updateSetting('theme', t.id)} aria-pressed={settings.theme === t.id}
                     className={cn('flex-1 rounded-lg border border-border py-2.5 text-xs font-medium transition-all', settings.theme === t.id ? 'ring-2' : 'opacity-60')}
                     style={{ background: t.bg, color: t.text }}>
                     {t.label}
@@ -4823,7 +4888,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
               <p className={cn('mb-2 text-[10px] font-semibold uppercase tracking-widest', mutedCls)}>Typeface</p>
               <div className="flex gap-2">
                 {FONTS.map((f) => (
-                  <button key={f.id} onClick={() => updateSetting('font', f.id)}
+                  <button key={f.id} type="button" onClick={() => updateSetting('font', f.id)} aria-pressed={settings.font === f.id}
                     className={cn('flex-1 rounded-lg border border-border py-2 text-xs transition-all bg-transparent', settings.font === f.id ? activeCls + ' font-semibold' : `${hoverCls} opacity-70`)}
                     style={{ fontFamily: f.stack }}>{f.sample}</button>
                 ))}
@@ -4836,11 +4901,11 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
                 <span className="text-xs font-mono">{settings.fontSize}px</span>
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={() => updateSetting('fontSize', Math.max(12, settings.fontSize - 1))}
+                <button type="button" onClick={() => updateSetting('fontSize', Math.max(12, settings.fontSize - 1))} aria-label="Giảm cỡ chữ"
                   className={cn('flex h-7 w-7 items-center justify-center rounded border border-border', hoverCls)}><Minus className="h-3.5 w-3.5" /></button>
                 <input type="range" min={12} max={28} step={1} value={settings.fontSize}
-                  onChange={(e) => updateSetting('fontSize', parseInt(e.target.value, 10))} className="flex-1" style={{ accentColor }} />
-                <button onClick={() => updateSetting('fontSize', Math.min(28, settings.fontSize + 1))}
+                  onChange={(e) => updateSetting('fontSize', parseInt(e.target.value, 10))} className="flex-1" style={{ accentColor }} aria-label="Cỡ chữ" aria-valuetext={`${settings.fontSize}px`} />
+                <button type="button" onClick={() => updateSetting('fontSize', Math.min(28, settings.fontSize + 1))} aria-label="Tăng cỡ chữ"
                   className={cn('flex h-7 w-7 items-center justify-center rounded border border-border', hoverCls)}><Plus className="h-3.5 w-3.5" /></button>
               </div>
             </div>
@@ -4851,7 +4916,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
                 <span className="text-xs font-mono">{settings.lineHeight.toFixed(2)}×</span>
               </div>
               <input type="range" min={1.3} max={2.8} step={0.05} value={settings.lineHeight}
-                onChange={(e) => updateSetting('lineHeight', parseFloat(e.target.value))} className="w-full" style={{ accentColor }} />
+                onChange={(e) => updateSetting('lineHeight', parseFloat(e.target.value))} className="w-full" style={{ accentColor }} aria-label="Giãn dòng" aria-valuetext={`${settings.lineHeight.toFixed(2)} lần`} />
               <div className={cn('flex justify-between text-[10px] mt-1', mutedCls)}><span>Tight</span><span>Normal</span><span>Spacious</span></div>
             </div>
             {/* Indent */}
@@ -4859,7 +4924,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
               <p className={cn('mb-2 text-[10px] font-semibold uppercase tracking-widest', mutedCls)}>Paragraph Indent</p>
               <div className="grid grid-cols-4 gap-1.5">
                 {INDENT_PRESETS.map((p) => (
-                  <button key={p.em} onClick={() => updateSetting('indent', p.em)}
+                  <button key={p.em} type="button" onClick={() => updateSetting('indent', p.em)} aria-pressed={settings.indent === p.em}
                     className={cn('rounded-lg border border-border py-2 text-[10px] font-medium transition-all bg-transparent', settings.indent === p.em ? activeCls : `${hoverCls} opacity-70`)}>
                     {p.label}
                   </button>
@@ -4872,7 +4937,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
                 <p className={cn('mb-2 text-[10px] font-semibold uppercase tracking-widest', mutedCls)}>Column Width</p>
                 <div className="grid grid-cols-4 gap-1.5">
                   {WIDTHS.map((w) => (
-                    <button key={w.px} onClick={() => updateSetting('width', w.px)}
+                    <button key={w.px} type="button" onClick={() => updateSetting('width', w.px)} aria-pressed={settings.width === w.px}
                       className={cn('rounded-lg border border-border py-2 text-[10px] font-medium transition-all bg-transparent', settings.width === w.px ? activeCls : `${hoverCls} opacity-70`)}>
                       {w.label}
                     </button>
@@ -4896,13 +4961,13 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
                     </div>
                     <input type="range" min={min} max={max} step={4} value={settings[key]}
                       onChange={(e) => updateSetting(key, parseInt(e.target.value, 10))}
-                      className="w-full" style={{ accentColor }} />
+                      className="w-full" style={{ accentColor }} aria-label={`Padding ${label}`} aria-valuetext={`${settings[key]}px`} />
                   </div>
                 ))}
               </div>
             </div>
             {/* Reset */}
-            <button onClick={() => { setSettings(DEFAULT_SETTINGS); saveSettings(DEFAULT_SETTINGS); }}
+            <button type="button" onClick={() => { setSettings(DEFAULT_SETTINGS); saveSettings(DEFAULT_SETTINGS); }}
               className={cn('w-full flex items-center justify-center gap-1.5 rounded-lg border border-border py-2 text-xs', hoverCls)}>
               <RotateCcw className="h-3.5 w-3.5" /> Reset defaults
             </button>
@@ -4942,7 +5007,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         <NavPanel side="right" open={wmOpen}>
           <div className={cn('flex items-center justify-between px-4 py-3 border-b shrink-0', dividerCls)}>
             <span className="font-semibold text-sm flex items-center gap-1.5"><Wand2 className="h-3.5 w-3.5" />Watermark Detector</span>
-            <button onClick={() => setWmOpen(false)} className={cn('rounded p-1', hoverCls)}><X className="h-3.5 w-3.5" /></button>
+            <button type="button" onClick={() => setWmOpen(false)} aria-label="Đóng Watermark Detector" className={cn('rounded p-1', hoverCls)}><X className="h-3.5 w-3.5" /></button>
           </div>
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
             {wmLoading ? (
@@ -4991,7 +5056,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
             <span className="font-semibold text-sm flex items-center gap-1.5">
               <Images className="h-3.5 w-3.5" /> Gallery ảnh
             </span>
-            <button onClick={() => setGalleryOpen(false)} className={cn('rounded p-1', hoverCls)}>
+            <button type="button" onClick={() => setGalleryOpen(false)} aria-label="Đóng gallery" className={cn('rounded p-1', hoverCls)}>
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
@@ -5005,12 +5070,13 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         </NavPanel>
 
         {/* Audio panel: live read-aloud, pre-generated audiobook, and voices */}
+        {abOpen && (
         <aside
           onClick={(e) => e.stopPropagation()}
           className={cn('absolute inset-y-0 right-0 z-20 flex flex-col shadow-2xl transition-transform duration-200 ease-in-out overflow-hidden',
             panelCls,
             'max-w-full border-l',
-            abOpen ? 'translate-x-0' : 'translate-x-full',
+            'translate-x-0',
           )}
           style={{ width: audioPanelMobile ? '100vw' : `${audioPanelWidth}px` }}
         >
@@ -5044,26 +5110,26 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
             <span className="font-semibold text-sm flex items-center gap-1.5">
               <Headphones className="h-3.5 w-3.5" />Audio
             </span>
-            <button onClick={() => setAbOpen(false)} className={cn('rounded p-1', hoverCls)}><X className="h-3.5 w-3.5" /></button>
+            <button type="button" onClick={() => setAbOpen(false)} aria-label="Đóng bảng Audio" className={cn('rounded p-1', hoverCls)}><X className="h-3.5 w-3.5" /></button>
           </div>
           {/* Tabs */}
-          <div className={cn('flex border-b shrink-0', dividerCls)}>
-            <button onClick={() => setAbTab('readAloud')}
+          <div className={cn('flex border-b shrink-0', dividerCls)} role="tablist" aria-label="Audio tools">
+            <button type="button" role="tab" aria-selected={abTab === 'readAloud'} onClick={() => setAbTab('readAloud')}
               className={cn('flex-1 py-2 text-xs font-medium transition-colors border-b-2',
                 abTab === 'readAloud' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')}>
               Read aloud
             </button>
-            <button onClick={() => setAbTab('audiobook')}
+            <button type="button" role="tab" aria-selected={abTab === 'audiobook'} onClick={() => setAbTab('audiobook')}
               className={cn('flex-1 py-2 text-xs font-medium transition-colors border-b-2',
                 abTab === 'audiobook' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')}>
               Audiobook
             </button>
-            <button onClick={() => setAbTab('voices')}
+            <button type="button" role="tab" aria-selected={abTab === 'voices'} onClick={() => setAbTab('voices')}
               className={cn('flex-1 py-2 text-xs font-medium transition-colors border-b-2',
                 abTab === 'voices' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')}>
               Giọng
             </button>
-            <button onClick={() => setAbTab('characters')}
+            <button type="button" role="tab" aria-selected={abTab === 'characters'} onClick={() => setAbTab('characters')}
               className={cn('flex-1 py-2 text-xs font-medium transition-colors border-b-2',
                 abTab === 'characters' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')}>
               Nhân vật
@@ -5129,23 +5195,25 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
             )}
           </div>
         </aside>
+        )}
 
         {/* Voice-assignment debug panel (left side) — moved from right to avoid
             overlapping with the Audio panel (right). On the left it slides
             over the table-of-contents / bookmarks area instead. */}
+        {voiceDebugOpen && (
         <aside
           onClick={(e) => e.stopPropagation()}
           className={cn('absolute inset-y-0 left-0 z-20 flex flex-col shadow-2xl transition-transform duration-200 ease-in-out overflow-hidden',
             panelCls,
             'w-[26rem] max-w-full border-r',
-            voiceDebugOpen ? 'translate-x-0' : '-translate-x-full',
+            'translate-x-0',
           )}
         >
           <div className={cn('flex items-center justify-between px-4 py-3 border-b shrink-0', dividerCls)}>
             <span className="font-semibold text-sm flex items-center gap-1.5">
               <Bug className="h-3.5 w-3.5" />Voice assignment debug
             </span>
-            <button onClick={() => setVoiceDebugOpen(false)} className={cn('rounded p-1', hoverCls)}><X className="h-3.5 w-3.5" /></button>
+            <button type="button" onClick={() => setVoiceDebugOpen(false)} aria-label="Đóng Voice assignment debug" className={cn('rounded p-1', hoverCls)}><X className="h-3.5 w-3.5" /></button>
           </div>
           <Suspense fallback={<PanelSkeleton />}>
             <VoiceDebugPanel
@@ -5173,11 +5241,25 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
             />
           </Suspense>
         </aside>
+        )}
 
         {/* Chapter iframe */}
-        <main className="flex-1 overflow-hidden flex flex-col">
+        <section className="flex-1 overflow-hidden flex flex-col" aria-label="Nội dung sách">
           {loading ? (
-            <div className={cn('flex-1 flex items-center justify-center text-sm', mutedCls)}>Loading book…</div>
+            <div role="status" className={cn('flex-1 flex items-center justify-center gap-2 text-sm', mutedCls)}>
+              <Loader2 className="h-4 w-4 animate-spin" /> Đang tải sách…
+            </div>
+          ) : loadError ? (
+            <div role="alert" className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+              <AlertCircle className="h-8 w-8 text-red-500" />
+              <div>
+                <p className="text-sm font-semibold">Không thể mở sách</p>
+                <p className={cn('mt-1 max-w-md text-xs', mutedCls)}>{loadError}</p>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => void loadChapters()}>
+                <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Thử lại
+              </Button>
+            </div>
           ) : chapterSrc ? (
             <div className="relative flex-1">
               {iframeLoading && (
@@ -5186,13 +5268,13 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
                 </div>
               )}
               <iframe key={chapterSrc} ref={iframeRef} src={chapterSrc}
-                className="h-full w-full border-0" title={current?.title}
+                className="h-full w-full border-0" title={current?.title ?? `Nội dung ${bookTitle}`}
                 sandbox="allow-same-origin allow-scripts" onLoad={handleIframeLoad} />
             </div>
           ) : (
             <div className={cn('flex-1 flex items-center justify-center text-sm', mutedCls)}>No chapters found.</div>
           )}
-        </main>
+        </section>
       </div>
 
       {/* ── Footer ── */}
@@ -5213,7 +5295,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
           {chapters.length > 0 && spreadTotal > 1 && (
             <Progress
               value={Math.round(((spreadPage + 1) / spreadTotal) * 100)}
-              label={`Trang ${spreadPage + 1}/${spreadTotal} trong chương hiện tại`}
+              ariaLabel={`Trang ${spreadPage + 1}/${spreadTotal} trong chương hiện tại`}
               className="h-[2px] w-full max-w-xs"
               indicatorClassName="bg-primary/70"
             />

@@ -12,25 +12,67 @@
 // is not under one of the allowed directories. Used by file-serving
 // routes AND by any code that opens a DB-supplied path for read/write.
 
+import fs from 'fs';
 import path from 'path';
 
 const DEFAULT_UPLOAD_ROOT = path.resolve(process.cwd(), 'data', 'uploads');
-const DEFAULT_OUTPUT_ROOT = path.resolve(process.cwd(), 'data', 'output');
+const DEFAULT_OUTPUT_ROOT = path.resolve(process.cwd(), 'data', 'outputs');
+const DEFAULT_LIBRARY_ROOT = path.resolve(process.cwd(), 'data', 'library');
 const DEFAULT_AUDIOBOOK_ROOT = path.resolve(process.cwd(), 'data', 'audiobooks');
 const DEFAULT_LOG_ROOT = path.resolve(process.cwd(), 'data', 'job-logs');
 const DEFAULT_TMP_ROOT = path.resolve(process.cwd(), 'data', 'tmp-chars');
+const DEFAULT_VOICE_ROOT = path.resolve(process.cwd(), 'data', 'voices');
 
 /** Compute the on-disk roots that any DB-supplied path is allowed to
  *  resolve into. Operators can override via env vars (one root per
  *  env var). Defaults match the project's documented data layout. */
-export function pathRoots(): { uploads: string; output: string; audiobooks: string; logs: string; tmp: string } {
+export function pathRoots(): {
+  uploads: string;
+  output: string;
+  library: string;
+  audiobooks: string;
+  logs: string;
+  tmp: string;
+  voices: string;
+} {
   return {
     uploads:    process.env.UPLOAD_DIR    ?? DEFAULT_UPLOAD_ROOT,
     output:     process.env.OUTPUT_DIR    ?? DEFAULT_OUTPUT_ROOT,
+    library:    process.env.LIBRARY_DIR   ?? DEFAULT_LIBRARY_ROOT,
     audiobooks: process.env.AUDIOBOOK_DIR ?? DEFAULT_AUDIOBOOK_ROOT,
     logs:       process.env.JOB_LOG_DIR   ?? DEFAULT_LOG_ROOT,
     tmp:        process.env.TMP_DIR       ?? DEFAULT_TMP_ROOT,
+    voices:     process.env.VOICES_DIR    ?? DEFAULT_VOICE_ROOT,
   };
+}
+
+/** Resolve symlinks in the portion of a path that already exists.
+ *
+ * `path.resolve()` alone does not stop `data/library/link -> /private`
+ * from escaping an allow-listed root. New output files may not exist yet,
+ * so walk up to the nearest existing ancestor, resolve that ancestor, then
+ * append the missing suffix again.
+ */
+function canonicalPath(candidate: string): string {
+  const absolute = path.resolve(candidate);
+  const missing: string[] = [];
+  let existing = absolute;
+
+  while (!fs.existsSync(existing)) {
+    const parent = path.dirname(existing);
+    if (parent === existing) break;
+    missing.unshift(path.basename(existing));
+    existing = parent;
+  }
+
+  try {
+    const real = fs.realpathSync.native(existing);
+    return path.resolve(real, ...missing);
+  } catch {
+    // Permission errors should not make a valid in-root path look outside;
+    // callers will still fail safely when they try to open the file.
+    return absolute;
+  }
 }
 
 /** Throw `SafePathError` if `candidate` resolves outside any of the
@@ -49,14 +91,14 @@ export function assertWithinRoots(
     throw new SafePathError('Path is empty or non-string');
   }
   // Normalise away `..`, `.`, and double slashes.
-  const normalised = path.resolve(candidate);
+  const normalised = canonicalPath(candidate);
   // Strip null bytes (some shells honour them; node doesn't, but be defensive).
   if (normalised.includes('\0')) {
     throw new SafePathError('Path contains a NUL byte');
   }
   // Make sure the candidate actually lives under one of the roots.
   for (const root of roots) {
-    const resolvedRoot = path.resolve(root);
+    const resolvedRoot = canonicalPath(root);
     // Allow the root itself (boundary) and anything beneath it.
     const rel = path.relative(resolvedRoot, normalised);
     if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) {
@@ -72,7 +114,15 @@ export function assertWithinRoots(
  *  of data roots. Returns the resolved safe path. */
 export function assertWithinDataRoot(candidate: string | null | undefined): string {
   const r = pathRoots();
-  return assertWithinRoots(candidate, [r.uploads, r.output, r.audiobooks, r.logs, r.tmp]);
+  return assertWithinRoots(candidate, [
+    r.uploads,
+    r.output,
+    r.library,
+    r.audiobooks,
+    r.logs,
+    r.tmp,
+    r.voices,
+  ]);
 }
 
 export class SafePathError extends Error {

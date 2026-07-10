@@ -23,7 +23,6 @@
 // share the same root cause).
 
 import { NextRequest, NextResponse } from 'next/server';
-import crypto from 'crypto';
 
 const TOKEN_HEADER = 'x-internal-token';
 
@@ -40,20 +39,20 @@ function isPathPublic(pathname: string): boolean {
   return false;
 }
 
-function safeEqual(a: string, b: string): boolean {
-  // crypto.timingSafeEqual requires equal-length buffers.
-  // Pad both sides to a fixed max length so a partial-token guess
-  // also takes ~the same time as a full-token guess.
-  const MAX = 512;
-  const bufA = Buffer.alloc(MAX);
-  const bufB = Buffer.alloc(MAX);
-  Buffer.from(a).copy(bufA);
-  Buffer.from(b).copy(bufB);
-  // Same-length compare, but also verify lengths match up-front (the
-  // timing-safe compare itself would early-out on length mismatch but
-  // we still leak length, which is fine since token length is public).
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(bufA, bufB);
+async function safeEqual(a: string, b: string): Promise<boolean> {
+  // Middleware runs in the Edge runtime, where Node's `crypto`/`Buffer`
+  // modules are unavailable. Compare fixed-length SHA-256 digests with a
+  // full byte sweep to retain constant-work token validation.
+  const encoder = new TextEncoder();
+  const [digestA, digestB] = await Promise.all([
+    crypto.subtle.digest('SHA-256', encoder.encode(a)),
+    crypto.subtle.digest('SHA-256', encoder.encode(b)),
+  ]);
+  const bytesA = new Uint8Array(digestA);
+  const bytesB = new Uint8Array(digestB);
+  let difference = a.length ^ b.length;
+  for (let i = 0; i < bytesA.length; i++) difference |= bytesA[i] ^ bytesB[i];
+  return difference === 0;
 }
 
 /** Return a 401 with a machine-readable error. The `WWW-Authenticate`
@@ -77,7 +76,7 @@ function unauthorized(reason: string): NextResponse {
   );
 }
 
-export function middleware(req: NextRequest): NextResponse {
+export async function middleware(req: NextRequest): Promise<NextResponse> {
   const expected = process.env.INTERNAL_API_TOKEN?.trim();
 
   // No token configured → service runs in open / local-only mode.
@@ -103,7 +102,7 @@ export function middleware(req: NextRequest): NextResponse {
     return unauthorized('Missing X-Internal-Token header');
   }
 
-  if (!safeEqual(provided, expected)) {
+  if (!(await safeEqual(provided, expected))) {
     // Log the failure (server-side only — nothing user-identifying here).
     // Use console.warn so it surfaces in Docker logs.
     console.warn(
