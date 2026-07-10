@@ -135,7 +135,42 @@ export default function SettingsPage() {
       const s = await res.json().catch(() => ({})) as Settings & { error?: string };
       if (!res.ok) throw new Error(s.error ?? `HTTP ${res.status}`);
       setSettings(s);
-      if (s.theme === 'light' || s.theme === 'dark' || s.theme === 'system') setTheme(s.theme);
+      // BUGFIX 2026-07-11: loading /settings was silently overriding the
+      // user's live theme choice. The provider paints the chrome based on
+      // localStorage; the server field was being applied UNCONDITIONALLY on
+      // mount, so navigating to /settings always re-resolved the stored
+      // theme on top of whatever the user had currently selected — often
+      // flipping dark→white (e.g. server says 'system' + OS prefers light).
+      //
+      // New rule: only adopt the server theme if
+      //   (a) this device has never set a localStorage theme — use the
+      //       server row as the seed, OR
+      //   (b) the server row matches the user's current local theme —
+      //       already-applied state, no-op at worst.
+      // We must NOT overwrite a live theme on every visit to /settings.
+      // The <input> onChange on the Appearance tab already calls
+      // `setAppTheme(next)` which stages for save AND applies immediately,
+      // so saves don't go through this path.
+      if (s.theme === 'light' || s.theme === 'dark' || s.theme === 'system') {
+        let stored: string | null = null;
+        try { stored = window.localStorage.getItem('theme'); } catch { /* private mode */ }
+        const hasUserPick = stored === 'light' || stored === 'dark' || stored === 'system';
+        if (!hasUserPick) {
+          // First run on this device — seed localStorage with the server value.
+          setTheme(s.theme);
+        } else if (stored !== s.theme) {
+          // User has a live local pick that disagrees with the server row
+          // (e.g. they explicitly chose 'dark' on this device even though
+          // the server is still 'system'). Update the SERVER to match the
+          // live client pick so future devices / sessions converge — but
+          // do NOT touch <html>; the client pick is already painted.
+          fetch('/api/settings', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ theme: stored }),
+          }).catch(() => { /* best-effort reconcile; ignore failures */ });
+        }
+      }
       setDirty(false);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
