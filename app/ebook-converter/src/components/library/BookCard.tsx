@@ -1,6 +1,6 @@
 'use client';
 // src/components/library/BookCard.tsx
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Download, Trash2, BookMarked, Tag, ImagePlus, Loader2, Sparkles, Pencil, Star, Heart, BookOpen, CheckCircle2, Clock } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -46,6 +46,16 @@ export function BookCard({ book: initialBook, onDelete, onUpdate, onEnhanced, co
   const [book, setBook] = useState(initialBook);
   const [deleting, setDeleting] = useState(false);
   const [coverKey, setCoverKey] = useState(0);
+  // BUGFIX 2026-07-11: when the parent's `book.coverPath` flips from
+  // null/old → new (e.g. after the user navigates back to the library
+  // page and the parent's cached list now reflects the freshly
+  // generated cover), bump coverKey so the <img> re-fetches. Without
+  // this, the BookCard mounts with coverKey=0 and the browser may serve
+  // the OLD cached response for the same ?v=0 URL — showing the SVG
+  // placeholder ("default cover") even though the DB has the new path.
+  useEffect(() => {
+    setCoverKey((k) => k + 1);
+  }, [book.coverPath]);
   const [generatingCover, setGeneratingCover] = useState(false);
   const [coverError, setCoverError] = useState(false);
   const [enhancing, setEnhancing] = useState(false);

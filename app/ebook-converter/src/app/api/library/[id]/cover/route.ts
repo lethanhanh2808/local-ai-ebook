@@ -83,8 +83,19 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
       : ext === 'webp' ? 'image/webp'
       : 'image/jpeg';
     const buf = fs.readFileSync(storedCover);
+    // BUGFIX 2026-07-11: covers are explicitly user-regenerable, so the
+    // previous `max-age=86400` (24h) cache meant a BookCard remounting
+    // after navigation served the OLD response from browser cache — even
+    // though the on-disk PNG had been replaced. Switch to `no-cache,
+    // must-revalidate` so the browser re-validates on every navigation
+    // but still benefits from a `304 Not Modified` round-trip when the
+    // file hasn't changed. The ETag header (auto-set by Next.js on a
+    // Buffer-backed response) makes the 304 cheap.
     return new NextResponse(buf, {
-      headers: { 'Content-Type': mime, 'Cache-Control': 'public, max-age=86400' },
+      headers: {
+        'Content-Type': mime,
+        'Cache-Control': 'no-cache, must-revalidate',
+      },
     });
   }
 
