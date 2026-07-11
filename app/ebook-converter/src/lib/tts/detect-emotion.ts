@@ -17,9 +17,16 @@
 // come back unchanged from base — only the label flips on. Linear
 // interpolation: speed_out = base + (target - base) * intensity.
 //
-// Some branches fall back on punctuation density (angry = many "!" ;
-// tense = many "…" / "..."). We synthesise a position from the LAST
-// occurrence of that punctuation when the threshold is met.
+// Some branches fall back on punctuation density (angry = many "!").
+// We synthesise a position from the LAST occurrence of that punctuation
+// when the threshold is met.
+//
+// NOTE (2026-07-11): the "tense = many … or ..." density fallback was
+// removed — ellipsis (`...` or `…`) is read by VieNeu as a natural
+// short pause already, and using it as an emotion trigger made every
+// trailing-thought paragraph sound "căng thẳng". `lastEllipsis` is
+// kept here only as a no-op so dependent callers (and the test cases)
+// don't need to change; the tense branch below no longer consults it.
 //
 // 💕 Romantic / tender: "nụ cười" / "mỉm cười" (a smile / gentle smile)
 // are intentionally OMITTED — they appear in narration all the time
@@ -88,11 +95,15 @@ export function detectEmotion(
 ): EmotionResult {
   const t = text.toLowerCase();
   const exclaims  = (text.match(/!/g) ?? []).length;
-  const ellipses  = (text.match(/\.\.\.|…/g) ?? []).length;
   const lerp = (base: number, target: number) => base + (target - base) * intensity;
 
   const lastExclaim   = exclaims >= 3 ? text.lastIndexOf('!')    : -1;
-  const lastEllipsis  = ellipses >= 2 ? Math.max(text.lastIndexOf('...'), text.lastIndexOf('…')) : -1;
+  // BUGFIX (2026-07-11): ellipsis used to inflate the "tense" branch via
+  // lastEllipsis — see the long comment at the top of this file. The
+  // tense branch below now keys off its keyword list only; the value
+  // here stays a no-op so any consumer reading tts-emotion traces is
+  // not surprised by a missing identifier.
+  const lastEllipsis = -1;
 
   const branches: Branch[] = [
     { label: 'hành động', emoji: '⚡', emotion: 'excited', speedMul: 1.22, noiseDelta: +0.26,
@@ -113,16 +124,13 @@ export function detectEmotion(
     { label: 'lãng mạn',   emoji: '💕', emotion: 'romantic',speedMul: 0.88, noiseDelta: -0.12,
       pos: lastIdxOf(t, /tim đập|yêu nhau|ngại ngùng|e thẹn|má đỏ|ôm lấy|vòng tay|ánh mắt ấm|nhìn nhau|yêu thương|đôi ta|nắm tay|hôn|hôn nhau|trao nhau|nụ hôn/g) },
     { label: 'căng thẳng', emoji: '😰', emotion: 'tense',   speedMul: 1.07, noiseDelta: +0.10,
-      // B2 fix (2026-07-08): same demotion story as the angry branch
-      // above. Punctuation-only ellipsis falls back here when no other
-      // keyword branch matched; otherwise the demotion block zeros this
-      // out so calm's "yên tĩnh" wins over the trailing "..." in
-      // "Anh ngồi yên tĩnh... chờ đợi.".
-      pos: (() => {
-        const kwPos = lastIdxOf(t, /nguy hiểm|căng thẳng|hồi hộp|bóng tối|im lặng đột|tiến lại|vây quanh|rùng mình|phục kích|kẻ địch xuất/g);
-        if (kwPos >= 0) return Math.max(kwPos, lastEllipsis);
-        return lastEllipsis;  // pure-punctuation fallback path
-      })() },
+      // BUGFIX (2026-07-11): ellipsis density is no longer a fallback
+      // — see the top-of-file comment. The tense branch now only
+      // matches against explicit tense keywords ("nguy hiểm",
+      // "căng thẳng", "rùng mình", etc.). Trailing "..." in prose now
+      // reads as a natural pause instead of forcing the voice into
+      // "căng thẳng".
+      pos: lastIdxOf(t, /nguy hiểm|căng thẳng|hồi hộp|bóng tối|im lặng đột|tiến lại|vây quanh|rùng mình|phục kích|kẻ địch xuất/g) },
     { label: 'bình yên',   emoji: '🍃', emotion: 'calm',    speedMul: 0.90, noiseDelta: -0.18,
       pos: lastIdxOf(t, /yên tĩnh|bình yên|thanh thản|nhẹ nhàng|thư thái|gió thổi nhẹ|ánh trăng|bình thản|thong thả|an bình/g) },
   ];
@@ -130,17 +138,22 @@ export function detectEmotion(
   let best = -1;
   let bestIdx = -1;
   // B2 fix (2026-07-08): if any NON-punctuation branch (action / sad /
-  // romantic / calm) matched a keyword, fully demote angry/tense to -1.
-  // Punctuation-only fallback still fires when nothing else matched
-  // (e.g. "Anh ta lặng lẽ… rồi bước đi…" → căng thẳng), but it loses to
-  // any real keyword hit ("Cô chạy nhanh lắm!!! ..." → action wins on
-  // "chạy", NOT angry on the trailing "!!! ").
+  // romantic / calm) matched a keyword, fully demote angry to -1.
+  // Punctuation-only "angry" fallback (many "!!!") still fires when
+  // nothing else matched, but it loses to any real keyword hit
+  // ("Cô chạy nhanh lắm!!! ..." → action wins on "chạy", NOT angry
+  // on the trailing "!!! ").
+  //
+  // BUGFIX (2026-07-11): tense is no longer in the punctuation-fallback
+  // set — see the top-of-file comment. It still gets demoted here
+  // because its position is always a keyword position now (so this is
+  // effectively a no-op for tense, but kept for symmetry in case a
+  // future branch adds a punctuation fallback).
   const anyKeywordMatched = branches.some(
-    (b, i) => b.pos >= 0 && i !== 1 /* angry */ && i !== 4 /* tense */,
+    (b, i) => b.pos >= 0 && i !== 1,  // angry demotion only now
   );
   if (anyKeywordMatched) {
     branches[1].pos = -1;  // angry demoted
-    branches[4].pos = -1;  // tense demoted
   }
   for (let i = 0; i < branches.length; i++) {
     if (branches[i].pos > bestIdx) {

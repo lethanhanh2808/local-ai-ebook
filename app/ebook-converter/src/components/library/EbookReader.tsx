@@ -5407,9 +5407,21 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
                 <AudiobookPanel bookId={bookId} />
               </Suspense>
             ) : abTab === 'voices' ? (
-              <VoicePanel bookId={bookId} bookLanguage="vi" section="voices" />
+              <VoicePanel
+                bookId={bookId}
+                bookLanguage="vi"
+                section="voices"
+                useCharacterVoice={ttsUseCharacterVoice}
+                setUseCharacterVoice={setTtsUseCharacterVoice}
+              />
             ) : (
-              <VoicePanel bookId={bookId} bookLanguage="vi" section="characters" />
+              <VoicePanel
+                bookId={bookId}
+                bookLanguage="vi"
+                section="characters"
+                useCharacterVoice={ttsUseCharacterVoice}
+                setUseCharacterVoice={setTtsUseCharacterVoice}
+              />
             )}
           </div>
         </aside>

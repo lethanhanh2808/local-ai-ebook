@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Plus, Mic, Trash2, Loader2, Volume2, Star, Square, Upload, X, Play, Sparkles,
+  User,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -51,9 +52,18 @@ interface Props {
   // component renders both today; the hint is kept for the upcoming
   // tab refactor (Phase 3 §3.2) and is safe to ignore for now.
   section?: 'voices' | 'characters';
+  // Read-aloud "TỰ ĐỘNG THEO NHÂN VẬT" toggle. When provided, the
+  // character section surfaces a BẬT/TẮT pill that mirrors the same
+  // state in the Read-aloud panel, so the two UIs stay in sync.
+  // Optional so the legacy callers (no toggle) keep working.
+  useCharacterVoice?: boolean;
+  setUseCharacterVoice?: (v: boolean) => void;
 }
 
-export function VoicePanel({ bookId, bookLanguage, section: _section }: Props) {
+export function VoicePanel({
+  bookId, bookLanguage, section: _section,
+  useCharacterVoice, setUseCharacterVoice,
+}: Props) {
   const toast = useToast();
   const [voices, setVoices] = useState<Voice[]>([]);
   const [characters, setCharacters] = useState<Character[]>([]);
@@ -482,43 +492,69 @@ export function VoicePanel({ bookId, bookLanguage, section: _section }: Props) {
       {/* Characters */}
       {characters.length > 0 && (
         <div className="pt-3 border-t border-border">
+          {/* Header mirrors ReadAloudPanel's "TỰ ĐỘNG THEO NHÂN VẬT" so the
+              two surfaces stay visually consistent — same uppercase
+              section title + optional BẬT pill that the slider panel
+              shows. The pill is rendered only when the parent supplies
+              a setter (EbookReader does; standalone callers don't). */}
           <div className="flex items-center justify-between mb-2 gap-2">
-            <h3 className="text-sm font-semibold shrink-0">Nhân vật ({characters.length})</h3>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={autoAssignVoices}
-              disabled={autoAssigning}
-              className="h-7 text-xs"
-              title="Dùng AI để gán giọng phù hợp cho từng nhân vật (chỉ áp dụng cho nhân vật chưa có giọng)"
-            >
-              {autoAssigning
-                ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Đang gán…</>
-                : <><Sparkles className="h-3 w-3 mr-1" />Gán giọng tự động</>}
-            </Button>
+            <h3 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
+              <User className="h-3 w-3" /> Tự động theo nhân vật ({characters.length})
+            </h3>
+            {setUseCharacterVoice && (
+              <button
+                onClick={() => setUseCharacterVoice(!useCharacterVoice)}
+                className={cn(
+                  'text-[10px] px-2 py-0.5 rounded font-medium',
+                  useCharacterVoice
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted text-muted-foreground',
+                )}
+              >
+                {useCharacterVoice ? 'BẬT' : 'TẮT'}
+              </button>
+            )}
           </div>
           <p className="text-[10px] text-muted-foreground mb-2">
             Gán giọng cho từng nhân vật để khi đọc audio sẽ dùng đúng giọng.
           </p>
+
           {autoAssignMsg && (
             <p className="text-[10px] text-green-600 dark:text-green-400 mb-2 px-2 py-1 rounded bg-green-50 dark:bg-green-950/30">
               {autoAssignMsg}
             </p>
           )}
-          <div className="space-y-1.5">
+
+          {/* AI auto-assign — moved into a full-width secondary button below
+              the description so the section header stays a clean label. */}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={autoAssignVoices}
+            disabled={autoAssigning}
+            className="h-7 text-xs mb-2 w-full"
+            title="Dùng AI để gán giọng phù hợp cho từng nhân vật (chỉ áp dụng cho nhân vật chưa có giọng)"
+          >
+            {autoAssigning
+              ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Đang gán…</>
+              : <><Sparkles className="h-3 w-3 mr-1" />Gán giọng tự động</>}
+          </Button>
+
+          <div className="space-y-1">
             {characters.map((c) => {
               const previewing = previewingChar === c.id;
               const assignedVoiceName = resolveVoiceName(c);
               // Show preview button whenever a voice is assigned (built-in OR custom)
               const hasAssignedVoice = !!assignedVoiceName;
               return (
-                <div key={c.id} className="flex items-center gap-2 px-3 py-2">
-                  <p className="text-sm font-medium flex-1 truncate">{c.name}</p>
+                <div key={c.id} className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/30">
+                  <User className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <p className="text-[11px] font-medium flex-1 truncate">{c.name}</p>
                   {hasAssignedVoice && (
                     <button
                       onClick={() => previewing ? stopCharPreview() : previewCharacter(c)}
                       className={cn(
-                        'flex items-center justify-center w-7 h-7 rounded border border-border transition-colors shrink-0',
+                        'flex items-center justify-center w-6 h-6 rounded border border-border transition-colors shrink-0',
                         previewing
                           ? 'bg-primary text-primary-foreground border-primary'
                           : 'border-border hover:bg-muted',
