@@ -229,7 +229,11 @@ def _run_detection(sample_blob: str, scope: str) -> dict:
     data = _parse_json_anywhere(raw)
 
     if "characters" not in data or not isinstance(data.get("characters"), list):
-        # Fallback: regex-extract character names from the raw text + infer metadata
+        # Fallback: regex-extract character names from the raw text + infer metadata.
+        # BUGFIX 2026-07-11: tag the result with `source = "regex-fallback"`
+        # so the UI can warn the user that the LLM path produced nothing
+        # parseable. Without this tag the user sees "9 nhân vật" with garbage
+        # names and no clue why.
         names = _regex_extract_names(raw)
         if names:
             meta = _extract_metadata_from_prose(raw, names)
@@ -248,6 +252,7 @@ def _run_detection(sample_blob: str, scope: str) -> dict:
                 "language": "vi",
                 "total_dialogue_lines": 0,
                 "summary": f"Fallback regex extraction ({len(names)} names from {scope}).",
+                "source": "regex-fallback",
             }
         else:
             return {
@@ -255,6 +260,7 @@ def _run_detection(sample_blob: str, scope: str) -> dict:
                 "language": "unknown", "narrator_gender_hint": "unknown",
                 "summary": f"Detection failed: could not parse JSON or names from {scope}. Raw: {raw[:300]}",
                 "raw": raw[:2000],
+                "source": "failed",
             }
 
     # Ensure each character has the required fields
@@ -308,13 +314,20 @@ def _run_detection(sample_blob: str, scope: str) -> dict:
     # version as primary.
     if cleaned and _HAS_VI_G2P:
         cleaned = _merge_duplicate_characters(cleaned)
+        # BUGFIX 2026-07-11: substring aliasing ("Đằng Ưu Nhi" ↔
+        # "Y Đằng Ưu Nhi"). The canonical merge above only catches exact
+        # and diacritic-equivalent names; substring matches slip through.
+        cleaned = _merge_substring_aliases(cleaned)
 
+    # BUGFIX 2026-07-11: source defaults to "omlx" (the happy path). The
+    # fallback branch above sets it explicitly.
     return {
         "characters": cleaned,
         "narrator_gender_hint": data.get("narrator_gender_hint", "unknown"),
         "language": data.get("language", "vi"),
         "total_dialogue_lines": _safe_nonnegative_int(data.get("total_dialogue_lines")),
         "summary": str(data.get("summary", ""))[:500],
+        "source": data.get("source", "omlx"),
     }
 
 
@@ -457,6 +470,101 @@ def _merge_duplicate_characters(characters: list[dict]) -> list[dict]:
     return merged
 
 
+def _merge_substring_aliases(characters: list[dict]) -> list[dict]:
+    """Collapse names where one is a strict word-subset of another.
+
+    Catches the Vietnamese pattern "Y Đằng Ưu Nhi" vs "Đằng Ưu Nhi" — both
+    refer to the same person; the longer form should win and the shorter
+    should fold into `aliases`. The canonical-name merge above only handles
+    exact + diacritic-equivalent matches, so it misses these.
+
+    Anchored to the word set, not substring-of-string: "Ưu Nhi" ↔
+    "Y Đằng Ưu Nhi" merges, but "Thiếu" ↔ "Nhâm Thiếu Hoài" does not
+    because "Thiếu" alone has too few words to be a stable primary name.
+
+    Keeps the longer name (more complete) as primary, folds the rest.
+    """
+    if not characters:
+        return characters
+
+    def _word_set(name: str) -> set[str]:
+        canon = _vi_canonical(name or "")
+        if not canon:
+            return set()
+        return set(canon.split())
+
+    n = len(characters)
+    parent = list(range(n))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(i: int, j: int) -> None:
+        ri, rj = find(i), find(j)
+        if ri != rj:
+            parent[ri] = rj
+
+    # Cluster: pair (i, j) iff one word-set is a strict subset of the other.
+    # Refuse to merge single-word names — too ambiguous.
+    for i, ci in enumerate(characters):
+        wi = _word_set(ci.get("name", ""))
+        if len(wi) < 2:
+            continue
+        for j in range(i + 1, n):
+            cj = characters[j]
+            wj = _word_set(cj.get("name", ""))
+            if len(wj) < 2:
+                continue
+            if wi == wj:
+                continue
+            smaller, larger = (wj, wi) if len(wj) < len(wi) else (wi, wj)
+            if smaller.issubset(larger):
+                union(i, j)
+
+    clusters: dict[int, list[int]] = {}
+    for idx in range(n):
+        clusters.setdefault(find(idx), []).append(idx)
+
+    merged: list[dict] = []
+    for members in clusters.values():
+        if len(members) == 1:
+            merged.append(characters[members[0]])
+            continue
+        # Pick primary: longest name (most complete), then largest lines_estimate.
+        primary = max(
+            (characters[m] for m in members),
+            key=lambda c: (len(c.get("name", "")), _safe_nonnegative_int(c.get("lines_estimate"))),
+        )
+        aliases: list[str] = []
+        for m in members:
+            other = characters[m].get("name", "")
+            if other and other != primary["name"] and other not in aliases:
+                aliases.append(other)
+            for a in characters[m].get("aliases", []) or []:
+                if a and a != primary["name"] and a not in aliases:
+                    aliases.append(a)
+        primary["aliases"] = aliases[:8]
+        # Union sample_lines (dedup, cap at 2).
+        seen_lines: set[str] = set()
+        merged_lines: list[str] = []
+        for m in members:
+            for s in characters[m].get("sample_lines", []) or []:
+                if s and s not in seen_lines:
+                    seen_lines.add(s)
+                    merged_lines.append(s)
+                    if len(merged_lines) >= 2:
+                        break
+            if len(merged_lines) >= 2:
+                break
+        primary["sample_lines"] = merged_lines
+        merged.append(primary)
+
+    return merged
+
+
 # Stop-words / phrases that frequently appear in oMLX thinking but are not character names.
 _NAME_SKIP = {
     "The", "This", "That", "These", "Those", "Chapter", "Excerpt", "Excerpts",
@@ -498,10 +606,52 @@ def _is_valid_name(name: str) -> bool:
     # All parts must start with uppercase (Vietnamian names)
     if not all(p[0].isupper() for p in parts):
         return False
+    # BUGFIX 2026-07-11: every part must look Vietnamese (have diacritics) OR
+    # be a short non-prose chunk. A pure-ASCII word like "Actually" signals
+    # reasoning prose \u2014 "Actually Nh\u00E2m Thi\u1EBFu Ho\u00E0i" should not pass.
+    # Single-letter initials ("Y") are accepted as Vietnamese family-name
+    # initials. Romanized Vietnamese syllables without diacritics (e.g. "Nhi",
+    # "Thieu") are accepted ONLY if the whole name is multi-part and at least
+    # one part already carries a Vietnamese diacritic \u2014 otherwise we can't
+    # tell romanized-Vietnamese apart from English prose.
+    has_dia = any(re.search(r"[\u00C0-\u1EF9\u1E00-\u1EFF]", p) for p in parts)
+    for p in parts:
+        if re.search(r"[\u00C0-\u1EF9\u1E00-\u1EFF]", p):
+            continue
+        if len(p) == 1 and p.isupper():
+            continue  # Vietnamese single-letter initial
+        if (2 <= len(p) <= 8) and not re.fullmatch(r"[A-Za-z]+", p):
+            continue  # short non-prose chunk
+        # Pure ASCII Latin word \u2014 must be diacritic-free romanized VN,
+        # only acceptable when the overall name has diacritics elsewhere.
+        if re.fullmatch(r"[A-Za-z]+", p) and has_dia and 2 <= len(p) <= 8:
+            continue
+        return False
     # Must look Vietnamese (have diacritics) OR be a typical Chinese-origin name
     # (no diacritics but each part 2-8 chars)
     has_diacritics = any("\u00C0" <= c <= "\u1EF9" or "\u0300" <= c <= "\u036f" for c in name)
     return has_diacritics or all(2 <= len(p) <= 8 for p in parts)
+
+
+# Country names that frequently appear in Vietnamese novel prose but are
+# NEVER character names. When the regex fallback runs on LLM reasoning it
+# often pulls these out as multi-word capitalized phrases. Without this
+# blocklist "Nh\u1EADt B\u1EA3n" / "Trung Qu\u1ED1c" sneak through as suggestions.
+_COUNTRY_BLACKLIST = {
+    "Nh\u1EADt B\u1EA3n", "Trung Qu\u1ED1c", "Vi\u1EC7t Nam", "H\u00E0n Qu\u1ED1c", "M\u1EF9", "Anh",
+    "Ph\u00E1p", "\u0110\u1EE9c", "Nga", "Th\u00E1i Lan", "Singapore", "\u00DAc", "Canada",
+    "\u0110\u00E0i Loan", "H\u1ED3ng K\u00F4ng", "Qu\u1EA3ng \u0110\u00F4ng", "B\u1EAFc Kinh", "Th\u01B0\u1EE3ng H\u1EA3i",
+}
+
+# Honorific-only or title-only "names" \u2014 the LLM sometimes lists these
+# alone in its reasoning prose, which the regex captures. They're not
+# character names on their own (e.g. "Th\u00E1i H\u1EADu" = Empress Dowager).
+_TITLE_ONLY = {
+    "Th\u00E1i H\u1EADu", "Ho\u00E0ng H\u1EADu", "Th\u00E1i T\u1EED", "Ho\u00E0ng Th\u01B0\u1EE3ng", "Qu\u1ED1c V\u01B0\u01A1ng",
+    "Ho\u00E0ng T\u1EED", "\u0110\u1EA1i V\u01B0\u01A1ng", "Ti\u00EAn T\u1EED", "Thi\u00EAn H\u1EA1",
+    "\u00D4ng N\u1ED9i", "B\u00E0 N\u1ED9i", "\u00D4ng Ngo\u1EA1i", "B\u00E0 Ngo\u1EA1i",
+    "M\u1EB9 Ch\u1ED3ng", "M\u1EB9 V\u1EE3", "B\u1ED1 Ch\u1ED3ng", "B\u1ED1 V\u1EE3",
+}
 
 
 def _regex_extract_names(raw: str) -> list[str]:
@@ -509,13 +659,21 @@ def _regex_extract_names(raw: str) -> list[str]:
     Fallback extractor: pull capitalized Vietnamese multi-word names from the
     reasoning prose. Filter aggressively to remove thinking artifacts.
     """
-    pattern = r"\b[A-Z\u00C0-\u1EF9][\u00C0-\u1EF9a-z]{1,15}(?:\s+[A-Z\u00C0-\u1EF9][\u00C0-\u1EF9a-z]{1,15}){1,4}\b"
+    # First word: either a single uppercase Latin letter (Vietnamese initial
+    # like "Y") OR a normal Latin/Vietnamese capitalized word. Subsequent
+    # words: full Vietnamese range. Spaces only \u2014 newlines mean we're past
+    # the name.
+    pattern = r"\b(?:[A-Z]|[A-Z\u00C0-\u1EF9][\u00C0-\u1EF9a-z]{1,15})(?:[ ][A-Z\u00C0-\u1EF9][\u00C0-\u1EF9a-z]{1,15}){1,4}\b"
     found = re.findall(pattern, raw)
     seen = set()
     out = []
     for name in found:
         if not _is_valid_name(name): continue
         if name in seen: continue
+        # BUGFIX 2026-07-11: country names are NEVER characters.
+        if name in _COUNTRY_BLACKLIST: continue
+        # BUGFIX 2026-07-11: titles alone ("Thái Hậu") are not character names.
+        if name in _TITLE_ONLY: continue
         seen.add(name)
         out.append(name)
     return out
@@ -549,7 +707,12 @@ def _extract_metadata_from_prose(raw: str, names: list[str]) -> dict:
                 # Sample lines: any quoted phrase right after the name in the same sentence
                 quote = re.search(r"[\"“][^\"”]{5,80}[\"”]", nearby)
                 if quote and len(result[n]["sample_lines"]) < 1:
-                    result[n]["sample_lines"].append(quote.group(0))
+                    inner = quote.group(0)[1:-1].strip()
+                    # BUGFIX 2026-07-11: reject single-word "quotes" — those are
+                    # aliases the LLM is citing, not character dialogue
+                    # (produced bare-quote strings like '"Thiếu Hoài"').
+                    if inner and not re.fullmatch(r"[A-ZÀ-ỹ][À-ỹa-z]+(\s+[A-ZÀ-ỹ][À-ỹa-z]+){0,2}", inner):
+                        result[n]["sample_lines"].append(inner[:240])
                 break
     return result
 

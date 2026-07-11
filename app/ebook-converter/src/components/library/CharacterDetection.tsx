@@ -35,6 +35,11 @@ interface DetectionResult {
   total_dialogue_lines: number;
   characters: DetectedCharacter[];
   available_voices: Array<{ id: string; gender: string; tone: string; desc: string }>;
+  /** BUGFIX 2026-07-11: surfaces whether the LLM returned clean JSON
+   *  or whether the regex fallback path fired (typically because the
+   *  Settings.aiModel is invalid for the running oMLX server). */
+  source?: 'omlx' | 'regex-fallback' | 'failed';
+  warning?: string;
 }
 
 interface ExistingCharacter {
@@ -231,6 +236,14 @@ export function CharacterDetection({ bookId, existingCharacters, onApplied }: Pr
               <div className="text-xs text-muted-foreground">
                 <strong className="text-foreground">{result.characters.length}</strong> nhân vật được phát hiện
                 {result.language && <span className="ml-2">· ngôn ngữ: <strong className="text-foreground">{result.language}</strong></span>}
+                {result.source && result.source !== 'omlx' && (
+                  <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-[10px] font-medium">
+                    ⚠ {result.source === 'failed' ? 'LLM thất bại' : 'regex fallback'}
+                  </span>
+                )}
+                {result.warning && (
+                  <span className="block mt-1 italic text-amber-700">{result.warning}</span>
+                )}
                 {result.summary && <span className="ml-2 block mt-1 italic">{result.summary}</span>}
               </div>
               {picked.size > 0 && (

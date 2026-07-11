@@ -263,6 +263,14 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     };
   }).filter((s: any) => s.name);
 
+  // BUGFIX 2026-07-11: surface the detection source so the UI can warn
+  // when the regex fallback fired (caused by an invalid aiModel in
+  // /settings, or any other LLM JSON-parse failure).
+  const source = (result.source ?? 'omlx') as 'omlx' | 'regex-fallback' | 'failed';
+  const warning = source !== 'omlx'
+    ? 'LLM không trả về danh sách nhân vật hợp lệ — kiểm tra aiModel trong /settings hoặc thử lại.'
+    : undefined;
+
   return NextResponse.json({
     language: result.language ?? 'vi',
     summary: result.summary ?? '',
@@ -270,5 +278,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     total_dialogue_lines: Number(result.total_dialogue_lines ?? 0),
     characters: suggestions,
     available_voices: VIENEU_VOICES,
+    source,
+    warning,
   });
 }
