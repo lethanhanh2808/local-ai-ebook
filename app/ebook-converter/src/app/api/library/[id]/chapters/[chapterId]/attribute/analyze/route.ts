@@ -62,17 +62,78 @@ export const maxDuration = 300;
 // ── oMLX preflight probe ─────────────────────────────────────────────────
 // Cheap "are you alive?" call. If it fails, we skip the LLM step entirely
 // rather than burning 80 × 90s on a known-down provider.
+//
+// BUGFIX 2026-07-11: retry up to 2x with exponential backoff before bailing.
+// The single-attempt probe was producing false negatives when oMLX took a
+// few seconds to warm up its first inference (the keepalive chunk confused
+// streaming parses on cold start, and short-lived HTTP hiccups were
+// confused for outages). 2 retries × 1s/2s backoff catches transient
+// flakes without burning the user-visible 90s batch timeout budget.
 async function omlxPreflight(): Promise<boolean> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const text = await chat({
+        messages: [{ role: 'user', content: 'ok' }],
+        max_tokens: 4,
+        enable_thinking: false,
+        timeoutMs: 15_000,
+      });
+      // Accept any non-thrown response — empty string counts as "reachable"
+      // (model is alive, just gave us nothing) so the LLM batch step can
+      // surface the real failure mode per-batch instead of bailing pre-flight.
+      if (typeof text === 'string') return true;
+    } catch {
+      // fall through to retry
+    }
+    // Backoff before retry: 1s, 2s. No backoff after the final attempt.
+    if (attempt < 2) {
+      await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+    }
+  }
+  return false;
+}
+
+// ── LLM-first roster extraction ──────────────────────────────────────────
+// When the user clicks "Full Analyzer" with an empty character roster, we
+// can't run speaker attribution against `knownNames === []`. Rather than
+// bail and tell the user to run "Phân tích nhân vật" separately, we run
+// the LLM-first detector inline first (5-10 min for a full book) and then
+// proceed with attribution. The detector result is persisted into the
+// `Character` table via the same centralized voice-selector path the
+// detection page uses.
+async function autoExtractRoster(
+  bookId: string,
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  log: (controller: ReadableStreamDefaultController<Uint8Array>, line: string, phase: 'init' | 'parse' | 'regex' | 'local' | 'preflight' | 'llm' | 'fuse' | 'cache' | 'stat' | 'error', extra?: { meta?: unknown }) => void,
+): Promise<{ ok: boolean; charactersAdded: number; reason?: string }> {
   try {
-    const text = await chat({
-      messages: [{ role: 'user', content: 'ok' }],
-      max_tokens: 4,
-      enable_thinking: false,
-      timeoutMs: 15_000,
+    log(controller, 'Roster trống — chạy LLM-first detector để extract nhân vật...', 'init');
+    // Delegate to the same detection route the UI uses. This goes through
+    // the Python character_detector.py (3-stage pipeline once we ship the
+    // LLM-first rewrite) and persists to the Character table.
+    const origin = process.env.NEXTAUTH_URL || 'http://127.0.0.1:3100';
+    const r = await fetch(`${origin}/api/library/${bookId}/characters/detect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ autoApply: true }),  // persist immediately
     });
-    return typeof text === 'string';
-  } catch {
-    return false;
+    if (!r.ok) {
+      const detail = await r.text().catch(() => '');
+      log(controller, `Detector thất bại (HTTP ${r.status}) — sẽ tiếp tục attribution với roster rỗng`, 'error',
+        { meta: { detectorStatus: r.status, detectorBody: detail.slice(0, 300) } });
+      return { ok: false, charactersAdded: 0, reason: `HTTP ${r.status}` };
+    }
+    const data = await r.json() as { inserted?: number; source?: string };
+    const source = data.source ?? 'unknown';
+    log(controller,
+      `Detector hoàn tất (source=${source}, inserted=${data.inserted ?? 0}). Tiếp tục attribution...`,
+      'init',
+      { meta: { detectorInserted: data.inserted ?? 0, detectorSource: source } });
+    return { ok: true, charactersAdded: data.inserted ?? 0 };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    log(controller, `Detector lỗi — ${msg}`, 'error', { meta: { detectorError: msg } });
+    return { ok: false, charactersAdded: 0, reason: msg };
   }
 }
 
@@ -93,6 +154,12 @@ export async function POST(
   const mode = rawBody.mode === 'full-llm' || rawBody.mode === 'local-only'
     ? rawBody.mode
     : 'combine';
+  // BUGFIX 2026-07-11: when the caller didn't specify a mode explicitly,
+  // 'combine' is the default — but with an empty roster the LLM step would
+  // bail before doing anything useful. Treat the default as 'full-llm' when
+  // the roster is empty so we auto-extract and continue. Local-only mode
+  // stays strictly local (no roster extraction).
+  const callerChoseMode = typeof rawBody.mode === 'string';
 
   const t0 = Date.now();
   const encoder = new TextEncoder();
@@ -167,13 +234,13 @@ export async function POST(
         let mtime = 0;
         try { mtime = Math.floor(fs.statSync(filePath).mtimeMs); } catch { /* keep 0 */ }
 
-        const chars = await listCharacters(params.id);
-        const knownNames = chars.flatMap((c) => [c.name, ...(c.aliases ?? [])]);
+        let chars = await listCharacters(params.id);
+        let knownNames = chars.flatMap((c) => [c.name, ...(c.aliases ?? [])]);
         const genderByChar = buildGenderByChar(
           chars.map((c) => ({ name: c.name, aliases: c.aliases ?? [], gender: c.gender ?? null })),
         );
         const paragraphs = sliceParagraphs(html);
-        const characterContext = chars.map((c) => ({
+        let characterContext = chars.map((c) => ({
           name: c.name,
           aliases: c.aliases ?? [],
           gender: c.gender ?? null,
@@ -212,6 +279,33 @@ export async function POST(
         let llmRequested = 0;
         let llmDurationMs = 0;
         let omlxReachable = false;
+        // BUGFIX 2026-07-11: when the roster is empty AND the caller didn't
+        // pin us to local-only, run the LLM-first detector inline first so
+        // the user gets a working pipeline on a single click instead of
+        // having to click "Phân tích nhân vật" and then re-click Full Analyzer.
+        if (mode !== 'local-only' && knownNames.length === 0) {
+          const extracted = await autoExtractRoster(params.id, controller, log);
+          if (extracted.ok && extracted.charactersAdded > 0) {
+            // Re-load the roster — now non-empty.
+            const freshChars = await listCharacters(params.id);
+            chars = freshChars;
+            knownNames = freshChars.flatMap((c) => [c.name, ...(c.aliases ?? [])]);
+            characterContext = freshChars.map((c) => ({
+              name: c.name,
+              aliases: c.aliases ?? [],
+              gender: c.gender ?? null,
+            }));
+            log(controller,
+              `Roster populated: ${knownNames.length} names — tiếp tục attribution`,
+              'init',
+              { meta: { rosterSize: knownNames.length } });
+          } else {
+            log(controller,
+              'Detector không thêm nhân vật nào — chạy attribution với roster rỗng, regex layer sẽ chỉ match quoted speakers không tên',
+              'llm',
+              { meta: { skipped: 'no-characters-after-detect', reason: extracted.reason ?? 'unknown' } });
+          }
+        }
 
         // Decide whether the LLM layer has anything to do BEFORE we burn a
         // preflight ping on oMLX. Three reasons to skip, each surfacing a
@@ -222,12 +316,6 @@ export async function POST(
         //   3. no character roster — the LLM cannot validate speaker names
         //      against a roster of knownNames, so its answers would be
         //      discarded by validateLLMRow anyway.
-        // BUGFIX 2026-07-11: previously these were folded into a single
-        // "không có đoạn nào chưa gán — bỏ qua" log line, which was
-        // misleading when the real cause was an empty character DB. The
-        // user case: every paragraph was unresolved (238/238) yet the LLM
-        // still skipped silently with no hint to run "Phân tích nhân vật".
-        // Now each branch logs the exact reason.
         const unresolved = paragraphs
           .filter((p) => !localBaseline[p.index]?.speaker)
           .map((p) => p.index);

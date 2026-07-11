@@ -8,10 +8,13 @@ import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 import { getBook } from '@/lib/db/books';
-import { listCharacters, upsertCharacters, listVoices } from '@/lib/db/voices';
+import { listCharacters, upsertCharacters, listVoices, createVoice } from '@/lib/db/voices';
 import { pickBestBuiltInVoice, VIENEU_PROFILES } from '@/lib/ai/voice-selector';
 import { g2pMatch } from '@/lib/vi-text-qa';
 import { resolveBookPath } from '@/lib/storage';
+import { BUILTIN_VIENEU_NAMES } from '@/lib/tts/vieneu-voices';
+
+const BUILTIN_VIENEU = new Set(BUILTIN_VIENEU_NAMES);
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -199,6 +202,15 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     return NextResponse.json({ error: 'Book file missing on disk' }, { status: 404 });
   }
 
+  // BUGFIX 2026-07-11: Full Analyzer calls us with { autoApply: true } to
+  // skip the UI's character-review step. We run detection then persist the
+  // suggestions straight into the Character table using the same voice-name
+  // resolution as the manual apply path. The response carries the inserted
+  // count so the caller knows whether the auto-roster step produced anything
+  // useful before it tries speaker attribution.
+  const body = await req.json().catch(() => ({})) as { autoApply?: boolean };
+  const autoApply = body.autoApply === true;
+
   let result: any;
   try {
     result = await runDetector(bookPath, req.signal);
@@ -271,6 +283,70 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     ? 'LLM không trả về danh sách nhân vật hợp lệ — kiểm tra aiModel trong /settings hoặc thử lại.'
     : undefined;
 
+  // ── BUGFIX 2026-07-11: auto-apply path ─────────────────────────────────
+  // Full Analyzer calls us with { autoApply: true } when the user clicks
+  // "Full LLM" against a book with an empty roster. Without persistence,
+  // autoExtractRoster in analyze/route.ts would have nothing to load and
+  // speaker attribution would still bail with "0 names". Mirror the manual
+  // apply path: resolve suggested_voice names → voiceId, skip rows already
+  // in the roster, then upsert. Returns `inserted` so the caller knows the
+  // auto-roster step was worth running.
+  let inserted = 0;
+  if (autoApply && suggestions.length > 0) {
+    try {
+      const voiceByName = new Map(voices.map((v) => [v.name, v]));
+      const toUpsert: Array<{
+        name: string;
+        aliases: string[];
+        voiceId?: string | null;
+        role: string;
+        age?: string | null;
+        gender?: string | null;
+        tone?: string | null;
+      }> = [];
+      for (const s of suggestions) {
+        if (s.already_in_db) continue;  // skip dupes
+        let voiceId: string | null = null;
+        if (s.suggested_voice && BUILTIN_VIENEU.has(s.suggested_voice)) {
+          let v = voiceByName.get(s.suggested_voice);
+          if (!v) {
+            v = await createVoice({
+              bookId: params.id,
+              name: s.suggested_voice,
+              description: `Built-in VieNeu voice: ${s.suggested_voice}`,
+              refAudioPath: '',
+              language: 'vi',
+              isDefault: false,
+              kind: 'character',
+              builtinName: s.suggested_voice,
+              defaultEmotion: s.tone && s.tone !== 'unknown' ? s.tone : undefined,
+            });
+            voiceByName.set(s.suggested_voice, v);
+          }
+          voiceId = v.id;
+        }
+        toUpsert.push({
+          name: s.name.slice(0, 120),
+          aliases: (s.aliases ?? []).slice(0, 30),
+          voiceId,
+          role: s.role ?? 'supporting',
+          age: s.age ?? null,
+          gender: s.gender ?? null,
+          tone: s.tone ?? null,
+        });
+      }
+      if (toUpsert.length > 0) {
+        const created = await upsertCharacters(params.id, toUpsert);
+        inserted = created.length;
+        console.log(`[characters/detect] autoApply: persisted ${inserted} characters for book ${params.id}`);
+      }
+    } catch (e) {
+      console.error('[characters/detect] autoApply failed:', e);
+      // Don't fail the whole response — the caller can still see suggestions
+      // and try again manually. Just log.
+    }
+  }
+
   return NextResponse.json({
     language: result.language ?? 'vi',
     summary: result.summary ?? '',
@@ -280,5 +356,6 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     available_voices: VIENEU_VOICES,
     source,
     warning,
+    ...(autoApply ? { inserted } : {}),
   });
 }
