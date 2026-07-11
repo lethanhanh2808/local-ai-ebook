@@ -1606,6 +1606,35 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   const [previewingVoice, setPreviewingVoice] = useState<string | null>(null);
   const voicePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
 
+  // ── On-the-fly TTS settings (BUGFIX 2026-07-11) ───────────────────────
+  // Mirrors of the read-aloud sliders/toggles, kept in sync via dedicated
+  // useEffects below. They let async paths (prefetch, warmUp, the race-
+  // safety generation check inside prefetchParagraph) read the *live*
+  // slider value without re-rendering or capturing stale closures.
+  //
+  // Why each one:
+  //   - ttsSpeedRef:        drive the playbackRate live-apply effect
+  //                         + belt-and-suspenders re-apply after .play()
+  //   - ttsNoiseRef:        read inside warmUpNextAudio's detectEmotion call
+  //   - ttsUseAIRef:        same — branches the detectEmotion path
+  //   - ttsContinuousPlayRef: read inside pregenerateChapter race check
+  //                            (parity with ttsSpeedRef etc.)
+  //   - ttsParagraphGapRef: captured in the gap setTimeout so the next
+  //                         paragraph's gap reflects the latest slider value
+  //                         even if the gap-timer effect fires mid-clip
+  //   - gapTimerRef:        handle to the in-flight paragraph-gap setTimeout
+  //                         so we can cancel it on slider drag / stopTts
+  //   - ttsSettingsGenRef:  bumped on noise/emotion/useAI change so stale
+  //                         in-flight prefetches can self-evict from the
+  //                         cache (mirrors the ttsVoiceGenRef pattern at 1589)
+  const ttsSpeedRef          = useRef(1.0);
+  const ttsNoiseRef          = useRef(0.667);
+  const ttsUseAIRef          = useRef(false);
+  const ttsContinuousPlayRef = useRef(false);
+  const ttsParagraphGapRef   = useRef(0);
+  const gapTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ttsSettingsGenRef    = useRef(0);
+
   // detectEmotion() is defined in `src/lib/tts/detect-emotion.ts` — pure
   // function, no React, unit-tested in src/tests/detect-emotion.test.ts.
 
@@ -1668,6 +1697,101 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       });
     }
   }, [ttsVoice]);
+
+  // ── On-the-fly read-aloud settings (BUGFIX 2026-07-11) ────────────────
+  // These effects turn the read-aloud sliders into true live knobs. Speed
+  // is the headline: applied directly to the playing audio element so the
+  // user hears the change instantly with no fetch. Expressiveness / emotion
+  // intensity / AI-emotion toggle are baked into the synthesized blob, so
+  // the currently-playing clip stays at its synthesized values (no audible
+  // blip) but the lookahead prefetch + pre-decoded next buffer are dropped
+  // and re-warmed with the new params at the natural paragraph boundary.
+
+  // Speed: push playbackRate to the playing element AND the preloaded next
+  // element. No fetch — the synthesized blob is at the voice's intrinsic
+  // rate (route.ts:199 falls back to voiceSpeed when body.speed is absent),
+  // and the slider value is layered on top via playbackRate. Mirrors the
+  // AudiobookPlayer pattern (AudiobookPlayer.tsx:175/186).
+  useEffect(() => {
+    ttsSpeedRef.current = ttsSpeed;
+    const audio = audioRef.current;
+    if (audio) audio.playbackRate = ttsSpeed;
+    const next = nextAudioBufferRef.current?.audio;
+    if (next) next.playbackRate = ttsSpeed;
+    ttsDebug('ttsSpeed changed — applied to live audio', { speed: ttsSpeed });
+  }, [ttsSpeed]);
+
+  // Noise / emotionIntensity / useAIEmotion: invalidate lookahead prefetch
+  // for the current chapter + drop the pre-decoded next buffer + re-warm
+  // with the new params. The currently-playing clip is left untouched so
+  // there's no audible blip; the lookahead catches up over ~5 paragraphs.
+  // Bumping ttsSettingsGenRef also causes any in-flight prefetch to evict
+  // itself from the cache (see the gen check inside prefetchParagraph).
+  useEffect(() => {
+    ttsNoiseRef.current            = ttsNoise;
+    ttsUseAIRef.current            = ttsUseAI;
+    ttsEmotionIntensityRef.current = ttsEmotionIntensity;
+    ttsSettingsGenRef.current     += 1;
+
+    const ch = currentChapterRef.current;
+    if (!ch) return;
+    const paras = chapterParagraphsRef.current.get(ch.id);
+    if (!paras || ttsIndex >= paras.length) return;
+
+    // Drop the pre-decoded next paragraph — it was baked with old params.
+    const nextBuf = nextAudioBufferRef.current;
+    if (nextBuf && nextBuf.idx === ttsIndex + 1 && nextBuf.chapterId === ch.id) {
+      clearNextAudioBuffer();
+    }
+    // Fire-and-forget re-warm with NEW noise / emotion / useAI / intensity.
+    // warmUpNextAudio internally calls detectEmotion(...) which reads the
+    // refs above, so the new blob is built with current slider values.
+    void warmUpNextAudio(ch.id, paras, ttsIndex + 1);
+    ttsDebug('emotion/noise changed — lookahead re-warmed', {
+      noise: ttsNoise, emotionIntensity: ttsEmotionIntensity, useAI: ttsUseAI,
+      gen: ttsSettingsGenRef.current,
+    });
+  }, [ttsNoise, ttsEmotionIntensity, ttsUseAI]);
+
+  // Continuous-play kick-off: fire next-chapter pregen when the user
+  // toggles ON mid-chapter (today this only happens at startTts line 3620).
+  // Without this, toggling continuous-play on mid-chapter would skip the
+  // pre-warm window and the first paragraph of the next chapter would
+  // pay a cold-start cost.
+  useEffect(() => {
+    if (!ttsContinuousPlay) return;
+    ttsContinuousPlayRef.current = true;
+    const nextIdx = currentIdx + 1;
+    if (nextIdx < chapters.length) void pregenerateChapter(nextIdx);
+  }, [ttsContinuousPlay, currentIdx, chapters.length]);
+
+  // Next-chapter pregen invalidation when continuous-play is on AND noise /
+  // emotion / useAI changes. The next chapter's pre-warmed blobs are stale
+  // (different params), so drop that chapter from the prefetch map and let
+  // pregenerateChapter re-fire. Speed is excluded — playbackRate doesn't
+  // affect pregen (it's client-side).
+  useEffect(() => {
+    if (!ttsContinuousPlay) return;
+    const nextIdx = currentIdx + 1;
+    if (nextIdx >= chapters.length) return;
+    const nextChapter = chapters[nextIdx];
+    prefetchCacheRef.current.delete(nextChapter.id);
+    prefetchChapterTouchedAtRef.current.delete(nextChapter.id);
+    void pregenerateChapter(nextIdx);
+  }, [ttsNoise, ttsEmotionIntensity, ttsUseAI, ttsContinuousPlay, currentIdx]);
+
+  // Paragraph gap: mirror to ref + cancel any pending gap timer. The
+  // speakParagraph's finish() closure reads ttsParagraphGap live, but the
+  // setTimeout handle wasn't captured before — so changing the slider mid-
+  // gap left an old (now-wrong) timer ticking. Cancelling is harmless: the
+  // loop just continues to the next paragraph immediately.
+  useEffect(() => {
+    ttsParagraphGapRef.current = ttsParagraphGap;
+    if (gapTimerRef.current) {
+      clearTimeout(gapTimerRef.current);
+      gapTimerRef.current = null;
+    }
+  }, [ttsParagraphGap]);
 
   useEffect(() => {
     setVoiceControlSupported(!!getSpeechRecognitionCtor());
@@ -3086,13 +3210,16 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     chapterId: string,
     paragraphs: string[],
     idx: number,
-    speed: number,
+    _unusedSpeed: number | undefined,
     character?: string,
     emotion = 'neutral',
     expressiveness = ttsNoise,
   ): Promise<Blob> {
-    // Stable dedup key — include speed/voice so different settings don't collide.
-    const key = `${idx}::${character ?? '_'}::${speed.toFixed(2)}::${ttsVoice}::${emotion}::${expressiveness.toFixed(2)}`;
+    // Stable dedup key — speed is NOT included; it's applied client-side via
+    // playbackRate. Keeping it in the key would force a fresh fetch on every
+    // slider movement. Noise / emotion / voice / character remain keyed so a
+    // change to those still invalidates correctly.
+    const key = `${idx}::${character ?? '_'}::${ttsVoice}::${emotion}::${expressiveness.toFixed(2)}`;
     touchChapter(chapterId);
     let chapterMap = prefetchCacheRef.current.get(chapterId);
     if (!chapterMap) {
@@ -3109,14 +3236,27 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     const fetchStart = performance.now();
     const MAX_ATTEMPTS = 2;
     const RETRY_BACKOFF_MS = 250;
+    // BUGFIX 2026-07-11: capture the settings-gen at fetch-start so an
+    // in-flight prefetch that resolves AFTER the user moved a noise /
+    // emotion / useAI slider evicts itself from the cache (it would
+    // otherwise be cached against the OLD settings key — wait, no, the
+    // key already locks noise in, but the warm-up that triggered this
+    // fetch was based on the *old* slider values). Bumping ttsSettingsGenRef
+    // on every invalidation keeps stale promises from winning the
+    // last-write-wins race in nextAudioBufferRef. The outer .catch below
+    // removes failed entries from the cache, so a stale throw cleanly
+    // evicts.
+    const myGen = ttsSettingsGenRef.current;
     const attempt = async (attemptNo: number): Promise<Blob> => {
-      ttsDebug('POST /api/tts', { idx, character, emotion, voice: ttsVoice, speed, attempt: attemptNo });
+      ttsDebug('POST /api/tts', { idx, character, emotion, voice: ttsVoice, attempt: attemptNo });
       const resp = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text: paragraphs[idx],
-          speed,
+          // speed intentionally omitted — server falls back to per-voice
+          // voiceSpeed (route.ts:199). The slider drives client-side
+          // playbackRate instead, which makes speed changes instant.
           bookId,
           character,
           voice: ttsVoice,
@@ -3146,6 +3286,18 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         throw new Error(`TTS failed: ${resp.status} — ${detail.slice(0, 120)}`);
       }
       const blob = await resp.blob();
+      // Race-safety: settings changed while we were fetching. Don't memoise
+      // this blob — the warm-up that triggered this fetch was for the old
+      // settings. Drop the cache entry (so the next reader gets a fresh
+      // fetch) and throw so the warm-up's .catch evicts it from the
+      // nextAudioBuffer pool.
+      if (myGen !== ttsSettingsGenRef.current) {
+        chapterMap!.delete(key);
+        ttsDebug('prefetch stale (settings changed mid-flight) — evicted', {
+          idx, myGen, currentGen: ttsSettingsGenRef.current,
+        });
+        throw new Error('stale prefetch (settings changed mid-flight)');
+      }
       ttsDebug('POST /api/tts ok', {
         idx, ms: Math.round(performance.now() - fetchStart),
         bytes: blob.size, type: blob.type,
@@ -3239,7 +3391,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
           const emo = ttsUseAI
             ? detectEmotion(paragraphs[idx], ttsSpeed, ttsNoise, ttsEmotionIntensityRef.current)
             : { speed: ttsSpeed, noiseScale: ttsNoise, label: '', emoji: '', emotion: 'neutral' };
-          return prefetchParagraph(ch.id, paragraphs, idx, emo.speed, sp.name, emo.emotion, emo.noiseScale)
+          return prefetchParagraph(ch.id, paragraphs, idx, undefined, sp.name, emo.emotion, emo.noiseScale)
             .then(() => { done++; setPregenStatus({ chapterId: ch.id, done, total: paragraphs.length }); })
             .catch(() => { /* already removed from cache; will retry on play */ });
         }),
@@ -3252,17 +3404,21 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
    * Speak a paragraph using the prefetch cache. If the blob is already in
    * the cache (prefetch finished), playback starts instantly — no fetch
    * latency in the gap. While playing, prefetches the next 3 paragraphs.
+   *
+   * `speed` is intentionally dropped from the signature in 2026-07-11: speed
+   * is now a client-side playbackRate knob. The argument is kept as an
+   * unused optional so existing callers compile without churn.
    */
   async function speakParagraph(
     chapterId: string,
     paragraphs: string[],
     idx: number,
-    speed: number,
+    _unusedSpeed?: number,
     character?: string,
     emotion = 'neutral',
     expressiveness = ttsNoise,
   ): Promise<void> {
-    ttsDebug('speakParagraph', { idx, character, emotion, speed, preview: paragraphs[idx]?.slice(0, 60) });
+    ttsDebug('speakParagraph', { idx, character, emotion, playbackRate: ttsSpeedRef.current, preview: paragraphs[idx]?.slice(0, 60) });
     // Eagerly prefetch the next paragraphs so the audio is ready when the
     // current one ends. With a slow TTS backend (~15-20s per call on
     // Apple Silicon) we need a deep lookahead — 5 paragraphs ≈ 10s of
@@ -3303,7 +3459,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
           ? detectEmotion(paragraphs[nextIdx], ttsSpeed, ttsNoise, ttsEmotionIntensityRef.current)
           : { speed: ttsSpeed, noiseScale: ttsNoise, label: '', emoji: '', emotion: 'neutral' };
         withSlot(() =>
-          prefetchParagraph(chapterId, paragraphs, nextIdx, nextEmo.speed, nextSp.name, nextEmo.emotion, nextEmo.noiseScale),
+          prefetchParagraph(chapterId, paragraphs, nextIdx, undefined, nextSp.name, nextEmo.emotion, nextEmo.noiseScale),
         ).catch((e) => {
           ttsWarn('eager prefetch failed', { nextIdx, err: String(e) });
         });
@@ -3313,7 +3469,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     const ttsStart = performance.now();
     let blob: Blob;
     try {
-      blob = await prefetchParagraph(chapterId, paragraphs, idx, speed, character, emotion, expressiveness);
+      blob = await prefetchParagraph(chapterId, paragraphs, idx, undefined, character, emotion, expressiveness);
     } catch (e) {
       ttsWarn('prefetchParagraph FAILED — first paragraph will be silent', {
         idx, character, emotion, err: String(e),
@@ -3335,10 +3491,23 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       nextAudioBufferRef.current = null;
       url = preloaded.url;
       audio = preloaded.audio;
+      // BUGFIX 2026-07-11: preloaded elements were built before the
+      // speed slider might have moved — make sure they play at the live
+      // rate when consumed.
+      audio.playbackRate = ttsSpeedRef.current;
       ttsDebug('speakParagraph: using preloaded audio', { idx, chapterId });
     } else {
       url = URL.createObjectURL(blob);
       audio = new Audio(url);
+      // BUGFIX 2026-07-11: keep pitch steady when playbackRate != 1.
+      // Chromium/Safari preserve pitch by default but Firefox does not —
+      // setting the standard property + the two vendor aliases makes the
+      // behaviour consistent across engines. Without this, dragging the
+      // speed slider to 0.75× / 2.0× sounds chipmunk-y / gravey.
+      audio.preservesPitch = true;
+      (audio as HTMLAudioElement & { mozPreservesPitch?: boolean }).mozPreservesPitch = true;
+      (audio as HTMLAudioElement & { webkitPreservesPitch?: boolean }).webkitPreservesPitch = true;
+      audio.playbackRate = ttsSpeedRef.current;
       // preload="auto" tells the browser to fetch the entire blob metadata +
       // body right away. Default is "metadata" which only fetches duration,
       // deferring the body fetch until .play() — produces a noticeable
@@ -3376,7 +3545,14 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         ttsLastFinishReasonRef.current = reason;
         ttsDebug('audio finished', { idx, reason });
         if (ttsParagraphGap > 0 && !ttsAbortRef.current) {
-          setTimeout(resolve, ttsParagraphGap);
+          // BUGFIX 2026-07-11: capture the handle so the paragraphGap
+          // useEffect can cancel it on slider drag / stopTts. Previously
+          // the timer was uncapturable, so a slider drag mid-gap left an
+          // old (now-wrong) timer ticking.
+          gapTimerRef.current = setTimeout(() => {
+            gapTimerRef.current = null;
+            resolve();
+          }, ttsParagraphGap);
         } else {
           resolve();
         }
@@ -3390,6 +3566,12 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       audio.play().then(
         () => {
           ttsDebug('audio.play() resolved', { idx });
+          // BUGFIX 2026-07-11: belt-and-suspenders — older Safari versions
+          // had a bug where setting audio.playbackRate on a paused /
+          // pre-buffered element didn't take effect on .play(). Re-applying
+          // here guarantees the live element lands on the slider value no
+          // matter what. Cost: one redundant assignment per paragraph.
+          audio.playbackRate = ttsSpeedRef.current;
           // Now that this paragraph is actually playing, kick off the
           // warm-up for the NEXT paragraph. It runs in the background
           // for the remaining duration of this clip, so by the time
@@ -3492,12 +3674,20 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         ? detectEmotion(paragraphs[idx], ttsSpeed, ttsNoise, ttsEmotionIntensityRef.current)
         : { speed: ttsSpeed, noiseScale: ttsNoise, label: '', emoji: '', emotion: 'neutral' };
       const blob = await prefetchParagraph(
-        chapterId, paragraphs, idx, nextEmo.speed, nextSp.name,
+        chapterId, paragraphs, idx, undefined, nextSp.name,
         nextEmo.emotion, nextEmo.noiseScale,
       );
       if (ttsAbortRef.current) return;
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
+      // BUGFIX 2026-07-11: same pitch-preservation as speakParagraph. The
+      // pre-decoded next element lives for up to one paragraph's worth of
+      // audio (~2s) — long enough that a speed slider drag during the
+      // current clip would otherwise land on a chipmunk/gravely next one.
+      audio.preservesPitch = true;
+      (audio as HTMLAudioElement & { mozPreservesPitch?: boolean }).mozPreservesPitch = true;
+      (audio as HTMLAudioElement & { webkitPreservesPitch?: boolean }).webkitPreservesPitch = true;
+      audio.playbackRate = ttsSpeedRef.current;
       audio.preload = 'auto';
       try { audio.load(); } catch { /* Safari safety — same as speakParagraph */ }
       // Await decode so .play() is instant when speakParagraph picks it up.
@@ -3660,7 +3850,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       const speakerSuffix = sp.name ? ` · ${sp.name}` : '';
       setTtsEmotionLabel(`${speakerSuffix}${emotionSuffix}`);
 
-      await speakParagraph(myChapter.id, paras, i, emo.speed, sp.name, emo.emotion, emo.noiseScale);
+      await speakParagraph(myChapter.id, paras, i, undefined, sp.name, emo.emotion, emo.noiseScale);
       if (ttsAbortRef.current || ttsRunIdRef.current !== runId) break;
       // S5 fix (2026-07-08): if audio.play() has been rejected N times in
       // a row (e.g. tab lost focus, audio context suspended, OS muted the
@@ -3782,6 +3972,14 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     ttsDebug('stopTts called', { runId: ttsRunIdRef.current, state: ttsStateRef.current });
     ttsRunIdRef.current += 1;
     ttsAbortRef.current = true;
+    // BUGFIX 2026-07-11: cancel any pending paragraph-gap timer so the
+    // loop doesn't fire `resolve()` for a paragraph the user has already
+    // abandoned. Without this, the gap timer was independent of the run
+    // id and could let the next speakParagraph kick in even after Stop.
+    if (gapTimerRef.current) {
+      clearTimeout(gapTimerRef.current);
+      gapTimerRef.current = null;
+    }
     finishCurrentTtsAudio();
     ttsStateRef.current = 'idle';
     setTtsState('idle');
