@@ -11,6 +11,7 @@ import { notFound } from 'next/navigation';
 import { BookOpen, PencilLine } from 'lucide-react';
 import { getBook } from '@/lib/db/books';
 import { IllustrationsPanel } from '@/components/library/IllustrationsPanel';
+import { WatermarksPanel } from '@/components/library/WatermarksPanel';
 import { TitleViEditor } from '@/components/library/TitleViEditor';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Card } from '@/components/ui/card';
@@ -104,6 +105,8 @@ export default async function BookDetailPage(props: { params: Promise<{ id: stri
 
         <IllustrationsPanel bookId={book.id} />
       </div>
+
+      <WatermarksPanel bookId={book.id} />
     </div>
   );
 }
