@@ -27,6 +27,7 @@ import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import { VIENEU_TTS_VOICES, VIENEU_VOICE_GENDER } from '@/lib/tts/vieneu-voices';
 import { detectEmotion } from '@/lib/tts/detect-emotion';
+import { cleanTextForTTS, isDecorativeOnly, SILENT_WAV_BLOB } from '@/lib/tts/text-sanitizer';
 import { VoicePanel } from './VoicePanel';
 import { IllustrationsGallery } from './IllustrationsGallery';
 import { ServiceHealth } from '@/components/status/ServiceHealth';
@@ -3247,13 +3248,32 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     // removes failed entries from the cache, so a stale throw cleanly
     // evicts.
     const myGen = ttsSettingsGenRef.current;
+    // BUGFIX 2026-07-11: clean the paragraph text before sending to the
+    // TTS. Many Vietnamese web-novels use visual-only ornament runs as
+    // chapter / section separators (`—★—`, `*** Chương 5 ***`,
+    // `────────────`). The voice either stalls or reads glyph names
+    // ("em dash star em dash") which is jarring. Strip them inline; if
+    // the paragraph is decorative-only, skip the network call and
+    // return a shared silent WAV so the read-aloud loop just bridges
+    // the gap without any audible output. The original `paragraphs[]`
+    // is unchanged — UI display still shows the decorations.
+    const rawText = paragraphs[idx];
+    const ttsText = cleanTextForTTS(rawText);
+    if (isDecorativeOnly(rawText)) {
+      ttsDebug('prefetchParagraph: decorative-only — silent placeholder', {
+        idx, rawSnippet: rawText.slice(0, 40),
+      });
+      const silentPromise = Promise.resolve(SILENT_WAV_BLOB);
+      chapterMap.set(key, silentPromise);
+      return silentPromise;
+    }
     const attempt = async (attemptNo: number): Promise<Blob> => {
       ttsDebug('POST /api/tts', { idx, character, emotion, voice: ttsVoice, attempt: attemptNo });
       const resp = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          text: paragraphs[idx],
+          text: ttsText,
           // speed intentionally omitted — server falls back to per-voice
           // voiceSpeed (route.ts:199). The slider drives client-side
           // playbackRate instead, which makes speed changes instant.
