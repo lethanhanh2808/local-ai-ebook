@@ -20,18 +20,26 @@ export const maxDuration = 180; // detection can take up to ~90s on M4
 // Resolve the TTS service directory across dev/prod layouts.
 // Project structure: .../Local-AI/app/ebook-converter  +  .../Local-AI/app/tts-service
 // Next.js cwd is .../Local-AI/app/ebook-converter, so tts-service is at ../tts-service.
+//
+// The container at /app mounts only ./data + ./public/assets/fonts, so
+// without extra wiring `../tts-service` and `/Volumes/...` (host path) are
+// unreachable. docker-compose.yml mounts `../tts-service` at `/app/tts-service`
+// for both the app and worker services; that is the canonical in-container
+// location and is checked first. The host fallback still helps for dev
+// (`npm run dev` on the laptop directly).
 function resolveTtsServiceDir(): string | null {
   // 1. Explicit env var always wins — this is the documented knob.
   const fromEnv = process.env.TTS_SERVICE_DIR;
   if (fromEnv && fs.existsSync(fromEnv) && fs.existsSync(path.join(fromEnv, 'character_detector.py'))) {
     return fromEnv;
   }
-  // 2. Try common relative layouts.
+  // 2. Try common relative layouts (covers in-container + dev paths).
   const candidates = [
+    '/app/tts-service',                                       // container: ../tts-service mounted at /app/tts-service
+    path.resolve(process.cwd(), 'tts-service'),               // container or dev: cwd/tts-service
     path.resolve(process.cwd(), '..', 'tts-service'),         // dev: app/ebook-converter + ../tts-service
     path.resolve(process.cwd(), 'app', 'tts-service'),        // legacy: app/ebook-converter/app/tts-service
-    path.resolve(process.cwd(), 'tts-service'),              // if next is run from app/
-    '/Volumes/EXT-SSD/Users/anhl/Local-AI/app/tts-service',   // fallback to known location
+    '/Volumes/EXT-SSD/Users/anhl/Local-AI/app/tts-service',   // host fallback (dev on laptop)
   ];
   for (const p of candidates) {
     if (fs.existsSync(p) && fs.existsSync(path.join(p, 'character_detector.py'))) {
@@ -44,11 +52,26 @@ function resolveTtsServiceDir(): string | null {
 const TTS_SERVICE_DIR = resolveTtsServiceDir();
 const DETECTOR = TTS_SERVICE_DIR ? path.join(TTS_SERVICE_DIR, 'character_detector.py') : null;
 
-// Pick the right Python interpreter — prefer the project's venv (has httpx + deps).
+// Pick the right Python interpreter — prefer the project's venv on host,
+// fall back to system python in the container.
 function resolvePython(): string {
+  // 1. Host-side venv (dev / direct invocation on the laptop). The venv's
+  //    `python3.11` is a symlink into /Library/Frameworks on macOS, so this
+  //    only works when the script is running on the host (not inside the
+  //    container) or when the volume mount preserves the full venv.
   const venvPy = TTS_SERVICE_DIR ? path.join(TTS_SERVICE_DIR, '.venv-moss-nano', 'bin', 'python') : null;
   if (venvPy && fs.existsSync(venvPy)) return venvPy;
-  return process.env.TTS_PYTHON ?? '/Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11';
+  // 2. Explicit override (typically only used on the host).
+  if (process.env.TTS_PYTHON && fs.existsSync(process.env.TTS_PYTHON)) {
+    return process.env.TTS_PYTHON;
+  }
+  // 3. Container system Python — installed by Dockerfile with httpx.
+  //    /usr/bin/python3 is the same as python3 on PATH but explicit avoids
+  //    PATH surprises. Added: covers the case where the routed command
+  //    `spawn` doesn't carry the standard PATH.
+  if (fs.existsSync('/usr/bin/python3')) return '/usr/bin/python3';
+  // 4. Last-resort fallback to whatever python is on PATH.
+  return process.env.TTS_PYTHON ?? 'python3';
 }
 
 const VIENEU_VOICES = VIENEU_PROFILES.map((p) => ({

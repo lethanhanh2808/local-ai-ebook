@@ -59,6 +59,11 @@ services:
     volumes:
       - ./data:/app/data
       - ./public/assets/fonts:/app/public/assets/fonts:ro
+      # tts-service: sibling Python project (character_detector.py + venv).
+      # AI Character Detection runs the Python module via `spawn`; without
+      # this mount, `character_detector.py not found` and the route 500s.
+      # Read-only because the container never needs to write into it.
+      - ../tts-service:/app/tts-service:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -91,6 +96,9 @@ services:
     volumes:
       - ./data:/app/data
       - ./public/assets/fonts:/app/public/assets/fonts:ro
+      # Same tts-service mount as `app` so the worker can spawn
+      # character_detector.py for in-pipeline character bible pre-seeding.
+      - ../tts-service:/app/tts-service:ro
     depends_on:
       redis:
         condition: service_healthy

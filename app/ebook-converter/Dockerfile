@@ -90,6 +90,21 @@ COPY fonts.conf /app/fonts.conf
 ENV FONTCONFIG_FILE=/app/fonts.conf
 ENV FONTCONFIG_PATH=/app
 
+# Python + httpx for AI Character Detection. `character_detector.py`
+# (mounted at runtime into /app/tts-service from the sibling
+# ../tts-service directory on the host) runs in-process here via
+# `child_process.spawn('python3', …)`. We do NOT install vi_g2p — the
+# detector treats it as an optional dep and falls back to a trivial
+# lowercase-comparison matcher when missing, which is fine for the
+# initial detection call (suggestions, not bible persistence).
+RUN set -eux; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends python3 python3-pip; \
+  pip3 install --no-cache-dir --break-system-packages httpx; \
+  apt-get purge -y --auto-remove pip; \
+  rm -rf /var/lib/apt/lists/*; \
+  python3 -c "import httpx; print('httpx', httpx.__version__)"
+
 USER nextjs
 EXPOSE 3100
 ENV PORT=3100

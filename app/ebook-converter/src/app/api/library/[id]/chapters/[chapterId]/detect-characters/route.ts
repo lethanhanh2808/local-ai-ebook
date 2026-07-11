@@ -25,13 +25,18 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 180; // up to 3 min for slow OMLX detection
 
 // ── Resolve Python interpreter + character_detector.py ──────────────
+// In-container: docker-compose mounts ../tts-service at /app/tts-service
+// (see app/ebook-converter/docker-compose.yml). Dev (laptop): one of the
+// ../tts-service variants resolves. Host fallback kept for explicit dirs.
 function resolveTtsServiceDir(): string | null {
   const candidates = [
     process.env.TTS_SERVICE_DIR,
-    path.resolve(process.cwd(), 'app', 'tts-service'),
-    path.resolve(process.cwd(), '..', 'app', 'tts-service'),
-    path.resolve(process.cwd(), '..', 'tts-service'),
-    '/Volumes/EXT-SSD/Users/anhl/Local-AI/app/tts-service',
+    '/app/tts-service',                                       // container: ../tts-service mounted at /app/tts-service
+    path.resolve(process.cwd(), 'tts-service'),               // cwd/tts-service (legacy container or dev)
+    path.resolve(process.cwd(), 'app', 'tts-service'),        // legacy: app/ebook-converter/app/tts-service
+    path.resolve(process.cwd(), '..', 'app', 'tts-service'),  // legacy: ../app/tts-service
+    path.resolve(process.cwd(), '..', 'tts-service'),         // dev: app/ebook-converter + ../tts-service
+    '/Volumes/EXT-SSD/Users/anhl/Local-AI/app/tts-service',   // host fallback
   ];
   for (const p of candidates) {
     if (p && fs.existsSync(p) && fs.existsSync(path.join(p, 'character_detector.py'))) return p;
@@ -40,9 +45,26 @@ function resolveTtsServiceDir(): string | null {
 }
 
 function resolvePython(ttsDir: string): string {
+  // 1. Host-side venv (dev / direct invocation on the laptop). macOS-only
+  //    symlinks into /Library/Frameworks/Python.framework — won't work in
+  //    the container.
   const venvPy = path.join(ttsDir, '.venv-moss-nano', 'bin', 'python');
-  if (fs.existsSync(venvPy)) return venvPy;
-  return process.env.TTS_PYTHON ?? '/Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11';
+  if (fs.existsSync(venvPy)) {
+    // Symlink sanity: in the container the python3.11 binary inside the
+    // venv symlinks to /Library/Frameworks/...; the resolved target won't
+    // exist there. Skip silently so we fall through to system python.
+    try { fs.accessSync(venvPy); return venvPy; } catch { /* fallthrough */ }
+  }
+  // 2. Explicit override (typically only used on the host).
+  if (process.env.TTS_PYTHON && fs.existsSync(process.env.TTS_PYTHON)) {
+    return process.env.TTS_PYTHON;
+  }
+  // 3. Container-installed system Python (see Dockerfile). `/usr/bin/python3`
+  //    is installed with httpx via `pip install --break-system-packages`
+  //    during the image build.
+  if (fs.existsSync('/usr/bin/python3')) return '/usr/bin/python3';
+  // 4. Last-resort: PATH lookup.
+  return process.env.TTS_PYTHON ?? 'python3';
 }
 
 const DETECTOR_TIMEOUT_MS = 170_000;
