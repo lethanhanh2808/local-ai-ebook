@@ -243,6 +243,8 @@ def _run_detection(sample_blob: str, scope: str) -> dict:
                         "name": n,
                         "aliases": [],
                         "gender": meta[n]["gender"],
+                        "age": meta[n]["age"],
+                        "role": meta[n]["role"],
                         "tone": meta[n]["tone"],
                         "lines_estimate": 0,
                         "sample_lines": meta[n]["sample_lines"],
@@ -297,10 +299,30 @@ def _run_detection(sample_blob: str, scope: str) -> dict:
         if tone not in allowed_tones:
             tone = "unknown"
         raw_samples = c.get("sample_lines") if isinstance(c.get("sample_lines"), list) else []
+        # BUGFIX 2026-07-11: name-marker overrides. When the LLM leaves
+        # gender/age/role as "unknown" but the Vietnamese name itself
+        # carries an unambiguous title ("Cửu Thiên Huyền Nữ" → female,
+        # "Phù Quang Thánh Vương" → male/mature/main), trust the marker.
+        # We never DOWNGRADE an LLM-confirmed value to "unknown" — only
+        # fill gaps. Marker-derived main/royal is preferred over the LLM's
+        # default "supporting" only when the LLM didn't specify a role.
+        llm_gender = c.get("gender")
+        gender = llm_gender if llm_gender in ("male", "female", "unknown") else "unknown"
+        inferred = _infer_metadata_from_name(name)
+        if gender == "unknown" and inferred["gender"] != "unknown":
+            gender = inferred["gender"]
+        if age == "unknown" and inferred["age"] != "unknown":
+            age = inferred["age"]
+        # Role: only override when LLM didn't pick one of the canonical
+        # values. The marker-based "main" is reserved for titles that are
+        # clearly protagonists (Vương / Đế / Huyền Nữ / etc.).
+        llm_role = str(c.get("role", "")).strip().lower()
+        if llm_role not in ("main", "supporting", "minor", "crowd"):
+            role = inferred["role"]
         cleaned.append({
             "name": name,
             "aliases": aliases,
-            "gender": c.get("gender", "unknown") if c.get("gender") in ("male","female","unknown") else "unknown",
+            "gender": gender,
             "age": age,
             "tone": tone,
             "role": role,
@@ -679,22 +701,135 @@ def _regex_extract_names(raw: str) -> list[str]:
     return out
 
 
+# Vietnamese title/honorific markers used to infer character metadata when
+# the LLM doesn't supply it (regex fallback) or supplies a guess that
+# contradicts the name itself (post-LLM override). Each entry is a tuple
+# of (regex, gender, age, role_hint) — order matters: first match wins.
+# Patterns are anchored to whole words (case-sensitive Vietnamese) so
+# "Vương" inside "Vương Quốc" still matches but "Vươn" doesn't.
+#
+# Why this exists: the regex fallback in `_extract_metadata_from_prose`
+# only inspects ~280 chars of prose around the name, which on a 5-chapter
+# sample often misses. The NAME itself almost always carries a reliable
+# gender/age signal in Vietnamese web-novel prose — every Phù Quang Thánh
+# Vương is male and royal, every Cửu Thiên Huyền Nữ is female, every Quý
+# Lão is an elder male. Running this BEFORE the prose scan guarantees we
+# at least get the obvious cases right.
+_NAME_TITLE_MARKERS: list[tuple[str, str, str, str]] = [
+    # Female — title-first (more specific than word-boundary matches)
+    (r"\bCửu\s+Thiên\s+Huyền\s+Nữ\b",   "female", "mature", "main"),
+    (r"\bHuyền\s+Nữ\b",                  "female", "mature", "main"),
+    (r"\bThiếu\s+Nữ\b",                  "female", "young",  "supporting"),
+    (r"\bTiên\s+Nữ\b",                   "female", "mature", "supporting"),
+    (r"\bYêu\s+Nữ\b",                   "female", "mature", "supporting"),
+    (r"\bMa\s+Nữ\b",                    "female", "mature", "supporting"),
+    (r"\bCông\s+Chúa\b",                "female", "young",  "main"),
+    (r"\bHoàng\s+Hậu\b",                "female", "mature", "main"),
+    (r"\bThái\s+Hậu\b",                 "female", "old",    "main"),
+    (r"\bPhu\s+Nhân\b",                 "female", "mature", "supporting"),
+    (r"\bNương\s+Tử\b",                 "female", "young",  "supporting"),
+    (r"\bTiểu\s+Thư\b",                 "female", "young",  "supporting"),
+    (r"\bĐại\s+Tiểu\s+Thư\b",           "female", "young",  "supporting"),
+    # Male — royal/noble/martial (mostly adult, often main or supporting)
+    (r"\bHoàng\s+Thượng\b",             "male",   "mature", "main"),
+    (r"\bQuốc\s+Vương\b",               "male",   "mature", "main"),
+    (r"\bThánh\s+Vương\b",              "male",   "mature", "main"),
+    (r"\b(Phù\s+Quang|Vạn\s+Phật|Tiên\s+|Thiên\s+)\s*Vương\b", "male", "mature", "main"),
+    (r"\bVương\b",                      "male",   "mature", "main"),
+    (r"\bHoàng\s+Tử\b",                 "male",   "young",  "main"),
+    (r"\bThái\s+Tử\b",                  "male",   "young",  "main"),
+    (r"\bThiên\s+Đế\b",                 "male",   "mature", "main"),
+    (r"\b(Đại\s+|Ma\s+|Tông\s+)?Đế\b",  "male",   "mature", "main"),
+    (r"\bTông\s+Chủ\b",                 "male",   "mature", "main"),
+    (r"\bMa\s+Tôn\b",                   "male",   "mature", "main"),
+    (r"\bThánh\b",                      "male",   "mature", "main"),
+    (r"\bThiếu\s+Gia\b",                "male",   "young",  "supporting"),
+    (r"\bLão\s+Gia\b",                  "male",   "old",    "supporting"),
+    (r"\bLão\b",                        "male",   "old",    "supporting"),
+    (r"\bTrưởng\s+Lão\b",               "male",   "old",    "supporting"),
+    (r"\bThiếu\s+Niên\b",               "male",   "young",  "supporting"),
+    (r"\bĐại\s+Sư\b",                   "male",   "old",    "supporting"),
+]
+
+
+def _infer_metadata_from_name(name: str) -> dict:
+    """Infer gender/age/role from Vietnamese name markers (title-prefixed or
+    single-title names). Returns a dict with all four keys set to safe
+    defaults if no marker matches — caller decides whether to use them.
+    """
+    gender = "unknown"
+    age = "unknown"
+    role = "supporting"
+    if not name:
+        return {"gender": gender, "age": age, "role": role}
+    # Match against the full name plus each individual word, longest first,
+    # so multi-word titles ("Cửu Thiên Huyền Nữ") win before single words.
+    candidates = [name]
+    for w in name.split():
+        if w not in candidates:
+            candidates.append(w)
+    for cand in candidates:
+        for pattern, g, a, r in _NAME_TITLE_MARKERS:
+            if re.search(pattern, cand):
+                gender, age, role = g, a, r
+                return {"gender": gender, "age": age, "role": role}
+    return {"gender": gender, "age": age, "role": role}
+
+
 def _extract_metadata_from_prose(raw: str, names: list[str]) -> dict:
-    """When JSON parsing fails, infer gender/tone from the reasoning prose."""
-    result = {n: {"gender": "unknown", "tone": "unknown", "sample_lines": []} for n in names}
+    """When JSON parsing fails, infer gender/tone from the reasoning prose.
+    Vietnamese name-marker heuristics run first (see `_infer_metadata_from_name`)
+    so the obvious gender/age/role signals in the NAME itself are caught
+    even when the LLM's reasoning prose around the name is sparse."""
+    result = {n: {"gender": "unknown", "age": "unknown", "role": "supporting",
+                  "tone": "unknown", "sample_lines": []} for n in names}
+    # BUGFIX 2026-07-11: seed gender/age/role from Vietnamese name markers
+    # FIRST — the name itself almost always carries a reliable signal
+    # (e.g. "Cửu Thiên Huyền Nữ" → female / mature / main) that the prose
+    # scan below would miss because the LLM reasoning around it is sparse.
+    # Prose cues only OVERRIDE the marker-derived gender if the marker left
+    # it as "unknown" — we trust an explicit title over an ambiguous prose
+    # token like "cô gái bên cạnh" appearing nearby.
+    for n in names:
+        inferred = _infer_metadata_from_name(n)
+        result[n]["gender"] = inferred["gender"]
+        result[n]["age"] = inferred["age"]
+        result[n]["role"] = inferred["role"]
     # Split prose into sentences
     sentences = re.split(r"(?<=[.!?])\s+|\n", raw)
     for n in names:
         for s in sentences:
             if n in s:
-                # Look for gender cues near the name
-                low = s.lower()
-                nearby = s[max(0, s.find(n) - 80):s.find(n) + 200]
+                # Look for gender cues near the name. ONLY override when the
+                # name-marker inference (done above) left gender as "unknown"
+                # — an explicit "Huyền Nữ" title beats an ambiguous prose
+                # token like "cô gái bên cạnh" appearing nearby.
+                #
+                # BUGFIX 2026-07-11: when two detected names appear in the
+                # same sentence (e.g. "Cửu Thiên Huyền Nữ stood near Lâm
+                # Phàm"), a 280-char window around "Lâm Phàm" still contains
+                # the "Nữ" token from "Cửu Thiên Huyền Nữ", bleeding the
+                # other character's gender cue. Strip OTHER detected names
+                # from the window so each character only sees prose cues
+                # that refer to it (or its surrounding narration).
+                window_start = max(0, s.find(n) - 80)
+                window_end = min(len(s), s.find(n) + len(n) + 200)
+                nearby_raw = s[window_start:window_end]
+                nearby = nearby_raw
+                for other in names:
+                    if other != n and other in nearby:
+                        nearby = nearby.replace(other, " ")
                 nearby_low = nearby.lower()
-                if any(w in nearby_low for w in ["nữ", "cô", "chị", "tỷ", "ma nữ", "nương tử", "tiểu thư", "phu nhân"]):
-                    result[n]["gender"] = "female"
-                elif any(w in nearby_low for w in ["nam", "chú", "anh", "huynh", "thiếu gia", "tông chủ", "ma tôn", "hoàng thượng", "lão gia"]):
-                    result[n]["gender"] = "male"
+                if result[n]["gender"] == "unknown":
+                    # BUGFIX 2026-07-11: word-boundary regex match — bare
+                    # `in` substring used to false-positive (e.g. "chỉ huy"
+                    # contains "chú", "nhân vật nam chính" contains "nam" but
+                    # is a generic narration token, etc.). The Vietnamese
+                    # honorific cues are real words — match them as such.
+                    if re.search(r"\b(nữ|cô|chị|tỷ|ma\s+nữ|nương\s+tử|tiểu\s+thư|phu\s+nhân)\b", nearby_low):
+                        result[n]["gender"] = "female"
+                    elif re.search(r"\b(nam|chú|anh|huynh|thiếu\s+gia|tông\s+chủ|ma\s+tôn|hoàng\s+thượng|lão\s+gia)\b", nearby_low):
+                        result[n]["gender"] = "male"
                 # Tone cues
                 if any(w in nearby_low for w in ["hài hước", "vui", "cười", "tươi"]):
                     result[n]["tone"] = "cheerful"
@@ -704,8 +839,10 @@ def _extract_metadata_from_prose(raw: str, names: list[str]) -> dict:
                     result[n]["tone"] = "angry"
                 elif any(w in nearby_low for w in ["bí ẩn", "thần bí", "trầm"]):
                     result[n]["tone"] = "mysterious"
-                # Sample lines: any quoted phrase right after the name in the same sentence
-                quote = re.search(r"[\"“][^\"”]{5,80}[\"”]", nearby)
+                # Sample lines: any quoted phrase right after the name in the same sentence.
+                # Search the ORIGINAL window (with names intact) so the quote
+                # boundary characters don't get confused with name stripping.
+                quote = re.search(r"[\"“][^\"”]{5,80}[\"”]", nearby_raw)
                 if quote and len(result[n]["sample_lines"]) < 1:
                     inner = quote.group(0)[1:-1].strip()
                     # BUGFIX 2026-07-11: reject single-word "quotes" — those are

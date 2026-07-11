@@ -130,7 +130,18 @@ async function runDetector(epubPath: string, signal?: AbortSignal): Promise<any>
   try {
     const { getSettings } = await import('@/lib/db/settings');
     const settings = await getSettings();
-    omlxModel = settings.aiModel?.trim() || process.env.OMLX_MODEL || '';
+    // BUGFIX 2026-07-11: schema default for aiModel is the literal string
+    // "default" (see prisma/schema.prisma). OMLX treats that as a real
+    // model id and rejects it ("Model 'default' not found"), which forces
+    // the Python detector into its regex-fallback branch — exactly the
+    // orphan-aiModel pattern documented in the character-detection-source-
+    // tagging memory. Treat both empty AND the literal "default" as "no
+    // user-chosen model" so the Python script falls through to its own
+    // empty-string path (= OMLX uses its server-side default model).
+    const raw = settings.aiModel?.trim() ?? '';
+    omlxModel = (raw && raw.toLowerCase() !== 'default')
+      ? raw
+      : (process.env.OMLX_MODEL || '');
   } catch {
     omlxModel = process.env.OMLX_MODEL || '';
   }
