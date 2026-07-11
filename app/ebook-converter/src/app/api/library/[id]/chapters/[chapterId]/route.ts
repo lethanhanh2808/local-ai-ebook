@@ -517,8 +517,23 @@ function deduplicateHeading(html: string): string {
 function stripWatermarks(html: string, watermarks: string[]): string {
   if (!watermarks.length) return html;
   let result = html;
-  for (const wm of watermarks) {
-    const escaped = wm.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // BUGFIX 2026-07-11: process watermarks LONGEST-FIRST. When the user
+  // has both a short substring watermark (e.g. "DTV-EBOOK") and a longer
+  // composite watermark that contains it (e.g. "Đọc thêm truyện hay tại:
+  // DTV-EBOOK.com.vn"), processing the short one first would strip
+  // "DTV-EBOOK" from inside the longer phrase and leave a malformed
+  // residue ("Đọc thêm truyện hay tại: .com.vn") that no longer matches
+  // the longer watermark — so the residue stays in the output. By
+  // removing the longer watermark first, the short one has nothing left
+  // to chew on inside that phrase. Word boundaries are NOT added to the
+  // per-phrase regex — Vietnamese watermarks contain hyphens, slashes,
+  // dots, and colons that aren't true word separators; tightening the
+  // regex would miss legitimate standalone matches. Longest-first is the
+  // right fix.
+  const sorted = [...new Set(watermarks.map((w) => w.trim()).filter(Boolean))]
+    .sort((a, b) => b.length - a.length);
+  for (const wm of sorted) {
+    const escaped = wm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     // Remove <p> elements whose text content contains (only) the watermark
     result = result.replace(
       new RegExp(`<p[^>]*>\\s*(?:<[^>]+>\\s*)*${escaped}\\s*(?:<\\/[^>]+>\\s*)*<\\/p>`, 'gi'),
