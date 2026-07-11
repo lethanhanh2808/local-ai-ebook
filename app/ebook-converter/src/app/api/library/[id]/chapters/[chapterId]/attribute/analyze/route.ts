@@ -212,65 +212,87 @@ export async function POST(
         let llmRequested = 0;
         let llmDurationMs = 0;
         let omlxReachable = false;
+
+        // Decide whether the LLM layer has anything to do BEFORE we burn a
+        // preflight ping on oMLX. Three reasons to skip, each surfacing a
+        // distinct log line so the user can tell at a glance which knob to
+        // turn:
+        //   1. caller asked for local-only mode
+        //   2. nothing unresolved after parser + regex + stateful fusion
+        //   3. no character roster — the LLM cannot validate speaker names
+        //      against a roster of knownNames, so its answers would be
+        //      discarded by validateLLMRow anyway.
+        // BUGFIX 2026-07-11: previously these were folded into a single
+        // "không có đoạn nào chưa gán — bỏ qua" log line, which was
+        // misleading when the real cause was an empty character DB. The
+        // user case: every paragraph was unresolved (238/238) yet the LLM
+        // still skipped silently with no hint to run "Phân tích nhân vật".
+        // Now each branch logs the exact reason.
+        const unresolved = paragraphs
+          .filter((p) => !localBaseline[p.index]?.speaker)
+          .map((p) => p.index);
         if (mode === 'local-only') {
           log(controller, 'Mode local-only — bỏ qua LLM', 'preflight');
+        } else if (knownNames.length === 0) {
+          log(controller,
+            `Chưa có nhân vật trong DB (0 names) — bỏ qua LLM. Chạy "Phân tích nhân vật" trước để populate roster.`,
+            'llm',
+            { meta: { skipped: 'no-characters', unresolvedCount: unresolved.length } });
+        } else if (unresolved.length === 0) {
+          log(controller,
+            `Local fusion đã gán hết ${paragraphs.length}/${paragraphs.length} đoạn — LLM không cần chạy`,
+            'llm',
+            { meta: { skipped: 'all-resolved' } });
         } else {
           omlxReachable = await omlxPreflight();
           log(controller, omlxReachable ? `Preflight: oMLX OK` : `Preflight: oMLX down — bỏ qua LLM`, 'preflight');
 
           if (omlxReachable) {
-            const unresolved = paragraphs
-              .filter((p) => !localBaseline[p.index]?.speaker)
-              .map((p) => p.index);
-            if (unresolved.length > 0 && knownNames.length > 0) {
-              const batches = Math.ceil(unresolved.length / 4);  // matches LLM_BATCH_SIZE
-              log(controller, `LLM: ${unresolved.length} đoạn chưa gán → ${batches} batch (≤2 song song)`, 'llm');
-              const llmStart = Date.now();
-              // Smoothed ETA — average batch duration × remaining batches.
-              let avgBatchMs = 0;
-              let batchesDone = 0;
-              const llmResult = await attributeByLLM({
-                paragraphs,
-                unresolvedIndices: unresolved,
-                knownNames,
-                characterContext,
-                parserOut,
-                regexOut,
-                onBatch: (info) => {
-                  batchesDone++;
-                  // Exponential moving average so early batches (often warm-up
-                  // for cold oMLX) don't poison the ETA forever.
-                  const alpha = 0.4;
-                  avgBatchMs = avgBatchMs === 0
-                    ? info.durationMs
-                    : avgBatchMs * (1 - alpha) + info.durationMs * alpha;
-                  const remaining = Math.max(0, info.total - batchesDone);
-                  const etaSec = Math.round((remaining * avgBatchMs) / 1000);
-                  const status = info.error
-                    ? `✗ ${info.error.slice(0, 30)}`
-                    : info.ok
-                      ? '✓'
-                      : '· 0 rows';
-                  log(controller,
-                    `Batch ${info.idx}/${info.total} ${status} · [${info.indices.join(',')}] · ${Math.round(info.durationMs / 100) / 10}s · ETA ~${etaSec}s · ${batchesDone}/${info.total} done (${batchesDone - llmFailures}✓ ${llmFailures}✗)`,
-                    'llm',
-                    { meta: {
-                      batchIndex: info.idx,
-                      batchTotal: info.total,
-                      batchOk: info.ok,
-                      paragraphs: info.indices,
-                      durationMs: info.durationMs,
-                      etaSec,
-                    } });
-                },
-              });
-              llmDurationMs = Date.now() - llmStart;
-              llmOut = llmResult.map;
-              llmFailures = llmResult.failedBatches;
-              llmRequested = llmResult.requested;
-            } else {
-              log(controller, `LLM: không có đoạn nào chưa gán — bỏ qua`, 'llm');
-            }
+            const batches = Math.ceil(unresolved.length / 4);  // matches LLM_BATCH_SIZE
+            log(controller, `LLM: ${unresolved.length} đoạn chưa gán → ${batches} batch (≤2 song song)`, 'llm');
+            const llmStart = Date.now();
+            // Smoothed ETA — average batch duration × remaining batches.
+            let avgBatchMs = 0;
+            let batchesDone = 0;
+            const llmResult = await attributeByLLM({
+              paragraphs,
+              unresolvedIndices: unresolved,
+              knownNames,
+              characterContext,
+              parserOut,
+              regexOut,
+              onBatch: (info) => {
+                batchesDone++;
+                // Exponential moving average so early batches (often warm-up
+                // for cold oMLX) don't poison the ETA forever.
+                const alpha = 0.4;
+                avgBatchMs = avgBatchMs === 0
+                  ? info.durationMs
+                  : avgBatchMs * (1 - alpha) + info.durationMs * alpha;
+                const remaining = Math.max(0, info.total - batchesDone);
+                const etaSec = Math.round((remaining * avgBatchMs) / 1000);
+                const status = info.error
+                  ? `✗ ${info.error.slice(0, 30)}`
+                  : info.ok
+                    ? '✓'
+                    : '· 0 rows';
+                log(controller,
+                  `Batch ${info.idx}/${info.total} ${status} · [${info.indices.join(',')}] · ${Math.round(info.durationMs / 100) / 10}s · ETA ~${etaSec}s · ${batchesDone}/${info.total} done (${batchesDone - llmFailures}✓ ${llmFailures}✗)`,
+                  'llm',
+                  { meta: {
+                    batchIndex: info.idx,
+                    batchTotal: info.total,
+                    batchOk: info.ok,
+                    paragraphs: info.indices,
+                    durationMs: info.durationMs,
+                    etaSec,
+                  } });
+              },
+            });
+            llmDurationMs = Date.now() - llmStart;
+            llmOut = llmResult.map;
+            llmFailures = llmResult.failedBatches;
+            llmRequested = llmResult.requested;
           }
         }
 
