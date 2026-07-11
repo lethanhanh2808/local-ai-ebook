@@ -46,11 +46,14 @@ interface Character {
 interface Props {
   bookId: string;
   bookLanguage: string;
-  // Optional anchor passed by parent (EbookReader sidebar tabs). When
-  // 'characters' the parent is showing the per-character voice-assignment
-  // surface; when 'voices' it shows the library-management surface. The
-  // component renders both today; the hint is kept for the upcoming
-  // tab refactor (Phase 3 §3.2) and is safe to ignore for now.
+  // The tab this panel is anchored to. Each tab only renders the
+  // sections that make sense for its focus:
+  //   - 'voices'    → Voice library (upload form + voice list) ONLY.
+  //   - 'characters' → Character Detection + per-character voice
+  //                    assignment ONLY.
+  //   - undefined   → legacy behaviour: render every section together
+  //                    (kept for any standalone callers; never used by
+  //                    EbookReader today).
   section?: 'voices' | 'characters';
   // Read-aloud "TỰ ĐỘNG THEO NHÂN VẬT" toggle. When provided, the
   // character section surfaces a BẬT/TẮT pill that mirrors the same
@@ -60,8 +63,29 @@ interface Props {
   setUseCharacterVoice?: (v: boolean) => void;
 }
 
+// True if the current section should render the AI character-detection
+// UI + per-character voice-assignment surface.
+const showCharacters = (
+  section: 'voices' | 'characters' | undefined,
+  hasCharacters: boolean,
+): boolean => {
+  if (section === 'voices') return false;       // 'voices' tab hides it
+  if (section === 'characters') return true;    // 'characters' tab only shows it
+  return hasCharacters;                          // legacy: show when populated
+};
+
+// True if the current section should render the voice library
+// (upload form + voice list + Giọng đọc header).
+const showVoices = (
+  section: 'voices' | 'characters' | undefined,
+): boolean => {
+  if (section === 'voices') return true;
+  if (section === 'characters') return false;
+  return true;                                  // legacy: always show
+};
+
 export function VoicePanel({
-  bookId, bookLanguage, section: _section,
+  bookId, bookLanguage, section,
   useCharacterVoice, setUseCharacterVoice,
 }: Props) {
   const toast = useToast();
@@ -393,14 +417,21 @@ export function VoicePanel({
 
   return (
     <div className="space-y-5">
-      {/* AI Character Detection */}
-      <CharacterDetection
-        bookId={bookId}
-        existingCharacters={characters}
-        onApplied={async () => { await fetchAll(); }}
-      />
+      {/* Each tab in the side panel renders ONLY the sections that
+          belong to that tab. The `_section` prop was previously read-
+          only; switching on it here lets the "Giọng" and "Nhân vật"
+          tabs stop duplicating each other's content. See the
+          showCharacters / showVoices helpers above. */}
+      {showCharacters(section, characters.length > 0) && (
+        <CharacterDetection
+          bookId={bookId}
+          existingCharacters={characters}
+          onApplied={async () => { await fetchAll(); }}
+        />
+      )}
 
       {/* Voices list */}
+      {showVoices(section) && (
       <div>
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-sm font-semibold flex items-center gap-1.5"><Mic className="h-4 w-4" />Giọng đọc ({voices.length})</h3>
@@ -488,9 +519,10 @@ export function VoicePanel({
         )}
         {error && <p className="text-xs text-destructive mt-2">{error}</p>}
       </div>
+      )}
 
       {/* Characters */}
-      {characters.length > 0 && (
+      {showCharacters(section, characters.length > 0) && (
         <div className="pt-3 border-t border-border">
           {/* Header mirrors ReadAloudPanel's "TỰ ĐỘNG THEO NHÂN VẬT" so the
               two surfaces stay visually consistent — same uppercase

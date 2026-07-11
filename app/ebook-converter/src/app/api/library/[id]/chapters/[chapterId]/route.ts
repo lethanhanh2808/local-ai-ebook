@@ -19,7 +19,18 @@ import path from 'path';
 const THEME_COLORS = {
   light: { bg: '#fafaf9', text: '#1c1c1e', htmlBg: '#fafaf9' },
   dark:  { bg: '#1a1a2e', text: '#e2e2e8', htmlBg: '#1a1a2e' },
-  sepia: { bg: '#f4ede4', text: '#3b2f20', htmlBg: '#ede0d0' },
+  // SEPIA — 2-tone palette shared with the reader UI:
+  //   • `bg`     = the actual reading surface (lighter cream) — body bg +
+  //                readerSurface `input` bg + slider thumb fills.
+  //   • `htmlBg` = the "chrome around the spread" tone (darker cream) —
+  //                readerSurface `panel` + `header` so the iframe's html
+  //                background blends seamlessly with the surrounding UI.
+  //   • `text`   = warm dark brown, the single text color (currentColor).
+  // Subtle border tone `#c8b89a` and accent copper `#a07840` live in the
+  // reader UI; the chapter route only needs currentColor + these three
+  // roles so the highlight accent bar (which IS currentColor) tints brown
+  // for sepia.
+  sepia: { bg: '#f4ede4', text: '#3b2f20', htmlBg: '#ede0ce' },
 };
 
 const FONT_STACK = {
@@ -41,9 +52,18 @@ function buildTypoCss(f: string, size: number, lh: number, text: string, indent:
   h1::after  { display:block; content:''; border-bottom:1px solid currentColor; opacity:0.15; margin-top:0.75em; }
   h2 { font-size: ${Math.round(size * 1.2)}px; }
   h3 { font-size: ${Math.round(size * 1.05)}px; }
-  p { margin: 0; text-indent: ${indentEm}em; orphans: 3; widows: 3; }
-  p + p { margin-top: 0.08em; }
-  p:first-of-type, h1+p, h2+p, h3+p, h4+p { text-indent: 0; }
+  p {
+    /* Vietnamese novel style: flush-left paragraphs separated by blank lines.
+       text-indent uses the user's indent setting (0 by default = no indent,
+       classic book style = 1.5em). First paragraph after a heading is
+       always flush-left regardless of the indent value. */
+    margin: 0.65em 0;
+    text-indent: ${indentEm}em;
+    orphans: 3; widows: 3;
+  }
+  /* First paragraph after a heading has no indent — standard book layout.
+     Also reset indent for the very first paragraph in the spread. */
+  p:first-of-type, h1 + p, h2 + p, h3 + p, h4 + p { text-indent: 0; }
   hr { border: none; text-align: center; margin: 1.5em auto; column-span: all; }
   hr::after { content: '— ✦ —'; font-size: 0.85em; opacity: 0.4; }
   a { color: inherit; text-decoration: none; border-bottom: 1px solid rgba(128,128,128,0.3); }
@@ -76,6 +96,33 @@ function buildTypoCss(f: string, size: number, lh: number, text: string, indent:
   }
   blockquote { margin: 1.5em 2em; font-style: italic; border-left: 3px solid rgba(128,128,128,0.4); padding-left: 1em; }
   .calibre7, .calibre8 { font-size: inherit; }
+  /* BUGFIX 2026-07-11 — Vietnamese/Calibre EPUBs often ship with embedded CSS
+     like p { columns: 2 } or section { columns: 2 } to mimic newspaper
+     layout. When that combines with our .epub-spread column-count: 2,
+     you get nested columns (2 outer x 2 inner = 4 visible). Two layers
+     of defense:
+       1. stripEmbeddedStyles() (in the route) drops <style> blocks before
+          they ever reach the iframe — that removes most rogue rules.
+       2. The selector list below prefixes with #epub-clip .epub-spread,
+          which raises specificity to (1 ID, 1 class, 1 element) — high
+          enough to beat any "p" or "section" rule the EPUB might inject
+          via inline style attributes or surviving <style> blocks.
+     The columns shorthand sets both column-count and column-width so we
+     defeat either form of embedded CSS. */
+  #epub-clip .epub-spread p,
+  #epub-clip .epub-spread section,
+  #epub-clip .epub-spread div,
+  #epub-clip .epub-spread article,
+  #epub-clip .epub-spread blockquote,
+  #epub-clip .epub-spread li,
+  #epub-clip .epub-spread dd,
+  #epub-clip .epub-spread dt {
+    columns: 1 !important;
+    column-count: 1 !important;
+    column-width: auto !important;
+  }
+  /* Headings and HRs should always span across the spread's columns. */
+  h1, h2, h3, h4, h5, h6, hr { column-span: all; }
   section[epub\\:type="chapter"], section[role="doc-chapter"] { display: contents; }
   * { box-sizing: border-box; }
 `;
@@ -104,22 +151,29 @@ function buildScrollCss(
 
 function buildSpreadCss(
   theme: string, font: string, size: number, lh: number, indent: number,
-  padTop: number, padBottom: number, padInline: number,
+  padTop: number, padBottom: number, padInline: number, width = 820,
 ): string {
   const t = THEME_COLORS[theme as keyof typeof THEME_COLORS] ?? THEME_COLORS.dark;
   const f = FONT_STACK[font as keyof typeof FONT_STACK] ?? FONT_STACK.serif;
-  const clipW = `calc(100vw - ${2 * padInline}px)`;
+  // Clip is the visible window for one "page" (one column track = 2 columns).
+  // Width MUST equal the spread width so only 2 columns are visible at once;
+  // otherwise a wider clip would show 1.5+ page tracks side-by-side, which the
+  // user perceives as 3-4 columns. Centered horizontally. Capped at viewport
+  // minus padding so it never overflows on narrow screens.
+  const clipW = `min(${width}px, calc(100vw - ${2 * padInline}px))`;
+  const clipLeft = `max(${padInline}px, calc(50vw - ${width / 2}px))`;
   const clipH = `calc(100vh - ${padTop}px - ${padBottom}px)`;
   return `
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html { height: 100%; overflow: hidden; background: ${t.htmlBg}; }
   body { height: 100%; overflow: hidden; background: ${t.bg}; }
   /* Fixed clip box: its position/size IS the padding. Body background shows as margins.
-     Columns overflow inside this box only — zero bleed past edges. */
+     Width = exactly the spread width so only ONE page track (2 columns) is visible
+     at a time. The clip scrolls horizontally through page tracks. */
   #epub-clip {
     position: fixed;
     top: ${padTop}px;
-    left: ${padInline}px;
+    left: ${clipLeft};
     width: ${clipW};
     height: ${clipH};
     overflow-x: auto;
@@ -132,7 +186,12 @@ function buildSpreadCss(
     height: 100%;
     /* NO inline padding — columns fill the clip width exactly.
        column-count: 2 is authoritative — never set to 'auto' (3-column bleed risk) */
-    column-count: 2;
+    /* !important prevents any inline style="column-count: N" override
+       (SPREAD_SCRIPT's narrow-mode path, or a browser extension injecting
+       column rules) from blowing the layout up to 3 or 4 columns. Combined
+       with the explicit JS threshold sync below, the spread is reliably
+       exactly 2 columns whenever the viewport is 400px or wider. */
+    column-count: 2 !important;
     column-gap: 4rem;
     column-rule: 1px solid rgba(128,128,128,0.12);
     column-fill: auto;
@@ -142,13 +201,22 @@ function buildSpreadCss(
     color: ${t.text};
     text-align: justify;
     word-break: break-word;
+    /* Width equals the clip width (the spread fills the clip edge-to-edge).
+       This makes page-track boundary align exactly with clip edges, so the
+       visible area is always exactly 2 columns wide. */
+    width: 100%;
   }
-  /* Narrow viewport: revert to normal page flow */
-  @media (max-width: 700px) {
+  /* Truly narrow viewport (phone-width iframe): revert to single-column
+     scroll. Threshold lowered to 400px so the 2-column layout stays on
+     even when the reader iframe is moderately narrowed by an open side
+     panel (audio panel, settings) on desktop viewports. */
+  @media (max-width: 400px) {
     html { overflow-x: hidden; overflow-y: auto; }
     body { overflow-x: visible; overflow-y: auto; }
-    #epub-clip { position: static; width: auto; height: auto; overflow: visible; }
-    .epub-spread { column-count: 1; column-gap: 0; height: auto; padding: 2rem 1.5rem 4rem; }
+    #epub-clip { position: static; width: auto; height: auto; left: auto; overflow: visible; }
+    /* !important for parity with the wide-mode rule — guarantees single-column
+       even if a browser extension tries to inject column-count: 2 inline. */
+    .epub-spread { column-count: 1 !important; column-gap: 0; height: auto; width: auto; padding: 2rem 1.5rem 4rem; }
   }
   ${buildTypoCss(f, size, lh, t.text, indent)}
   /* Spread-specific: allow headings to break across columns */
@@ -402,7 +470,11 @@ const SPREAD_SCRIPT = `<script>
   function updateLayout() {
     var spread = document.querySelector('.epub-spread');
     if (!spread) return;
-    var narrow = window.innerWidth < 700;
+    // Must mirror the CSS @media (max-width: 400px) threshold above — if these
+    // drift apart, the JS will switch to single-column at a width where the
+    // CSS still wants 2 columns, and you'll see a flash from 2 → 1 columns on
+    // every resize.
+    var narrow = window.innerWidth < 400;
     if (narrow !== isSingleCol) {
       isSingleCol = narrow;
       if (narrow) {
@@ -589,8 +661,20 @@ export async function GET(
     const bodyMatch = rawHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
     const rawBody = bodyMatch ? bodyMatch[1] : rawHtml;
 
+    // Strip embedded <style> blocks from the chapter body BEFORE any other
+    // processing. Vietnamese/Calibre EPUBs commonly ship with inline CSS
+    // like `p { columns: 2 }` or `section { columns: 2 }` that targets our
+    // reader's block-level children — when that nests inside our
+    // `.epub-spread { column-count: 2 }`, you get 2 outer × 2 inner = 4
+    // visible columns. Embedded <style> blocks also routinely include
+    // styles that fight our theme (hard-coded colors, fonts, margins),
+    // so removing them is a clean win on top of the higher-specificity
+    // override in buildTypoCss. Our <style> in <head> already provides
+    // every typographic rule the reader needs.
+    const noStyle = rawBody.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '');
+
     // Rewrite assets and chapter links, deduplicate headings, strip watermarks
-    const rewritten = rewriteAssets(rawBody, params.id);
+    const rewritten = rewriteAssets(noStyle, params.id);
     const deduped   = deduplicateHeading(rewritten);
     const stripped  = stripWatermarks(deduped, watermarks);
 
@@ -638,7 +722,7 @@ export async function GET(
 
     let page: string;
     if (isSpread) {
-      const spreadCss = buildSpreadCss(theme, font, fontSize, lineH, indent, padTop, padBottom, padInline);
+      const spreadCss = buildSpreadCss(theme, font, fontSize, lineH, indent, padTop, padBottom, padInline, width);
       const themeColors = THEME_COLORS[theme as keyof typeof THEME_COLORS] ?? THEME_COLORS.dark;
       page = `<!DOCTYPE html>
 <html lang="${book.language ?? 'vi'}">

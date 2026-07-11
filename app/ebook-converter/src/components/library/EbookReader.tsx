@@ -97,8 +97,11 @@ interface ReaderSettings {
   padTop: number; padBottom: number; padInline: number;
 }
 const DEFAULT_SETTINGS: ReaderSettings = {
-  theme: 'dark', font: 'serif', fontSize: 18, lineHeight: 1.85, width: 720, layout: 'spread', indent: 1.5,
-  padTop: 48, padBottom: 96, padInline: 40,
+  // Indent = 0 → Vietnamese novel style: every paragraph flush-left, blank
+  // line between them. Classic book style (indent=1.5) is still selectable
+  // from the Reading Settings indent chip group.
+  theme: 'dark', font: 'serif', fontSize: 18, lineHeight: 1.85, width: 820, layout: 'spread', indent: 0,
+  padTop: 56, padBottom: 96, padInline: 56,
 };
 const INDENT_PRESETS = [
   { em: 0,   label: 'None' },
@@ -140,12 +143,18 @@ function readerSurface(theme: Theme, key: ReaderSurfaceKey): string {
       break;
     case 'sepia':
       switch (key) {
-        case 'header':   return 'bg-[#f0e6d3]/95 border-[#c8b89a] text-[#3b2f20]';
+        // SEPIA palette aligned with THEME_COLORS.sepia in the chapter route
+        // so iframe html bg + reader surface are visually continuous.
+        // Two-tone cream: bg `#f4ede4` (reading surface) + htmlBg/panel/header
+        // `#ede0ce` (chrome). Borders `#c8b89a`, accent `#a07840` (copper).
+        // Active/hover use the accent copper rather than Tailwind amber,
+        // which would render as bright yellow and clash with warm sepia.
+        case 'header':   return 'bg-[#ede0ce]/95 border-[#c8b89a] text-[#3b2f20]';
         case 'panel':    return 'bg-[#ede0ce] border-[#c8b89a] text-[#3b2f20]';
         case 'divider':  return 'border-[#c8b89a]';
         case 'muted':    return 'text-[#8a7a65]';
-        case 'active':   return 'bg-amber-200 text-amber-900 border-amber-500';
-        case 'hover':    return 'hover:bg-amber-100/50';
+        case 'active':   return 'bg-[#a07840]/20 text-[#5a3a1c] border-[#a07840]';
+        case 'hover':    return 'hover:bg-[#a07840]/10';
         case 'input':    return 'border-[#c8b89a] bg-[#f4ede4]';
         case 'btnBorder':return '#c8b89a';
       }
@@ -171,8 +180,8 @@ const FONTS = [
   { id: 'mono'  as Font, sample: 'Mono', stack: 'monospace' },
 ];
 const WIDTHS = [
-  { px: 560, label: 'Narrow' }, { px: 720, label: 'Medium' },
-  { px: 900, label: 'Wide' },   { px: 9999, label: 'Full' },
+  { px: 640, label: 'Narrow' }, { px: 820, label: 'Medium' },
+  { px: 1040, label: 'Wide' },   { px: 9999, label: 'Full' },
 ];
 
 interface WatermarkCandidate { text: string; count: number; percentage: number; confirmed?: boolean; }
@@ -208,7 +217,38 @@ interface BrowserSpeechRecognition {
 type BrowserSpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
 
 function loadSettings(): ReaderSettings {
-  try { const r = localStorage.getItem('epub-reader-settings'); if (r) return { ...DEFAULT_SETTINGS, ...JSON.parse(r) }; } catch { /**/ }
+  try {
+    const r = localStorage.getItem('epub-reader-settings');
+    if (r) {
+      const saved = JSON.parse(r) as Partial<ReaderSettings>;
+      // MIGRATION 2026-07-11 — bump OLD-default values to NEW defaults.
+      // If the saved value matches the OLD default exactly, the user never
+      // touched the slider — silently upgrade to the NEW default. Real
+      // user choices (e.g. width=900) are preserved.
+      //
+      // ALSO: padInline < 16px is treated as a bug/stale value, not a
+      // deliberate choice — anything below 16 leaves text pressed against
+      // the viewport edge. Bump to the NEW default (56px). The slider
+      // step is 4 so 0/4/8/12 are common off-by-one artifacts.
+      const OLD_DEFAULTS = {
+        width: 720,
+        padTop: 48,
+        padBottom: 96,
+        padInline: 40,
+        indent: 1.5,  // OLD default was 1.5em; NEW default is 0 (flush-left novel style)
+      } as const;
+      const migrated = { ...saved } as Record<string, unknown>;
+      for (const k of Object.keys(OLD_DEFAULTS) as Array<keyof typeof OLD_DEFAULTS>) {
+        if (saved[k] === OLD_DEFAULTS[k]) {
+          migrated[k] = DEFAULT_SETTINGS[k];
+        }
+      }
+      if (typeof saved.padInline === 'number' && saved.padInline < 16) {
+        migrated.padInline = DEFAULT_SETTINGS.padInline;
+      }
+      return { ...DEFAULT_SETTINGS, ...migrated };
+    }
+  } catch { /* corrupted JSON — fall through */ }
   return DEFAULT_SETTINGS;
 }
 function saveSettings(s: ReaderSettings) {
@@ -1974,13 +2014,33 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     if (!style) {
       style = doc.createElement('style');
       style.id = 'tts-current-style';
+      // Soft, theme-adaptive highlight: 3px solid left "accent bar" + soft
+      // horizontal gradient tint + paper-depth inset shadow. Uses
+      // `currentColor` so the highlight color matches the chapter text and
+      // looks harmonious across light / dark / sepia themes. Border-radius
+      // 4px and 220ms ease transition give a refined, less "blocky" feel
+      // than the old blue-fill-and-outline style. color-mix() is supported
+      // in all evergreen browsers since Chrome 111 (2023-03).
+      //
+      // `padding-left: 0.6rem` plus a matching `-0.6rem` margin-left gives
+      // the bar ~10px of breathing room from the text WITHOUT shifting the
+      // paragraph's overall box — the negative margin extends the element
+      // 10px to the left into the column-gap (spread) or body padding
+      // (scroll), which both have horizontal headroom.
       style.textContent = `
         .tts-current-block {
-          background: rgba(59, 130, 246, 0.18) !important;
-          outline: 2px solid rgba(59, 130, 246, 0.58) !important;
-          border-radius: 6px !important;
-          box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.10) !important;
-          transition: background 180ms ease, outline-color 180ms ease, box-shadow 180ms ease;
+          padding-left: 0.6rem !important;
+          margin-left: -0.6rem !important;
+          background: linear-gradient(90deg,
+            color-mix(in srgb, currentColor 14%, transparent) 0%,
+            color-mix(in srgb, currentColor 4%, transparent) 75%,
+            transparent 100%) !important;
+          box-shadow:
+            inset 3px 0 0 0 currentColor,
+            inset 0 -1px 0 0 color-mix(in srgb, currentColor 16%, transparent),
+            inset 0 1px 4px -2px color-mix(in srgb, currentColor 18%, transparent) !important;
+          border-radius: 4px !important;
+          transition: background 220ms ease, box-shadow 220ms ease !important;
         }
       `;
       doc.head.appendChild(style);
@@ -5149,20 +5209,26 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
                 ))}
               </div>
             </div>
-            {/* Width (scroll mode only) */}
-            {settings.layout === 'scroll' && (
-              <div>
-                <p className={cn('mb-2 text-[10px] font-semibold uppercase tracking-widest', mutedCls)}>Column Width</p>
-                <div className="grid grid-cols-4 gap-1.5">
-                  {WIDTHS.map((w) => (
-                    <button key={w.px} type="button" onClick={() => updateSetting('width', w.px)} aria-pressed={settings.width === w.px}
-                      className={cn('rounded-lg border border-border py-2 text-[10px] font-medium transition-all bg-transparent', settings.width === w.px ? activeCls : `${hoverCls} opacity-70`)}>
-                      {w.label}
-                    </button>
-                  ))}
-                </div>
+            {/* Width — always shown; in scroll mode it caps max-width,
+                in spread mode it caps the column-pair width so each column
+                stays readable on wide viewports. See buildSpreadCss and
+                buildScrollCss in the chapters route. */}
+            <div>
+              <p className={cn('mb-2 text-[10px] font-semibold uppercase tracking-widest', mutedCls)}>Column Width</p>
+              <div className="grid grid-cols-4 gap-1.5">
+                {WIDTHS.map((w) => (
+                  <button key={w.px} type="button" onClick={() => updateSetting('width', w.px)} aria-pressed={settings.width === w.px}
+                    className={cn('rounded-lg border border-border py-2 text-[10px] font-medium transition-all bg-transparent', settings.width === w.px ? activeCls : `${hoverCls} opacity-70`)}>
+                    {w.label}
+                  </button>
+                ))}
               </div>
-            )}
+              <p className={cn('mt-1.5 text-[10px]', mutedCls)}>
+                {settings.layout === 'spread'
+                  ? 'Total spread width — each column will be roughly half this value.'
+                  : `Body text wraps at ${settings.width}px max.`}
+              </p>
+            </div>
             {/* Padding controls */}
             <div>
               <p className={cn('mb-2 text-[10px] font-semibold uppercase tracking-widest', mutedCls)}>Padding</p>

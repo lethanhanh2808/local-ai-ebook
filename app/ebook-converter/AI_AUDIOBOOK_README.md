@@ -1,7 +1,19 @@
 # AI Audiobook Pipeline — Documentation
 
 > Complete reference for the emotional voice reader with multi-character
-> voice cloning and pre-generation pipeline. Last updated 2026-07-04.
+> voice cloning and pre-generation pipeline.
+>
+> **Last updated 2026-07-11.** ⚠️ **Heads up: this file has not been fully
+> rewritten to match the current VieNeu-only stack.** Sections §3 (Services &
+> ports), §8 (TTS backends), and §5 (file layout) still describe the historical
+> Piper + MOSS-Nano + `unified_server.py :5010` layout that was removed on
+> 2026-07-05 when the TTS service was consolidated to a single VieNeu process
+> on `:5020`. The architectural flow diagrams and the audiobook pipeline
+> description in §1–§6 are still accurate in spirit; the operational details
+> (services, ports, file paths) are not. Until this file is rewritten, treat it
+> as **historical reference**, not a runbook. For the current TTS backend
+> layout, see [`../../README.md`](../../README.md) §TTS Stack and
+> [`../../DEVELOPMENT_INSTRUCTIONS.md`](../../DEVELOPMENT_INSTRUCTIONS.md).
 
 ## Table of Contents
 
@@ -71,20 +83,16 @@ audiobook:
                   │
                   ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│            TTS Services  (Python FastAPI / CLI scripts)                  │
+│            TTS Service  (Python FastAPI)                                 │
 │                                                                          │
 │  ┌────────────────────────────────────────────────────────────────────┐ │
-│  │ tts-service/unified_server.py  (:5010)                              │ │
-│  │  POST /synthesize  → routes to vieneu/piper/moss-nano based on text│ │
-│  │  GET  /backends     → advertises available engines                    │ │
-│  │  GET  /health       → used by Next.js to verify availability       │ │
+│  │ tts-service/vieneu_server.py  (:5020)                                │ │
+│  │  POST /synthesize  → Vietnamese-native, 48 kHz stereo, 10 voices    │ │
+│  │  GET  /health       → used by Next.js to verify availability        │ │
+│  │  Reference-path upload → instant voice cloning                       │ │
 │  └────────────────────────────────────────────────────────────────────┘ │
-│                  │                                                       │
-│      ┌───────────┼───────────┬─────────────────────┐                    │
-│      ▼                       ▼                     ▼                    │
-│  :5002 Piper          :5020 VieNeu-TTS v3   (.venv ONNX)                │
-│  (legacy 22 kHz)      (Vietnamese-native,    MOSS-TTS-Nano              │
-│                        10 voices, 48 kHz)     voice cloning               │
+│                                                                          │
+│  (Piper and MOSS-Nano backends were removed on 2026-07-05.)              │
 └──────────────────────────────────────────────────────────────────────────┘
                   │
                   ▼
@@ -140,11 +148,14 @@ audiobook:
 | Port | Service | Process | Purpose |
 |---|---|---|---|
 | **3100** | Next.js | `npm run dev` | UI + API |
-| **5002** | Piper TTS | `python server.py` | Legacy Vietnamese (22 kHz) |
-| **5010** | Unified TTS | `python unified_server.py` | Auto-routes: Vietnamese → VieNeu, others → MOSS-Nano |
-| **5020** | VieNeu-TTS v3 | `python vieneu_server.py` | Vietnamese-native (10 voices, 48 kHz) |
+| **5020** | VieNeu-TTS v3 | `python vieneu_server.py` | Vietnamese-native (10 voices, 48 kHz) — **sole TTS backend as of 2026-07-05** |
 | **8080** | oMLX | `omlx serve` | Local LLM (5 GB resident) |
 | **6379** | Redis | `redis-server` | BullMQ broker |
+
+> **Removed 2026-07-05:** Piper (`:5002`) and the unified TTS router (`:5010`). The
+> audiobook pipeline talks directly to VieNeu at `:5020`; no compatibility router
+> runs in front of it. The `UNIFIED_TTS_URL` env var is preserved as a back-compat
+> alias for `VIENEU_BASE_URL`.
 
 **Start everything:**
 ```bash
@@ -163,10 +174,7 @@ cd /Volumes/EXT-SSD/Users/anhl/Local-AI
 ```bash
 curl -s http://localhost:3100/api/tts/health
 curl -s http://localhost:3100/api/worker/status
-for p in 3100 5002 5010 5020 8080 6379; do
-  curl -s -m 2 -o /dev/null -w ":$p  %{http_code}\n" http://127.0.0.1:$p/ 2>/dev/null \
-    || echo ":$p  ✗"
-done
+curl -s http://127.0.0.1:5020/health
 ```
 
 ---
@@ -271,24 +279,26 @@ model AudiobookChapter {
 │   │   │   │   └── CharacterDetection.tsx          ← AI suggest UI
 │   │   │   ├── lib/
 │   │   │   │   ├── db/{voices,audiobook,books}.ts  # CRUD
-│   │   │   │   └── tts/client.ts                   # unified client
+│   │   │   │   └── tts/client.ts                   # VieNeu HTTP client (sole backend)
 │   │   │   └── worker/
 │   │   │       └── audiobook.ts                    # BullMQ worker
-│   │   └── .env.local                              # OMLX_API_KEY, TTS URLs
+│   │   └── .env.local                              # OMLX_API_KEY, VIENEU_BASE_URL
 │   └── tts-service/
-│       ├── .venv-moss-nano/bin/python              # Python 3.11 + httpx + onnxruntime
-│       ├── voice_samples/                           # 10 built-in voice WAVs (~9 MB)
-│       ├── models/
-│       │   ├── MOSS-TTS-Nano-100M-ONNX/            # voice cloning model
-│       │   └── MOSS-Audio-Tokenizer-Nano-ONNX/
+│       ├── .venv/bin/python                        # Python 3.11 + httpx (VieNeu deps)
+│       ├── voice_samples/                           # 10 built-in VieNeu voice WAVs (~9 MB)
 │       ├── VieNeu-TTS/                              # Vietnamese TTS repo
-│       ├── server.py                                # Piper legacy (port 5002)
-│       ├── unified_server.py                        # auto-router (port 5010)
-│       ├── vieneu_server.py                         # VieNeu direct (port 5020)
+│       ├── vieneu_server.py                         # VieNeu direct (port 5020) — sole TTS process
 │       ├── audiobook_generator.py                   # chapter → WAV pipeline
+│       ├── conversation_attribution.py             # Python port of attributeConversationChapter
+│       ├── conversation_state_client.py             # HTTP client for /api/library/[id]/conversation-state
+│       ├── vncorenlp_attribution.py                # Tier 3b parser (Python-side)
+│       ├── vi_g2p.py                                # Vietnamese grapheme→phoneme + name canonicalisation
 │       ├── character_detector.py                    # oMLX-based detection
 │       ├── start_all.sh / stop_all.sh              # manage services
-│       └── generate_voice_samples.sh
+│       ├── measure_attribution.py                  # parity measurement script
+│       ├── tests/                                   # 203 Python tests
+│       └── scripts/
+│           └── measure_attribution.py              # mirror of measure-attribution.ts
 ```
 
 ---
@@ -416,19 +426,22 @@ Audition any voice (built-in OR custom).
 
 ## 8. TTS backends
 
-| Backend | Vietnamese | Voice cloning | Speed (M4) | Quality |
-|---|---|---|---|---|
-| **VieNeu v3 Turbo** | ✅ native | ✅ instant from 3-5 s | 0.5–3 s / segment | 48 kHz stereo |
-| **Piper** | ✅ fixed voices | ❌ | 0.5 s / segment | 22 kHz mono |
-| **MOSS-TTS-Nano** | ❌ | ✅ instant | 4–5 s / segment (English) | 48 kHz |
+**As of 2026-07-05 the TTS service is consolidated to a single VieNeu process on `:5020`.** The historical Piper and MOSS-TTS-Nano backends, the `unified_server.py :5010` router, and the `UNIFIED_TTS_URL` compatibility variable have been removed. The `Settings.ttsProvider` value is always `vieneu`; setting `piper` or `moss-nano` returns a 400.
 
-The unified server at `:5010` auto-routes:
-- Vietnamese (any text containing Vietnamese diacritics) → **VieNeu**
-- English → **MOSS-TTS-Nano** (with reference audio if provided)
-- Custom (no Vietnamese, no English) → **VieNeu** (better default)
+| Backend | Vietnamese | Voice cloning | Speed (M4) | Quality | Status |
+|---|---|---|---|---|---|
+| **VieNeu v3 Turbo** | ✅ native | ✅ instant from 3–5 s | 0.5–3 s / segment | 48 kHz stereo | **default, sole backend** |
+| ~~Piper~~ | ✅ fixed voices | ❌ | 0.5 s / segment | 22 kHz mono | **removed 2026-07-05** |
+| ~~MOSS-TTS-Nano~~ | ❌ | ✅ instant | 4–5 s / segment (English) | 48 kHz | **removed 2026-07-05** |
 
-To force a specific backend, pass `"backend": "vieneu"|"piper"|"moss-nano"` in the
-synthesize request body.
+The audiobook pipeline calls VieNeu directly at `http://127.0.0.1:5020/synthesize` (overridable via `VIENEU_BASE_URL`). The legacy `UNIFIED_TTS_URL` env var is preserved as a back-compat alias for `VIENEU_BASE_URL`; setting it to `:5010` will fail the health check because no router runs on that port anymore.
+
+Why we removed the other backends:
+- **Piper** — Vietnamese voices were lower fidelity (22 kHz mono) and the catalogue didn't cover all character roles. Now that VieNeu covers the same diacritic-safe Vietnamese path at 48 kHz stereo, the lower-fidelity fallback is unnecessary.
+- **MOSS-TTS-Nano** — Designed for English voice cloning; Vietnamese diacritics are unreliable. VieNeu cloning (`reference_path` upload) replaces it for custom voices.
+- **`unified_server.py :5010`** — When the routing table collapsed to a single backend, the router was a pure indirection layer with no production value.
+
+`Settings.ttsProvider` accepts only `vieneu`; any other value returns 400. The `backend` field on synthesize requests is ignored.
 
 ---
 
@@ -706,9 +719,11 @@ OMLX_BASE_URL=http://127.0.0.1:8080/v1
 OMLX_API_KEY=<from ~/.omlx/settings.json auth.api_key>
 OMLX_MODEL=<currently loaded model name>
 
-# TTS services
-UNIFIED_TTS_URL=http://127.0.0.1:5010   # Next.js → unified server
-VIENEU_TTS_URL=http://127.0.0.1:5020    # direct VieNeu (debugging)
+# TTS service (VieNeu is the sole backend as of 2026-07-05)
+# UNIFIED_TTS_URL is preserved as a back-compat alias for VIENEU_BASE_URL;
+# setting it to :5010 will fail the health check.
+VIENEU_BASE_URL=http://127.0.0.1:5020
+UNIFIED_TTS_URL=http://127.0.0.1:5020   # back-compat alias
 TTS_PYTHON=/Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11
 
 # Storage
@@ -766,7 +781,7 @@ cd /Volumes/EXT-SSD/Users/anhl/Local-AI
 ### Health check (one-liner)
 
 ```bash
-for p in 3100 5002 5010 5020 8080 6379; do
+for p in 3100 5020 8080 6379; do
   code=$(curl -s -o /dev/null -m 2 -w "%{http_code}" http://127.0.0.1:$p/ 2>/dev/null)
   echo ":$p  $code"
 done
@@ -775,12 +790,12 @@ done
 Expected:
 ```
 :3100  200      # Next.js
-:5002  404      # Piper (only /health, no /)
-:5010  404      # Unified (only /health, no /)
 :5020  404      # VieNeu (only /health, no /)
 :8080  404      # oMLX (no /, but /v1/... works)
 :6379  -        # Redis (HTTP probe doesn't work; use redis-cli ping)
 ```
+
+Note: ports 5002 (Piper) and 5010 (unified router) are no longer expected to be listening. Their absence is normal after the 2026-07-05 TTS consolidation.
 
 ### Update oMLX model
 

@@ -3,6 +3,18 @@
 All notable changes to the Local-AI ebook conversion, reader, and TTS stack are
 documented here.
 
+## [Unreleased] - 2026-07-11
+
+### Reader and playback experience
+
+- **Spread mode shows exactly 2 columns.** The iframe clip width now equals the spread width (centered horizontally via `min(820px, calc(100vw - 2*padInline))` + `max(padInline, calc(50vw - 410px))`) so only one page track is visible at a time — even on viewports wider than the spread. The previous clip was wider than the spread, which exposed 1.6 page tracks and read as "four columns" to the eye. Playwright verification at `app/ebook-converter/verify-spread.mjs` confirms `column-count: 2` on the spread element after the fix.
+- **Embedded EPUB `<style>` blocks are stripped before serving.** Long-standing reader polish bug: third-party EPUBs ship `<style>` blocks with `!important` declarations on `column-count` that survived the iframe wrapper's CSS layer and broke the 2-column layout. `stripEmbeddedStyles` is now applied in `chapters/[chapterId]/route.ts` before any other processing, so the reader's column math is the only column math.
+- **Higher-specificity column override.** A `#epub-clip .epub-spread p` selector (and matching `section/div/article/blockquote/li/dd/dt`) forces `columns: 1 !important; column-count: 1 !important` even when an attacker (or an overzealous EPUB) declares its own column rules in body class scope. Heading and HR elements get `column-span: all` so they break across both columns.
+- **Standardized paragraph indent.** `DEFAULT_SETTINGS.indent` is now `0` (was `1.5`). Old persisted `indent: 1.5` values are auto-migrated to `0` on next read so existing users get the new default without manual clearing. Paragraphs render with `margin: 0.65em 0` and zero first-line indent, so chapter text reads as flush-left paragraphs separated by blank space (not first-line indent on every paragraph). The slider remains in the reader settings panel for users who prefer the older look.
+- **Reader padding consistency.** The body padding now matches the user's Reading Settings slider (`padTop` / `padBottom` / `padInline`) instead of being hard-coded to `4px` horizontal. The horizontal padding default is now `56px` so the text column is centered on tablet widths and reads cleanly without forced left-edge bleed.
+- **Playwright verification harness.** `app/ebook-converter/verify-spread.mjs` boots headless Chromium, loads `/api/library/[id]/chapters/[chapterId]` directly with the user's settings, and reports the spread's computed `column-count`, `column-width`, bounding rect, scroll dimensions, and the first five paragraphs' `text-indent` / `margin` / `column-count`. Use it any time you change the spread CSS to confirm the layout math still holds.
+- Migrated all dynamic pages and route handlers to Next.js 15 asynchronous params.
+
 ## [Unreleased] - 2026-07-10
 
 ### TTS and Vietnamese speech

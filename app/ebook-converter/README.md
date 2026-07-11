@@ -15,9 +15,7 @@ Converts EPUB, HTML, and TXT ebooks into clean, standardized EPUB3 with optional
   - Vietnamese-novel deep chapter formatting
   - Character detection for audiobooks
   - AI cover art + per-chapter illustrations
-- **VieNeu-TTS** Vietnamese-native neural TTS (48 kHz stereo, 10 built-in voices)
-- **MOSS-TTS-Nano** voice cloning for custom reference audio
-- **Piper** (legacy 22 kHz Vietnamese TTS, fallback only)
+- **VieNeu-TTS** Vietnamese-native neural TTS (48 kHz stereo, 10 built-in voices, instant voice cloning from 3–5 s reference audio) — **sole TTS backend as of 2026-07-05**
 - **Paged SSD cache** in `omlx-home/cache`
 - **Literata** font embedded in every output for consistent rendering
 - **Streaming responses** with HTTP Range support for instant chapter seek
@@ -166,7 +164,7 @@ All routes are under `/api/`.
 | `POST` | `/api/settings/test-ai` | Send a short test prompt and report latency + response |
 | `POST` | `/api/tts/preview` | Audition any voice via the unified TTS service |
 | `POST` | `/api/tts/analyze` | Run AI on a chunk of text to detect characters/lines |
-| `GET` | `/api/tts/health` | Aggregate Unified TTS, VieNeu, Piper, MOSS-Nano, and local readiness state |
+| `GET` | `/api/tts/health` | Aggregate VieNeu and local readiness state (Piper/MOSS-Nano/unified router removed 2026-07-05) |
 | `GET` `/POST` | `/api/shelves` | List / create shelves |
 | `GET` `/PATCH` `/DELETE` | `/api/shelves/[id]` | Read / update / delete a shelf; add or remove books |
 | `GET` | `/api/stats` | Library-wide stats for the dashboard |
@@ -223,7 +221,7 @@ app/ebook-converter/
 │   │   ├── db/{client,settings,jobs,books,audiobook,voices}.ts
 │   │   ├── queue/index.ts                      # BullMQ queue factory
 │   │   ├── storage/index.ts                    # Disk paths / upload persistence
-│   │   ├── tts/client.ts                       # Unified TTS HTTP client
+│   │   ├── tts/client.ts                       # VieNeu HTTP client (sole TTS backend)
 │   │   └── utils.ts
 │   └── worker/
 │       ├── index.ts                             # BullMQ consumer for ebook-conversion jobs
@@ -358,13 +356,13 @@ Selected in **Settings → TTS Provider** and used by the audiobook pipeline.
 
 Settings also includes a local service health panel backed by `/api/tts/health` and `/api/worker/status`.
 
-| Provider | Vietnamese | Voice cloning | Speed | Quality |
-| --- | --- | --- | --- | --- |
-| **VieNeu v3 Turbo** | ✅ native | ✅ (instant from 3–5 s) | 0.5–3 s / segment | 48 kHz stereo |
-| **Piper** | ✅ fixed voices | ❌ | 0.5 s / segment | 22 kHz mono |
-| **MOSS-TTS-Nano** | ❌ | ✅ instant | 4–5 s / segment | 48 kHz |
+| Provider | Vietnamese | Voice cloning | Speed | Quality | Status |
+| --- | --- | --- | --- | --- | --- |
+| **VieNeu v3 Turbo** | ✅ native | ✅ (instant from 3–5 s) | 0.5–3 s / segment | 48 kHz stereo | **default, sole backend** |
+| ~~Piper~~ | ✅ fixed voices | ❌ | 0.5 s / segment | 22 kHz mono | **removed 2026-07-05** |
+| ~~MOSS-TTS-Nano~~ | ❌ | ✅ instant | 4–5 s / segment | 48 kHz | **removed 2026-07-05** |
 
-The unified server at `:5010` auto-routes: text with Vietnamese diacritics → VieNeu; otherwise → MOSS-Nano; with reference audio → clones. Force a backend with `"backend": "vieneu"\|"piper"\|"moss-nano"` in the synthesize body.
+The audiobook pipeline talks directly to VieNeu at `http://127.0.0.1:5020/synthesize` (overridable via `VIENEU_BASE_URL`). The historical `UNIFIED_TTS_URL` env var is preserved as a back-compat alias for `VIENEU_BASE_URL`; setting it to `:5010` will fail the health check because no router runs on that port anymore. The `Settings.ttsProvider` value is always `vieneu`; setting `piper` or `moss-nano` returns 400.
 
 For audiobook details, character detection, voice cloning, dialogue attribution, and pre-generation architecture, see [`AI_AUDIOBOOK_README.md`](./AI_AUDIOBOOK_README.md).
 
@@ -488,12 +486,12 @@ It maps to side-channel ports so the host dev server (`./scripts/start_full_app.
 
 ### Reaching host-local oMLX and TTS from inside the container
 
-The container rewrites `UNIFIED_TTS_URL` and `OMLX_BASE_URL` to `http://host.docker.internal:…` (with `extra_hosts: ['host.docker.internal:host-gateway']`) so the app inside Docker can talk to the host's:
+The container rewrites `VIENEU_BASE_URL` (and its back-compat alias `UNIFIED_TTS_URL`) and `OMLX_BASE_URL` to `http://host.docker.internal:…` (with `extra_hosts: ['host.docker.internal:host-gateway']`) so the app inside Docker can talk to the host's:
 
 | Host service | URL inside container |
 | --- | --- |
 | oMLX (`:8080`) | `http://host.docker.internal:8080/v1` |
-| Unified TTS (`:5010`) | `http://host.docker.internal:5010` |
+| VieNeu (`:5020`) | `http://host.docker.internal:5020` |
 
 This works on Docker Desktop for Mac/Windows out of the box. On Linux without Docker Desktop you would either switch to `network_mode: host` or set the URLs to the host's LAN IP.
 
@@ -538,7 +536,7 @@ docker compose down -v            # also wipe redis-data
 
 ### Troubleshooting
 
-- **Container can't reach oMLX (`/api/tts/health` 5xx, "ECONNREFUSED 127.0.0.1:8080")** — make sure `OMLX_BASE_URL` and `UNIFIED_TTS_URL` in `.env.local` are not pinning them to literal `127.0.0.1`; the compose `environment:` overrides take precedence, but if you delete those lines, the container will fall back to host-internal localhost and fail. Also confirm Docker Desktop is running and the host services are up: `curl http://127.0.0.1:8080/health && curl http://127.0.0.1:5010/health`.
+- **Container can't reach oMLX (`/api/tts/health` 5xx, "ECONNREFUSED 127.0.0.1:8080")** — make sure `OMLX_BASE_URL` and `VIENEU_BASE_URL` in `.env.local` are not pinning them to literal `127.0.0.1`; the compose `environment:` overrides take precedence, but if you delete those lines, the container will fall back to host-internal localhost and fail. Also confirm Docker Desktop is running and the host services are up: `curl http://127.0.0.1:8080/health && curl http://127.0.0.1:5020/health`.
 - **Build fails on `npx prisma generate`** — confirm the schema pinned `binaryTargets` includes `linux-musl-openssl-3.0.x` (or delete the pin for local-only dev).
 - **`Permission denied` on `./data` mount** — the image runs as UID 1001 (`nextjs`); `chown -R 1001:1001 app/ebook-converter/data` once on the host before `up`.
 
