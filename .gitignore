@@ -99,3 +99,8 @@ _*.py
 
 # Reference material checked out locally for offline docs (submodule candidates)
 reference/
+
+# VS Code workspace files (personal IDE config, not for sharing)
+*.code-workspace
+
+hg_token.md
