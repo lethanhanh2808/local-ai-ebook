@@ -3,16 +3,12 @@
 > Complete reference for the emotional voice reader with multi-character
 > voice cloning and pre-generation pipeline.
 >
-> **Last updated 2026-07-11.** ⚠️ **Heads up: this file has not been fully
-> rewritten to match the current VieNeu-only stack.** Sections §3 (Services &
-> ports), §8 (TTS backends), and §5 (file layout) still describe the historical
-> Piper + MOSS-Nano + `unified_server.py :5010` layout that was removed on
-> 2026-07-05 when the TTS service was consolidated to a single VieNeu process
-> on `:5020`. The architectural flow diagrams and the audiobook pipeline
-> description in §1–§6 are still accurate in spirit; the operational details
-> (services, ports, file paths) are not. Until this file is rewritten, treat it
-> as **historical reference**, not a runbook. For the current TTS backend
-> layout, see [`../../README.md`](../../README.md) §TTS Stack and
+> **Last updated 2026-07-12.** This file is consistent with the current
+> VieNeu-only TTS stack (single `vieneu_server.py` on `:5020`, no
+> compatibility router). The Piper + MOSS-TTS-Nano + `unified_server.py`
+> layout is gone as of the 2026-07-12 removal. The architectural flow
+> diagrams (§1–§6) describe the current pipeline. For cross-cutting
+> context, see [`../../README.md`](../../README.md) §TTS Stack and
 > [`../../DEVELOPMENT_INSTRUCTIONS.md`](../../DEVELOPMENT_INSTRUCTIONS.md).
 
 ## Table of Contents
@@ -92,15 +88,15 @@ audiobook:
 │  │  Reference-path upload → instant voice cloning                       │ │
 │  └────────────────────────────────────────────────────────────────────┘ │
 │                                                                          │
-│  (Piper and MOSS-Nano backends were removed on 2026-07-05.)              │
+│  (Piper and MOSS-Nano backends were removed on 2026-07-12.)              │
 └──────────────────────────────────────────────────────────────────────────┘
                   │
                   ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                  oMLX  (:8080)  +  Redis  (:6379)                         │
 │                                                                          │
-│  oMLX serves any loaded MLX model (currently                             │
-│  Qwythos-9B-Claude-Mythos-5-1M-mxfp4-mlx, ~5 GB). The character          │
+│  oMLX serves any loaded MLX model (currently whichever model is set     │
+│  in `omlx-home/settings.json` as `default_model`). The character         │
 │  detector samples 5 chapters → calls oMLX chat completions → returns     │
 │  character names, genders, tones, sample lines.                          │
 │                                                                          │
@@ -148,13 +144,14 @@ audiobook:
 | Port | Service | Process | Purpose |
 |---|---|---|---|
 | **3100** | Next.js | `npm run dev` | UI + API |
-| **5020** | VieNeu-TTS v3 | `python vieneu_server.py` | Vietnamese-native (10 voices, 48 kHz) — **sole TTS backend as of 2026-07-05** |
+| **5020** | VieNeu-TTS v3 | `python vieneu_server.py` | Vietnamese-native (10 voices, 48 kHz) — **sole TTS backend as of 2026-07-12** |
 | **8080** | oMLX | `omlx serve` | Local LLM (5 GB resident) |
 | **6379** | Redis | `redis-server` | BullMQ broker |
 
-> **Removed 2026-07-05:** Piper (`:5002`) and the unified TTS router (`:5010`). The
-> audiobook pipeline talks directly to VieNeu at `:5020`; no compatibility router
-> runs in front of it. The `UNIFIED_TTS_URL` env var is preserved as a back-compat
+> **Removed 2026-07-12:** Piper (`:5002`), the unified TTS router
+> (`:5010`), and the MOSS-TTS-Nano backend. The audiobook pipeline
+> talks directly to VieNeu at `:5020`; no compatibility router runs in
+> front of it. The `UNIFIED_TTS_URL` env var is preserved as a back-compat
 > alias for `VIENEU_BASE_URL`.
 
 **Start everything:**
@@ -426,7 +423,7 @@ Audition any voice (built-in OR custom).
 
 ## 8. TTS backends
 
-**As of 2026-07-05 the TTS service is consolidated to a single VieNeu process on `:5020`.** The historical Piper and MOSS-TTS-Nano backends, the `unified_server.py :5010` router, and the `UNIFIED_TTS_URL` compatibility variable have been removed. The `Settings.ttsProvider` value is always `vieneu`; setting `piper` or `moss-nano` returns a 400.
+**As of 2026-07-12 the TTS service is consolidated to a single VieNeu process on `:5020`.** The historical Piper and MOSS-TTS-Nano backends, the `unified_server.py :5010` router, and the `UNIFIED_TTS_URL` compatibility variable have been removed. The `Settings.ttsProvider` value is always `vieneu`; setting `piper` or `moss-nano` returns a 400.
 
 | Backend | Vietnamese | Voice cloning | Speed (M4) | Quality | Status |
 |---|---|---|---|---|---|
@@ -457,7 +454,7 @@ When synthesizing a segment, the worker resolves which voice to use:
    b. If voice is a built-in VieNeu name → send `voice` to unified server
    c. If voice has refAudioPath → send `reference_path` (cloning)
 2. Else: use the book's default voice (Voice row with isDefault=true)
-3. Else: use Bình An (Vietnamese) or moss-nano (other)
+3. Else: use Bình An (Vietnamese); English-language segments fall back to a generic English voice
 ```
 
 ### Voice presets (built-in VieNeu)
@@ -696,7 +693,7 @@ Listens on BullMQ queue `ebook-audiobook`. Each chapter is one job:
 ### Per-segment HTTP details
 
 ```
-POST http://127.0.0.1:5010/synthesize
+POST http://127.0.0.1:5020/synthesize
 {
   "text": "...",                  ← segment text (with emotion markers if any)
   "backend": "vieneu",            ← forced
@@ -757,8 +754,10 @@ The Next.js worker looks for `tts-service` in this order:
 3. `process.cwd() + tts-service`
 4. `/Volumes/EXT-SSD/Users/anhl/Local-AI/app/tts-service` (absolute fallback)
 
-For Python interpreter, it prefers the project's venv:
-`app/tts-service/.venv-moss-nano/bin/python`
+For Python interpreter, it falls back to the in-container / system `python3`
+(Dockerfile installs Python 3.11 + `httpx` for this). The dev-time layout
+uses the root `app/tts-service/VieNeu-TTS/.venv/bin/python` interpreter
+which has the VieNeu runtime deps.
 
 ---
 
@@ -840,7 +839,7 @@ If the file is elsewhere, set `TTS_SERVICE_DIR` env var.
 Unified server isn't running. Start it:
 ```bash
 bash /Volumes/EXT-SSD/Users/anhl/Local-AI/app/tts-service/start_all.sh
-curl -s http://127.0.0.1:5010/health
+curl -s http://127.0.0.1:5020/health
 curl -s http://localhost:3100/api/tts/health
 ```
 
@@ -882,7 +881,7 @@ intact. If a character shows "(none)" voice, re-apply through the UI.
 
 Install in the venv:
 ```bash
-/Volumes/EXT-SSD/Users/anhl/Local-AI/app/tts-service/.venv-moss-nano/bin/pip install httpx
+/Volumes/EXT-SSD/Users/anhl/Local-AI/.venv/bin/pip install httpx
 ```
 
 ### BullMQ says "backend: piper" but I sent "vieneu"
