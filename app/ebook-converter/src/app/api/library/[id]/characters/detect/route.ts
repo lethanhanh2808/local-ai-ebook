@@ -58,22 +58,16 @@ const DETECTOR = TTS_SERVICE_DIR ? path.join(TTS_SERVICE_DIR, 'character_detecto
 // Pick the right Python interpreter — prefer the project's venv on host,
 // fall back to system python in the container.
 function resolvePython(): string {
-  // 1. Host-side venv (dev / direct invocation on the laptop). The venv's
-  //    `python3.11` is a symlink into /Library/Frameworks on macOS, so this
-  //    only works when the script is running on the host (not inside the
-  //    container) or when the volume mount preserves the full venv.
-  const venvPy = TTS_SERVICE_DIR ? path.join(TTS_SERVICE_DIR, '.venv-moss-nano', 'bin', 'python') : null;
-  if (venvPy && fs.existsSync(venvPy)) return venvPy;
-  // 2. Explicit override (typically only used on the host).
+  // 1. Explicit override (typically only used on the host).
   if (process.env.TTS_PYTHON && fs.existsSync(process.env.TTS_PYTHON)) {
     return process.env.TTS_PYTHON;
   }
-  // 3. Container system Python — installed by Dockerfile with httpx.
+  // 2. Container system Python — installed by Dockerfile with httpx.
   //    /usr/bin/python3 is the same as python3 on PATH but explicit avoids
   //    PATH surprises. Added: covers the case where the routed command
   //    `spawn` doesn't carry the standard PATH.
   if (fs.existsSync('/usr/bin/python3')) return '/usr/bin/python3';
-  // 4. Last-resort fallback to whatever python is on PATH.
+  // 3. Last-resort fallback to whatever python is on PATH.
   return process.env.TTS_PYTHON ?? 'python3';
 }
 

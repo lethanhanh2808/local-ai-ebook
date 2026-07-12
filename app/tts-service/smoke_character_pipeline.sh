@@ -14,7 +14,7 @@ echo "════════════════════════�
 echo "Book: $BOOK"
 echo ""
 
-OMLX_API_KEY="$OMLX_KEY" OMLX_MODEL="$OMLX_MODEL" .venv-moss-nano/bin/python character_detector.py "$BOOK" > /tmp/character_detect.json 2> /tmp/character_detect.log &
+OMLX_API_KEY="$OMLX_KEY" OMLX_MODEL="$OMLX_MODEL" python3 character_detector.py "$BOOK" > /tmp/character_detect.json 2> /tmp/character_detect.log &
 DET_PID=$!
 for i in $(seq 1 24); do
   sleep 5
@@ -117,7 +117,7 @@ echo "CMAP characters:"
 echo "$CMAP" | python3 -c "import json,sys; d=json.load(sys.stdin); print(' ', [c['name']+'→'+d['voices_by_id'][c['voiceId']]['name'] for c in d['characters']])"
 echo ""
 
-CHARACTER_MAP="$CMAP" time .venv-moss-nano/bin/python audiobook_generator.py \
+CHARACTER_MAP="$CMAP" time python3 audiobook_generator.py \
   --book-id smoke-test \
   --chapter-file chapter005.xhtml \
   --backend vieneu \

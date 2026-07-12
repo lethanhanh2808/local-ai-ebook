@@ -10,8 +10,8 @@ Endpoints:
   POST /clone_test                 – synthesize with custom reference audio
   GET  /health
 
-Note: this server is the Vietnamese-specific path. The unified_server.py
-on :5010 may proxy to this one for Vietnamese content.
+2026-07-12: this server is the sole TTS endpoint. The previous
+unified_server.py on :5010 (Piper + MOSS-TTS-Nano aggregator) was removed.
 """
 import os
 import io

@@ -1,8 +1,18 @@
 // src/app/api/tts/health/route.ts
 // Health summary for the local TTS stack used by reader/audiobook features.
+// 2026-07-12: VieNeu is the sole backend. The route talks to the VieNeu
+// FastAPI server on :5020 and synthesizes the same shape the reader +
+// ServiceHealth components expect (with `services.vieneu` + `services.piper`
+// + `services.mossNano` left in place for backward compatibility with any
+// cached UI consumers).
 import { NextResponse } from 'next/server';
 
-const UNIFIED_TTS_URL = (process.env.UNIFIED_TTS_URL ?? process.env.TTS_SERVICE_URL ?? 'http://127.0.0.1:5010').replace(/\/$/, '');
+const VIENEU_BASE_URL = (
+  process.env.VIENEU_BASE_URL ??
+  process.env.UNIFIED_TTS_URL ??
+  process.env.TTS_SERVICE_URL ??
+  'http://127.0.0.1:5020'
+).replace(/\/$/, '');
 
 interface Backend {
   id: string;
@@ -12,7 +22,7 @@ interface Backend {
 }
 
 async function fetchJson<T>(path: string, timeoutMs = 3_000): Promise<T> {
-  const r = await fetch(`${UNIFIED_TTS_URL}${path}`, {
+  const r = await fetch(`${VIENEU_BASE_URL}${path}`, {
     signal: AbortSignal.timeout(timeoutMs),
     cache: 'no-store',
   });
@@ -23,62 +33,45 @@ async function fetchJson<T>(path: string, timeoutMs = 3_000): Promise<T> {
 export async function GET(): Promise<NextResponse> {
   const checkedAt = new Date().toISOString();
   try {
-    const [health, backendsData] = await Promise.allSettled([
-      fetchJson<{ status?: string; piper?: string; vieneu_alive?: boolean; nano_installed?: boolean }>('/health'),
-      fetchJson<{ backends?: Backend[]; default_backend?: string }>('/backends'),
-    ]);
-
-    const healthValue = health.status === 'fulfilled' ? health.value : null;
-    const backends = backendsData.status === 'fulfilled' ? (backendsData.value.backends ?? []) : [];
-    const vieneu = backends.find((b) => b.id === 'vieneu');
-    const piper = backends.find((b) => b.id === 'piper');
-    const moss = backends.find((b) => b.id === 'moss-nano');
-    // Post-VieNeu-consolidation (2026-07-05): there's no unified aggregator
-    // anymore — the server on :5020 IS VieNeu. `/health` returns
-    // {status:"ok",engine:"vieneu-..."} and `/backends` 404s. Treat a green
-    // `/health` from the configured URL as a fully-ok unified stack with a
-    // single implicit VieNeu backend.
-    const vieneuDirectReady = health.status === 'fulfilled' && healthValue?.status === 'ok';
-    const unifiedOk = vieneuDirectReady || backends.length > 0;
-    const ok = unifiedOk && (vieneuDirectReady || !!vieneu?.ready);
-    const inferredBackends: Backend[] = backends.length > 0 ? backends : vieneuDirectReady
+    const health = await fetchJson<{ status?: string; vieneu?: string; vieneu_alive?: boolean }>('/health');
+    const vieneuReady = health.status === 'ok';
+    const inferredBackends: Backend[] = vieneuReady
       ? [{ id: 'vieneu', name: 'VieNeu', ready: true, languages: ['vi'] }]
       : [];
 
     return NextResponse.json({
-      ok,
+      ok: vieneuReady,
       checkedAt,
       unified: {
-        ok: unifiedOk,
-        url: UNIFIED_TTS_URL,
-        status: healthValue?.status ?? (unifiedOk ? 'ok' : 'unknown'),
+        ok: vieneuReady,
+        url: VIENEU_BASE_URL,
+        status: health.status ?? 'unknown',
       },
       services: {
-        vieneu: vieneuDirectReady || !!vieneu?.ready || !!healthValue?.vieneu_alive,
-        piper: !!piper?.ready || !!healthValue?.piper,
-        mossNano: !!moss?.ready || !!healthValue?.nano_installed,
+        vieneu: vieneuReady || !!health.vieneu_alive,
+        // Piper and MOSS-TTS-Nano are removed (2026-07-12). Kept in the
+        // response as `false` so old UI consumers don't crash when reading
+        // `services.piper` / `services.mossNano`.
+        piper: false,
+        mossNano: false,
       },
       backends: inferredBackends,
-      defaultBackend: backendsData.status === 'fulfilled' ? backendsData.value.default_backend : (vieneuDirectReady ? 'vieneu' : null),
-      recommendation: ok
+      defaultBackend: vieneuReady ? 'vieneu' : null,
+      recommendation: vieneuReady
         ? null
-        : 'Start the full local stack with ./scripts/start_full_app.sh --background, then re-check TTS health.',
-      errors: {
-        health: health.status === 'rejected' ? String(health.reason) : null,
-        backends: backendsData.status === 'rejected' ? String(backendsData.reason) : null,
-      },
-    }, { status: ok ? 200 : 503 });
+        : 'Start the local TTS service: bash app/tts-service/start_all.sh, then re-check TTS health.',
+      errors: { health: null, backends: null },
+    }, { status: vieneuReady ? 200 : 503 });
   } catch (err) {
     return NextResponse.json({
       ok: false,
       checkedAt,
-      unified: { ok: false, url: UNIFIED_TTS_URL, status: 'down' },
+      unified: { ok: false, url: VIENEU_BASE_URL, status: 'down' },
       services: { vieneu: false, piper: false, mossNano: false },
       backends: [],
       defaultBackend: null,
-      recommendation: 'Start the full local stack with ./scripts/start_full_app.sh --background, then re-check TTS health.',
+      recommendation: 'Start the local TTS service: bash app/tts-service/start_all.sh, then re-check TTS health.',
       error: err instanceof Error ? err.message : String(err),
     }, { status: 503 });
   }
 }
-

@@ -57,9 +57,8 @@ function resolveTtsServiceDir(): string | null {
 
 const TTS_SERVICE = resolveTtsServiceDir();
 const GENERATOR = TTS_SERVICE ? path.join(TTS_SERVICE, 'audiobook_generator.py') : null;
-const VENV_PY = TTS_SERVICE ? path.join(TTS_SERVICE, '.venv-moss-nano/bin/python') : null;
 const DATA_DIR = path.resolve(process.cwd(), 'data/audiobooks');
-const UNIFIED_TTS_URL = process.env.UNIFIED_TTS_URL ?? 'http://127.0.0.1:5010';
+const VIENEU_URL = process.env.VIENEU_URL ?? process.env.UNIFIED_TTS_URL ?? 'http://127.0.0.1:5020';
 const MAX_GENERATOR_LOG_BYTES = 1024 * 1024;
 const GENERATOR_TIMEOUT_MS = 30 * 60_000;
 
@@ -81,21 +80,23 @@ function appendBounded(current: string, chunk: unknown): string {
     : next;
 }
 
-// Belt-and-suspenders: coerce any stale/mistyped backend value to a known
-// one before spawning the Python subprocess. argparse in
-// audiobook_generator.py will SystemExit(2) on unknown values, which would
-// abort in-flight BullMQ jobs that still carry a legacy backend string.
-const ALLOWED_BACKENDS = new Set(['vieneu', 'piper', 'moss-nano']);
-function coerceBackend(raw: string | undefined): 'vieneu' | 'piper' | 'moss-nano' {
+// Belt-and-suspenders: coerce any stale/mistyped backend value to 'vieneu'
+// before spawning the Python subprocess. argparse in audiobook_generator.py
+// will SystemExit(2) on unknown values, which would abort in-flight BullMQ
+// jobs that still carry a legacy backend string ('piper' / 'moss-nano').
+// 2026-07-12: Piper + MOSS-TTS-Nano removed — 'vieneu' is the only allowed value.
+const ALLOWED_BACKENDS = new Set(['vieneu']);
+function coerceBackend(raw: string | undefined): 'vieneu' {
   const v = raw ?? 'vieneu';
-  if (ALLOWED_BACKENDS.has(v)) return v as 'vieneu' | 'piper' | 'moss-nano';
-  console.warn(`[audiobook-worker] unknown backend "${v}" coerced to "vieneu"`);
+  if (ALLOWED_BACKENDS.has(v)) return 'vieneu';
+  console.warn(`[audiobook-worker] legacy backend "${v}" coerced to "vieneu"`);
   return 'vieneu';
 }
 
 function pickPython(): string {
-  // Use the Moss venv python if it has the unified_server module, else system.
-  if (VENV_PY && fs.existsSync(VENV_PY)) return VENV_PY;
+  // 2026-07-12: .venv-moss-nano removed. audiobook_generator.py only needs
+  // httpx (a system package in the container / a system-installed module
+  // on the host). Use the explicit override or fall back to PYTHON.
   return PYTHON;
 }
 
@@ -124,7 +125,7 @@ async function runGenerator(opts: {
       '--out-dir', opts.outDir,
     ];
     const proc = spawn(py, args, {
-      env: { ...process.env, UNIFIED_TTS_URL, CHARACTER_MAP: opts.charactersJson },
+      env: { ...process.env, VIENEU_URL, UNIFIED_TTS_URL: VIENEU_URL, CHARACTER_MAP: opts.charactersJson },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const key = generatorKey(opts.bookId, opts.chapterFile);

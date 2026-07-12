@@ -22,13 +22,13 @@ export interface ConversionJobData {
 export interface AudiobookChapterJobData {
   bookId: string;
   chapterFile: string;
-  backend?: 'piper' | 'moss-nano' | 'vieneu';
+  backend?: 'vieneu';
   force?: boolean;
 }
 
 export interface AudiobookBookJobData {
   bookId: string;
-  backend?: 'piper' | 'moss-nano' | 'vieneu';
+  backend?: 'vieneu';
 }
 
 export type AudiobookJobData = AudiobookChapterJobData | AudiobookBookJobData;

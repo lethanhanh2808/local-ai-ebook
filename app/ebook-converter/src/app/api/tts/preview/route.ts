@@ -19,7 +19,7 @@ export const dynamic = 'force-dynamic';
 
 const BUILTIN_VIENEU = new Set(BUILTIN_VIENEU_NAMES);
 
-const UNIFIED_TTS_URL = process.env.UNIFIED_TTS_URL ?? process.env.TTS_SERVICE_URL ?? 'http://127.0.0.1:5010';
+const VIENEU_BASE_URL = process.env.VIENEU_BASE_URL ?? process.env.UNIFIED_TTS_URL ?? process.env.TTS_SERVICE_URL ?? 'http://127.0.0.1:5020';
 const DEFAULT_PREVIEW = 'Xin chào bạn đọc, đây là giọng của tôi.';
 
 export async function POST(req: NextRequest) {
@@ -72,7 +72,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const r = await fetch(`${UNIFIED_TTS_URL}/synthesize`, {
+    const r = await fetch(`${VIENEU_BASE_URL}/synthesize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),

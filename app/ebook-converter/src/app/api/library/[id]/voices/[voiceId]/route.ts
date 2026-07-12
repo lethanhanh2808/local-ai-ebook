@@ -12,7 +12,7 @@ import { BUILTIN_VIENEU_NAMES } from '@/lib/tts/vieneu-voices';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const UNIFIED_TTS_URL = process.env.UNIFIED_TTS_URL ?? 'http://127.0.0.1:5010';
+const VIENEU_BASE_URL = process.env.VIENEU_BASE_URL ?? process.env.UNIFIED_TTS_URL ?? 'http://127.0.0.1:5020';
 
 export async function PATCH(
   req: NextRequest,
@@ -103,17 +103,17 @@ export async function POST(
   // Pick the right backend based on whether we have a reference audio (cloned
   // voice) or just a built-in VieNeu voice name.
   //   - Built-in VieNeu voice (e.g. "Thái Sơn", "Minh Đức"): pass the
-  //     builtinName (NOT voice.name) to the unified server — VieNeu only
-  //     recognises the 10 preset names. For common-pool voices the user's
-  //     display name is "Giọng chung #1..4" but the underlying preset is one
-  //     of the COMMON_POOL_BUILTINS surfaced from vieneu-voices.ts.
+  //     builtinName (NOT voice.name) — VieNeu only recognises the 10 preset
+  //     names. For common-pool voices the user's display name is
+  //     "Giọng chung #1..4" but the underlying preset is one of the
+  //     COMMON_POOL_BUILTINS surfaced from vieneu-voices.ts.
   //   - Custom cloned voice (has refAudioPath): pass `reference_path` for
-  //     voice cloning. Backend = vieneu (cloning) or moss-nano (non-VI).
-  // The previous version hardcoded `piper` for Vietnamese — but Piper has
-  // only ONE voice, so all built-in voices sounded identical.
-  const isVi = (book.language ?? 'vi') === 'vi';
+  //     voice cloning. Backend = 'vieneu' (cloning is supported on
+  //     Vietnamese AND English via VieNeu as of 2026-07-12).
+  // 2026-07-12: MOSS-TTS-Nano and Piper removed. VieNeu handles every
+  // language case (Vietnamese built-in + Vietnamese/English cloning).
   const hasRef = !!voice.refAudioPath && fs.existsSync(voice.refAudioPath);
-  const backend = isVi ? 'vieneu' : 'moss-nano';
+  const backend = 'vieneu';
   const BUILTIN_VIENEU = new Set(BUILTIN_VIENEU_NAMES);
   const payload: Record<string, unknown> = {
     text,
@@ -144,7 +144,7 @@ export async function POST(
   try {
     const bodyStr = JSON.stringify(payload);
     const bodyBytes = new TextEncoder().encode(bodyStr);
-    const r = await fetch(`${UNIFIED_TTS_URL}/synthesize`, {
+    const r = await fetch(`${VIENEU_BASE_URL}/synthesize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json; charset=utf-8' },
       body: bodyBytes,

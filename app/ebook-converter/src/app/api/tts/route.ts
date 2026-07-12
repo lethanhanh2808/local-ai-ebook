@@ -2,8 +2,8 @@
 //
 // Read-aloud endpoint — used by the reader's "Đọc to" (Read aloud) feature.
 // Speaks a chunk of text using the assigned character's voice (if known) or
-// the book's default voice, with auto-routing through the unified TTS server
-// (Vietnamese → VieNeu, others → MOSS-Nano).
+// the book's default voice. 2026-07-12: VieNeu is the only TTS backend —
+// Piper + MOSS-TTS-Nano were removed.
 //
 // GET  /api/tts/models      — list available built-in voices
 // POST /api/tts/speak      — { text, chapterId?, character?, speed?, language?, callIdx? } → audio/wav
@@ -12,37 +12,24 @@ import { resolveVoiceForCharacter } from '@/lib/ai/voice-selector';
 import { getVoice } from '@/lib/db/voices';
 import { BUILTIN_VIENEU_NAMES } from '@/lib/tts/vieneu-voices';
 
-const UNIFIED_TTS_URL = (process.env.UNIFIED_TTS_URL ?? process.env.TTS_SERVICE_URL ?? 'http://127.0.0.1:5010').replace(/\/$/, '');
+const VIENEU_BASE_URL = (
+  process.env.VIENEU_BASE_URL ??
+  process.env.UNIFIED_TTS_URL ??   // back-compat alias
+  process.env.TTS_SERVICE_URL ??
+  'http://127.0.0.1:5020'
+).replace(/\/$/, '');
 
-/** GET /api/tts/models — proxy the unified server's /backends.
- *  Post-VieNeu-consolidation (2026-07-05): if `/backends` 404s (VieNeu
- *  serves only `/health` + `/synthesize`), fall back to an inferred
- *  single-VieNeu backend so callers (e.g. e2e smoke) still see a healthy
- *  stack.
+/** GET /api/tts/models — return the synthetic VieNeu backend list.
+ *  The old `/backends` aggregator endpoint was retired when the unified
+ *  router was removed on 2026-07-05. We always report a single ready
+ *  VieNeu backend so existing UI / e2e consumers don't have to special-case
+ *  this.
  */
 export async function GET(): Promise<NextResponse> {
-  try {
-    const r = await fetch(`${UNIFIED_TTS_URL}/backends`, { signal: AbortSignal.timeout(5_000) });
-    if (r.ok) {
-      const data = await r.json();
-      return NextResponse.json(data);
-    }
-    // /backends missing → likely a direct VieNeu server. Verify with
-    // /health and synthesize the same shape the legacy aggregator returned.
-    const healthR = await fetch(`${UNIFIED_TTS_URL}/health`, { signal: AbortSignal.timeout(5_000) });
-    if (healthR.ok) {
-      const health = await healthR.json() as { status?: string };
-      if (health.status === 'ok') {
-        return NextResponse.json({
-          backends: [{ id: 'vieneu', name: 'VieNeu', ready: true, languages: ['vi'] }],
-          default_backend: 'vieneu',
-        });
-      }
-    }
-    return NextResponse.json({ error: 'TTS service unavailable' }, { status: 503 });
-  } catch {
-    return NextResponse.json({ error: 'TTS service unavailable' }, { status: 503 });
-  }
+  return NextResponse.json({
+    backends: [{ id: 'vieneu', name: 'VieNeu', ready: true, languages: ['vi'] }],
+    default_backend: 'vieneu',
+  });
 }
 
 interface SpeakBody {
@@ -214,7 +201,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // Build body as UTF-8 bytes to be safe with Vietnamese diacritics
     const bodyStr = JSON.stringify(payload);
     const bodyBytes = new TextEncoder().encode(bodyStr);
-    r = await fetch(`${UNIFIED_TTS_URL}/synthesize`, {
+    r = await fetch(`${VIENEU_BASE_URL}/synthesize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json; charset=utf-8' },
       body: bodyBytes,

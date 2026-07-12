@@ -89,7 +89,7 @@ echo ""
 echo "Generating audiobook..."
 echo "═══════════════════════════════════════════════════════"
 START=$(date +%s)
-CHARACTER_MAP="$CMAP" /Volumes/EXT-SSD/Users/anhl/Local-AI/app/tts-service/.venv-moss-nano/bin/python \
+CHARACTER_MAP="$CMAP" python3 \
   /Volumes/EXT-SSD/Users/anhl/Local-AI/app/tts-service/audiobook_generator.py \
   --book-id "$BOOK_ID" \
   --chapter-file EPUB/chapter003.xhtml \

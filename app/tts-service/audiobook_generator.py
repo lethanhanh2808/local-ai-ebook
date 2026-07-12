@@ -38,7 +38,9 @@ except Exception as _e:
     _TIER3B_AVAILABLE = False
 
 # ── Defaults ────────────────────────────────────────────────────────────────
-UNIFIED_TTS_URL = os.environ.get("UNIFIED_TTS_URL", "http://127.0.0.1:5010")
+# 2026-07-12: VieNeu is the sole TTS backend. Piper + MOSS-TTS-Nano were
+# removed. UNIFIED_TTS_URL is preserved as a back-compat alias for VIENEU_URL.
+VIENEU_URL = os.environ.get("VIENEU_URL", os.environ.get("UNIFIED_TTS_URL", "http://127.0.0.1:5020"))
 EBOOK_ROOT = Path(os.environ.get("EBOOK_ROOT", "/Volumes/EXT-SSD/Users/anhl/Local-AI/app/ebook-converter"))
 DATA_DIR = EBOOK_ROOT / "data" / "audiobooks"
 
@@ -2256,7 +2258,7 @@ def synthesize_segment(text: str, voice_name: Optional[str] = None,
         try:
             # Longer timeout (300s) — first-time VieNeu inference can be slow.
             with httpx.Client(timeout=300.0) as client:
-                r = client.post(f"{UNIFIED_TTS_URL}/synthesize", json=payload)
+                r = client.post(f"{VIENEU_URL}/synthesize", json=payload)
             if r.status_code == 200 and r.headers.get("content-type", "").startswith("audio/"):
                 return r.content
             last_err = RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
@@ -2350,7 +2352,7 @@ if __name__ == "__main__":
     ap.add_argument("--book-id", required=True)
     ap.add_argument("--chapter-file", required=True)
     ap.add_argument("--backend", default="vieneu",
-                    choices=["vieneu", "piper", "moss-nano"])
+                    choices=["vieneu"])  # 2026-07-12: Piper + MOSS-TTS-Nano removed
     ap.add_argument("--language", default="Vietnamese")
     ap.add_argument("--chapter-text-file", help="path to chapter .xhtml on disk")
     ap.add_argument("--out-dir", default=str(DATA_DIR))

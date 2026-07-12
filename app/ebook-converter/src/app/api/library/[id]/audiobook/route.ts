@@ -51,7 +51,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   const body = (await req.json().catch(() => ({}))) as {
     action?: 'generate' | 'stop' | 'reset' | 'regenerate_one';
     chapterFile?: string;
-    backend?: 'piper' | 'moss-nano' | 'vieneu';
+    backend?: 'vieneu';
   };
 
   const action = body.action ?? 'generate';
@@ -109,14 +109,14 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   }
 
   // Default to VieNeu — it's Vietnamese-native (10 built-in voices, 48 kHz, voice cloning).
-  // Override by sending `backend` in the request body or by setting book.ttsBackend.
-  // Belt-and-suspenders: coerce any stale/unknown backend string to 'vieneu' so a
-  // legacy Book row or future caller can't 400 the unified server.
-  const ALLOWED_BACKENDS = new Set(['vieneu', 'piper', 'moss-nano']);
+  // 2026-07-12: Piper + MOSS-TTS-Nano removed. VieNeu is the only backend,
+  // so we coerce any stale/unknown legacy backend string ('piper' / 'moss-nano')
+  // to 'vieneu' rather than 400ing the caller — there is no other path.
+  const ALLOWED_BACKENDS = new Set(['vieneu']);
   const rawBackend = (body.backend ?? (book as { ttsBackend?: string }).ttsBackend ?? 'vieneu') as string;
-  const backendChoice = (ALLOWED_BACKENDS.has(rawBackend) ? rawBackend : 'vieneu') as 'piper' | 'moss-nano' | 'vieneu';
+  const backendChoice: 'vieneu' = ALLOWED_BACKENDS.has(rawBackend) ? 'vieneu' : 'vieneu';
   if (rawBackend !== backendChoice) {
-    console.warn(`[audiobook] unknown backend "${rawBackend}" coerced to "vieneu" (book=${params.id})`);
+    console.warn(`[audiobook] legacy backend "${rawBackend}" coerced to "vieneu" (book=${params.id})`);
   }
 
   if (action === 'regenerate_one') {

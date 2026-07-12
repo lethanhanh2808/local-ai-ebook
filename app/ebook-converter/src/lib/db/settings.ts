@@ -5,7 +5,8 @@ import type { Settings } from '@prisma/client';
 import { DEFAULT_IMAGE_STYLE, normalizeImageStyle } from '@/lib/ai/image-generator';
 
 export type AIProvider = 'omlx-local' | 'minimax-cloud' | 'openai' | 'custom';
-export type TTSProvider = 'vieneu' | 'piper' | 'moss-nano';
+// 2026-07-12: Piper and MOSS-TTS-Nano removed. VieNeu is the sole backend.
+export type TTSProvider = 'vieneu';
 
 export const AI_PROVIDERS: Array<{
   id: AIProvider; label: string; desc: string; needsKey: boolean;
@@ -17,9 +18,7 @@ export const AI_PROVIDERS: Array<{
 ];
 
 export const TTS_PROVIDERS: Array<{ id: TTSProvider; label: string; desc: string }> = [
-  { id: 'vieneu',  label: 'VieNeu-TTS',    desc: 'Vietnamese-native, 10 built-in voices, voice cloning (recommended)' },
-  { id: 'piper',   label: 'Piper',         desc: 'Legacy Vietnamese TTS — single voice, 22 kHz' },
-  { id: 'moss-nano', label: 'MOSS-TTS-Nano', desc: 'English voice cloning (no Vietnamese support)' },
+  { id: 'vieneu',  label: 'VieNeu-TTS',    desc: 'Vietnamese-native, 10 built-in voices, voice cloning (only TTS backend)' },
 ];
 
 /** Get the current settings (creates the singleton row if missing).

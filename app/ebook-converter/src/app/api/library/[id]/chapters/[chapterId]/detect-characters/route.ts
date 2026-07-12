@@ -44,26 +44,19 @@ function resolveTtsServiceDir(): string | null {
   return null;
 }
 
-function resolvePython(ttsDir: string): string {
-  // 1. Host-side venv (dev / direct invocation on the laptop). macOS-only
-  //    symlinks into /Library/Frameworks/Python.framework — won't work in
-  //    the container.
-  const venvPy = path.join(ttsDir, '.venv-moss-nano', 'bin', 'python');
-  if (fs.existsSync(venvPy)) {
-    // Symlink sanity: in the container the python3.11 binary inside the
-    // venv symlinks to /Library/Frameworks/...; the resolved target won't
-    // exist there. Skip silently so we fall through to system python.
-    try { fs.accessSync(venvPy); return venvPy; } catch { /* fallthrough */ }
-  }
-  // 2. Explicit override (typically only used on the host).
+function resolvePython(_ttsDir: string): string {
+  // 2026-07-12: .venv-moss-nano was removed along with the MOSS-TTS-Nano
+  // backend. The detector only needs httpx (a system package in the
+  // container), so we go straight to explicit override → system python.
+  // 1. Explicit override (typically only used on the host).
   if (process.env.TTS_PYTHON && fs.existsSync(process.env.TTS_PYTHON)) {
     return process.env.TTS_PYTHON;
   }
-  // 3. Container-installed system Python (see Dockerfile). `/usr/bin/python3`
+  // 2. Container-installed system Python (see Dockerfile). `/usr/bin/python3`
   //    is installed with httpx via `pip install --break-system-packages`
   //    during the image build.
   if (fs.existsSync('/usr/bin/python3')) return '/usr/bin/python3';
-  // 4. Last-resort: PATH lookup.
+  // 3. Last-resort: PATH lookup.
   return process.env.TTS_PYTHON ?? 'python3';
 }
 

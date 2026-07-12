@@ -18,7 +18,7 @@ for voice in "${VOICES[@]}"; do
   safe=$(echo "$voice" | tr ' ' '_' | tr '[:upper:]' '[:lower:]')
   out="$OUT/${safe}.wav"
   payload=$(python3 -c "import json,sys; print(json.dumps({'text': sys.argv[1], 'voice': sys.argv[2]}))" "$TEXT" "$voice")
-  size=$(curl -s -X POST http://127.0.0.1:5010/synthesize \
+  size=$(curl -s -X POST http://127.0.0.1:5020/synthesize \
     -H 'Content-Type: application/json' \
     -d "$payload" \
     -o "$out" -w '%{http_code} %{size_download} %{time_total}')
