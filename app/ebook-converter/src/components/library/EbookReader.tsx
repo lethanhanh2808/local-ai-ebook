@@ -1792,7 +1792,10 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       noise: ttsNoise, emotionIntensity: ttsEmotionIntensity, useAI: ttsUseAI,
       gen: ttsSettingsGenRef.current,
     });
-  }, [ttsNoise, ttsEmotionIntensity, ttsUseAI]);
+    // Intentional: only re-fires on these three slider values. ttsIndex /
+    // warmUpNextAudio / chapter ref values are read live inside; listing
+    // them as deps would either loop or chase unstable references.
+  }, [ttsNoise, ttsEmotionIntensity, ttsUseAI]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Continuous-play kick-off: fire next-chapter pregen when the user
   // toggles ON mid-chapter (today this only happens at startTts line 3620).
@@ -1804,7 +1807,9 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     ttsContinuousPlayRef.current = true;
     const nextIdx = currentIdx + 1;
     if (nextIdx < chapters.length) void pregenerateChapter(nextIdx);
-  }, [ttsContinuousPlay, currentIdx, chapters.length]);
+    // Intentional: pregenerateChapter is a stable ref-backed closure;
+    // only re-fires when continuous-play toggles or chapter index moves.
+  }, [ttsContinuousPlay, currentIdx, chapters.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Next-chapter pregen invalidation when continuous-play is on AND noise /
   // emotion / useAI changes. The next chapter's pre-warmed blobs are stale
@@ -1819,7 +1824,10 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     prefetchCacheRef.current.delete(nextChapter.id);
     prefetchChapterTouchedAtRef.current.delete(nextChapter.id);
     void pregenerateChapter(nextIdx);
-  }, [ttsNoise, ttsEmotionIntensity, ttsUseAI, ttsContinuousPlay, currentIdx]);
+    // Intentional: chapters is read inside via the live currentChapterRef /
+    // pregenerateChapter (stable ref-backed closure). Listing chapters as a
+    // dep would re-fire on every state mutation that touches the array.
+  }, [ttsNoise, ttsEmotionIntensity, ttsUseAI, ttsContinuousPlay, currentIdx]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Paragraph gap: mirror to ref + cancel any pending gap timer. The
   // speakParagraph's finish() closure reads ttsParagraphGap live, but the
