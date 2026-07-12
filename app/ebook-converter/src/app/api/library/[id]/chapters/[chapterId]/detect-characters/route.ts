@@ -158,14 +158,31 @@ export async function POST(
   const { html } = await chapterResp.json() as { html: string };
   if (!html) return NextResponse.json({ error: 'Chapter has no content' }, { status: 400 });
 
-  // 2. Resolve the user-selected model from Settings DB
+  // 2. Resolve the user-selected model from Settings DB. Validate against
+  //    the live oMLX model list (5 min cache) so a stale aiModel value
+  //    — e.g. an old Claude session id like "MiniMax-M3" that leaked into
+  //    the DB via the /settings form — doesn't reach oMLX and trigger
+  //    "Model 'X' not found", which forces the detector into its
+  //    regex-fallback branch (orphan-aiModel pattern documented in the
+  //    character-detection-source-tagging memory).
   let model = '';
+  let modelResolution: 'empty' | 'default' | 'env-fallback' | 'validated' | 'unknown-replaced' = 'empty';
   try {
     const { getSettings } = await import('@/lib/db/settings');
     const s = await getSettings();
-    model = s.aiModel?.trim() || process.env.OMLX_MODEL || '';
+    const { resolveOmlxModel } = await import('@/lib/ai/omlx-models');
+    const resolved = await resolveOmlxModel(s.aiModel);
+    model = resolved.model;
+    modelResolution = resolved.reason;
+    if (resolved.reason === 'unknown-replaced') {
+      console.warn(
+        `[chapters/detect-characters] settings.aiModel="${resolved.requested}" is not a known oMLX model; ` +
+        `falling back to OMLX default. User should fix /settings.`,
+      );
+    }
   } catch {
     model = process.env.OMLX_MODEL || '';
+    modelResolution = model ? 'env-fallback' : 'empty';
   }
 
   // 3. Run detection on this chapter
@@ -178,6 +195,11 @@ export async function POST(
   }
 
   const detected: any[] = Array.isArray(result?.characters) ? result.characters : [];
+  // BUGFIX 2026-07-12: surface model resolution issues in the response so
+  // the UI can warn the user their settings.aiModel is stale.
+  const modelWarning = modelResolution === 'unknown-replaced'
+    ? 'Model trong /settings không hợp lệ (đã đổi tên hoặc đã xoá). Đang dùng model mặc định của oMLX — vui lòng cập nhật /settings.'
+    : undefined;
   if (detected.length === 0) {
     return NextResponse.json({
       detected: 0,
@@ -185,6 +207,9 @@ export async function POST(
       skipped: 0,
       characters: [],
       summary: result?.summary ?? 'No characters detected',
+      model_used: model || '(omlx default)',
+      model_resolution: modelResolution,
+      ...(modelWarning ? { warning: modelWarning } : {}),
     });
   }
 

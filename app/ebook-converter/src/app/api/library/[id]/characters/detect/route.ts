@@ -105,7 +105,13 @@ const DETECTOR_TIMEOUT_MS = 170_000;
 const MAX_DETECTOR_STDOUT = 2 * 1024 * 1024;
 const MAX_DETECTOR_STDERR = 256 * 1024;
 
-async function runDetector(epubPath: string, signal?: AbortSignal): Promise<any> {
+type DetectorOutcome = {
+  result: any;
+  modelUsed: string;
+  modelResolution: 'empty' | 'default' | 'env-fallback' | 'validated' | 'unknown-replaced';
+};
+
+async function runDetector(epubPath: string, signal?: AbortSignal): Promise<DetectorOutcome> {
   const omlxKey = process.env.OMLX_API_KEY ?? '';
   const py = resolvePython();
   if (!DETECTOR) {
@@ -121,23 +127,36 @@ async function runDetector(epubPath: string, signal?: AbortSignal): Promise<any>
   if (!fs.existsSync(DETECTOR)) throw new Error(`Detector not found at ${DETECTOR}`);
 
   let omlxModel: string;
+  let modelReason: 'empty' | 'default' | 'env-fallback' | 'validated' | 'unknown-replaced' = 'empty';
   try {
     const { getSettings } = await import('@/lib/db/settings');
     const settings = await getSettings();
-    // BUGFIX 2026-07-11: schema default for aiModel is the literal string
-    // "default" (see prisma/schema.prisma). OMLX treats that as a real
-    // model id and rejects it ("Model 'default' not found"), which forces
-    // the Python detector into its regex-fallback branch — exactly the
-    // orphan-aiModel pattern documented in the character-detection-source-
-    // tagging memory. Treat both empty AND the literal "default" as "no
-    // user-chosen model" so the Python script falls through to its own
-    // empty-string path (= OMLX uses its server-side default model).
-    const raw = settings.aiModel?.trim() ?? '';
-    omlxModel = (raw && raw.toLowerCase() !== 'default')
-      ? raw
-      : (process.env.OMLX_MODEL || '');
+    // BUGFIX 2026-07-11 + 2026-07-12: validate the settings.aiModel value
+    // against the live oMLX model list before passing it down. Previously
+    // the code only filtered the literal "default" — but any stale value
+    // (e.g. an old Claude session id like "MiniMax-M3" that leaked into
+    // the DB via the /settings form, or a model renamed/removed upstream)
+    // reached oMLX and produced "Model 'X' not found", which forced the
+    // Python detector into its regex-fallback branch (orphan-aiModel
+    // pattern in the character-detection-source-tagging memory).
+    //
+    // resolveOmlxModel() fetches the live model list (5 min TTL) and
+    // replaces unknown values with the empty default + flags a reason
+    // we can surface in the response so the user knows their settings
+    // need updating.
+    const { resolveOmlxModel } = await import('@/lib/ai/omlx-models');
+    const resolved = await resolveOmlxModel(settings.aiModel);
+    omlxModel = resolved.model;
+    modelReason = resolved.reason;
+    if (resolved.reason === 'unknown-replaced') {
+      console.warn(
+        `[characters/detect] settings.aiModel="${resolved.requested}" is not a known oMLX model; ` +
+        `falling back to OMLX default. User should fix /settings.`,
+      );
+    }
   } catch {
     omlxModel = process.env.OMLX_MODEL || '';
+    modelReason = omlxModel ? 'env-fallback' : 'empty';
   }
 
   return new Promise((resolve, reject) => {
@@ -190,7 +209,7 @@ async function runDetector(epubPath: string, signal?: AbortSignal): Promise<any>
         return;
       }
       try {
-        resolve(JSON.parse(stdout));
+        resolve({ result: JSON.parse(stdout), modelUsed: omlxModel, modelResolution: modelReason });
       } catch (e) {
         reject(new Error(`detector JSON parse failed: ${e}. Stdout first 500: ${stdout.slice(0, 500)}`));
       }
@@ -217,8 +236,13 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   const autoApply = body.autoApply === true;
 
   let result: any;
+  let modelUsed = '';
+  let modelResolution: 'empty' | 'default' | 'env-fallback' | 'validated' | 'unknown-replaced' = 'empty';
   try {
-    result = await runDetector(bookPath, req.signal);
+    const outcome = await runDetector(bookPath, req.signal);
+    result = outcome.result;
+    modelUsed = outcome.modelUsed;
+    modelResolution = outcome.modelResolution;
   } catch (e) {
     console.error('[characters/detect] failed:', e);
     return NextResponse.json({ error: String(e) }, { status: 500 });
@@ -284,9 +308,17 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   // when the regex fallback fired (caused by an invalid aiModel in
   // /settings, or any other LLM JSON-parse failure).
   const source = (result.source ?? 'omlx') as 'omlx' | 'regex-fallback' | 'failed';
-  const warning = source !== 'omlx'
+  let warning = source !== 'omlx'
     ? 'LLM không trả về danh sách nhân vật hợp lệ — kiểm tra aiModel trong /settings hoặc thử lại.'
     : undefined;
+  // BUGFIX 2026-07-12: also surface when settings.aiModel was stale /
+  // invalid and we silently fell back to the OMLX default. Without this
+  // the user keeps the broken value in /settings and the warning goes
+  // away (because the LLM now responds), so they never realise they
+  // need to update it.
+  if (!warning && modelResolution === 'unknown-replaced') {
+    warning = 'Model trong /settings không hợp lệ (đã đổi tên hoặc đã xoá). Đang dùng model mặc định của oMLX — vui lòng cập nhật /settings.';
+  }
 
   // ── BUGFIX 2026-07-11: auto-apply path ─────────────────────────────────
   // Full Analyzer calls us with { autoApply: true } when the user clicks
@@ -360,6 +392,11 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     characters: suggestions,
     available_voices: VIENEU_VOICES,
     source,
+    // BUGFIX 2026-07-12: echo which model we actually used + the resolution
+    // reason, so the /settings UI can flag stale model values without the
+    // user having to dig through server logs.
+    model_used: modelUsed || '(omlx default)',
+    model_resolution: modelResolution,
     warning,
     ...(autoApply ? { inserted } : {}),
   });

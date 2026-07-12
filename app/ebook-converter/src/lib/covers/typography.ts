@@ -171,6 +171,10 @@ interface TitleLayout {
   backdropRect: { x: number; y: number; w: number; h: number };
   /** Per-placement backdrop gradient endpoints (0..1 relative). */
   gradientEndpoints: { x1: number; y1: number; x2: number; y2: number };
+  /** Line-height multiplier for stacked title lines. Vertical placements
+   *  (narrow columns → more wrapped lines) need more breathing room than
+   *  horizontal placements (wide band, fewer lines). */
+  lineHeightMultiplier: number;
 }
 
 function pickTitleFontSize(title: string, maxWidthPx: number): number {
@@ -224,6 +228,9 @@ function layoutFor(placement: TitlePlacement, title: string): TitleLayout {
         textAnchor: 'middle', titleX: W / 2,
         backdropRect: { x: 0, y: Math.round(H * 0.55), w: W, h: Math.round(H * 0.45) },
         gradientEndpoints: { x1: 0, y1: 0, x2: 0, y2: 1 },
+        // Horizontal layouts stay tight — the band is wide, fewer lines,
+        // and big tight blocks read as poster-bold rather than airy.
+        lineHeightMultiplier: 1.08,
       };
     }
     case 'h-top': {
@@ -239,6 +246,7 @@ function layoutFor(placement: TitlePlacement, title: string): TitleLayout {
         textAnchor: 'middle', titleX: W / 2,
         backdropRect: { x: 0, y: 0, w: W, h: Math.round(H * 0.30) },
         gradientEndpoints: { x1: 0, y1: 1, x2: 0, y2: 0 },
+        lineHeightMultiplier: 1.08,
       };
     }
     case 'v-left': {
@@ -255,6 +263,10 @@ function layoutFor(placement: TitlePlacement, title: string): TitleLayout {
         textAnchor: 'start', titleX: blockX + (blockW - titleMaxW) / 2,
         backdropRect: { x: 0, y: blockY, w: blockW, h: blockH },
         gradientEndpoints: { x1: 1, y1: 0, x2: 0, y2: 0 },
+        // Vertical columns wrap to many short lines — wider row spacing
+        // reads as engraved-stone rather than cramped. 1.45 = ~45% extra
+        // breathing room between glyph rows.
+        lineHeightMultiplier: 1.45,
       };
     }
     case 'v-right': {
@@ -270,6 +282,7 @@ function layoutFor(placement: TitlePlacement, title: string): TitleLayout {
         textAnchor: 'end', titleX: blockX + blockW - (blockW - titleMaxW) / 2,
         backdropRect: { x: blockX, y: blockY, w: blockW, h: blockH },
         gradientEndpoints: { x1: 0, y1: 0, x2: 1, y2: 0 },
+        lineHeightMultiplier: 1.45,
       };
     }
   }
@@ -387,7 +400,9 @@ function buildTitleLines(
   titleLines: string[],
 ): string {
   const { titleFontSize, titleMaxW, textAnchor, titleX } = layout;
-  const lineHeight = titleFontSize * 1.08;
+  // Per-placement line-height multiplier: 1.08 horizontal (tight poster),
+  // 1.45 vertical (airy engraved feel for narrow wrapped columns).
+  const lineHeight = titleFontSize * (layout.lineHeightMultiplier ?? 1.08);
   const blockStartY = layout.blockY + (recipe.ornament === 'flourish' ? 40 : 24);
   const fill = gradientFor(recipe.fill, '#c89b3c');
   // SVG only allows ONE filter per element. The `title-glow` filter
