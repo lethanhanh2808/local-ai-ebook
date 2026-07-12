@@ -54,7 +54,16 @@ export interface TypographyResult {
   width: number;
   height: number;
   /** For logging: which recipe + which ornament set was used. */
-  diag: { placement: TitlePlacement; recipe: string; ornament: string };
+  diag: {
+    placement: TitlePlacement;
+    recipe: string;
+    ornament: string;
+    /** Post-reflow title font size (may be smaller than the layout default
+     *  if the title was shrunk to avoid overlapping the author). */
+    titleFontSize: number;
+    /** Number of wrapped lines after reflow. */
+    titleLines: number;
+  };
 }
 
 // ── Cover geometry (matches ai-generate-cover.ts) ──────────────────────────
@@ -394,15 +403,119 @@ function gradientDefBlock(accent: string, recipe: GenreRecipe): string {
 
 // ── Title text layers (per line) ──────────────────────────────────────────
 
+/** Y position where the baseline of the FIRST author line lands. The text
+ *  layer build below just renders each line at y + i*lineHeight + ascender. */
+interface ReflowResult {
+  fontSize: number;
+  lines: string[];
+  lineHeight: number;
+  /** Bottom edge of the title's last line (incl. descender + glow slack). */
+  titleBottomY: number;
+  /** Baseline Y of the FIRST author line. */
+  authorY: number;
+  /** Baseline Y of the (single-line) tagline. */
+  taglineY: number;
+}
+
+/** Tighten the title's font size so its bottom edge clears the author.
+ *  Symptom (pre-fix): on long novels that wrap to 4-5 lines, the title
+ *  bottom crashed into the author baseline and the SVG rendered them
+ *  on the same Y, producing "title overlaps with author" visible from
+ *  the cover preview. Author Y was hardcoded to `blockY+blockH-110` and
+ *  never adjusted for how tall the title actually got.
+ *
+ *  Strategy: shrink titleFontSize in 8px steps (down to 36) until
+ *  `titleBottomY + safety margin ≤ safeAuthorBaselineY`. If shrinking
+ *  below 36 still doesn't fit (extremely long title), truncate the last
+ *  wrapped line with an ellipsis so we never burst the band. */
+function reflowTitleForPlacement(
+  layout: TitleLayout,
+  recipe: GenreRecipe,
+  title: string,
+): ReflowResult {
+  const blockStartY = layout.blockY + (recipe.ornament === 'flourish' ? 40 : 24);
+  // Tagline TOP at blockY+blockH-56. Author must finish ABOVE tagline with
+  // a 14px gap. Author baseline Y must therefore satisfy
+  //   authorY_baseline + 28*0.3  ≤  blockY+blockH-56-14
+  //   authorY_baseline           ≤  blockY+blockH-78.4
+  const safeAuthorBaselineY = layout.blockY + layout.blockH - 80;
+  // And author MUST start below title (18px gap):
+  //   authorY_baseline  ≥  titleBottomY + 18 + 28*0.7
+  // So titleBottomY must satisfy:
+  //   titleBottomY  ≤  safeAuthorBaselineY - 37.6 - 12  (extra 12 buffer)
+  const safeTitleBottomY = safeAuthorBaselineY - 50;
+
+  const initialFontSize = layout.titleFontSize;
+  let fontSize = initialFontSize;
+  let lines: string[] = [];
+  let lineHeight = 0;
+  let titleBottomY = blockStartY;
+
+  for (let attempt = 0; attempt < 6; attempt++) {
+    lineHeight = fontSize * (layout.lineHeightMultiplier ?? 1.08);
+    const maxChars = Math.max(4, Math.floor(layout.titleMaxW / (fontSize * 0.55)));
+    lines = wrapText(title, maxChars);
+    // Glow filter stdDeviation can extend the visual envelope 12-15 px
+    // below the descender line. Bake that slack into titleBottomY so
+    // the glow doesn't bleed onto the author text.
+    const glowSlack = recipe.glow ? Math.max(14, recipe.glow.size + 6) : 6;
+    const N = lines.length;
+    // Last baseline = blockStartY + (N-1)*lineHeight + fontSize*0.8.
+    // Bottom = last baseline + fontSize*0.2 (descender) + glowSlack.
+    titleBottomY =
+      blockStartY +
+      Math.max(0, N - 1) * lineHeight +
+      fontSize * 0.8 +
+      fontSize * 0.2 +
+      glowSlack;
+
+    if (titleBottomY <= safeTitleBottomY) break;
+
+    const next = Math.max(36, fontSize - 8);
+    if (next >= fontSize) break;          // already at min, can't shrink further
+    fontSize = next;
+  }
+
+  // Last-resort: if even at min fontSize we overflow, truncate the last
+  // wrapped line with "…" until it fits. Better a truncated title than
+  // an overlap.
+  if (titleBottomY > safeTitleBottomY && lines.length > 1) {
+    const recomputeBottom = () =>
+      blockStartY +
+      Math.max(0, lines.length - 1) * lineHeight +
+      fontSize * 0.8 +
+      fontSize * 0.2 +
+      (recipe.glow ? Math.max(14, recipe.glow.size + 6) : 6);
+    while (lines.length > 1 && titleBottomY > safeTitleBottomY) {
+      const last = lines.pop()!;
+      const trimmed = last.length > 4 ? last.slice(0, last.length - 2).trimEnd() + '…' : '…';
+      lines.push(trimmed);
+      titleBottomY = recomputeBottom();
+      if (titleBottomY <= safeTitleBottomY) break;
+    }
+  }
+
+  const authorY = titleBottomY + 18 + 28 * 0.7;
+  const taglineY = layout.blockY + layout.blockH - 56 + 18 * 0.7;
+
+  // Recompute lineHeight with the FINAL fontSize so caller gets a
+  // consistent pair (fontSize / lineHeight).
+  lineHeight = fontSize * (layout.lineHeightMultiplier ?? 1.08);
+
+  return { fontSize, lines, lineHeight, titleBottomY, authorY, taglineY };
+}
+
 function buildTitleLines(
   layout: TitleLayout,
   recipe: GenreRecipe,
   titleLines: string[],
+  titleFontSize: number,
+  lineHeight: number,
 ): string {
-  const { titleFontSize, titleMaxW, textAnchor, titleX } = layout;
-  // Per-placement line-height multiplier: 1.08 horizontal (tight poster),
-  // 1.45 vertical (airy engraved feel for narrow wrapped columns).
-  const lineHeight = titleFontSize * (layout.lineHeightMultiplier ?? 1.08);
+  // titleFontSize + lineHeight come from reflowTitleForPlacement() so
+  // they may be smaller than `layout.titleFontSize` if the title was
+  // shrunk to clear the author baseline.
+  const { titleMaxW, textAnchor, titleX } = layout;
   const blockStartY = layout.blockY + (recipe.ornament === 'flourish' ? 40 : 24);
   const fill = gradientFor(recipe.fill, '#c89b3c');
   // SVG only allows ONE filter per element. The `title-glow` filter
@@ -495,13 +608,15 @@ function buildAuthor(
   author: string,
   recipe: GenreRecipe,
   textColor: string,
+  /** Baseline Y of the FIRST author line. Caller passes a value that
+   *  clears the title's reflowed bottom edge so the two never overlap. */
+  yBaseline: number,
 ): string {
   const fontSize = 28;
   const lineHeight = fontSize * 1.2;
   const lines = wrapText(author, 28);
-  const startY = layout.blockY + layout.blockH - 110 - (lines.length - 1) * lineHeight;
   return lines.map((line, i) => `
-  <text x="${layout.titleX}" y="${startY + i * lineHeight + fontSize * 0.7}"
+  <text x="${layout.titleX}" y="${yBaseline + i * lineHeight + fontSize * 0.7}"
     text-anchor="${layout.textAnchor}"
     font-family="Literata-Italic, 'Noto Serif', Georgia, serif"
     font-size="${fontSize}" font-weight="400" font-style="italic"
@@ -513,12 +628,16 @@ function buildTagline(
   layout: TitleLayout,
   tagline: string,
   textColor: string,
+  /** Baseline Y of the single-line tagline. Caller (buildTypography)
+   *  keeps this anchored near `blockY+blockH-56` regardless of how tall
+   *  the title grew — tagline sits at the BOTTOM of the typography
+   *  block, with the author slot stacked above it. */
+  yBaseline: number,
 ): string {
   if (!tagline) return '';
   const fontSize = 18;
-  const y = layout.blockY + layout.blockH - 56;
   return `
-  <text x="${layout.titleX}" y="${y + fontSize * 0.7}"
+  <text x="${layout.titleX}" y="${yBaseline}"
     text-anchor="${layout.textAnchor}"
     font-family="Literata-Light, 'Noto Serif', Georgia, serif"
     font-size="${fontSize}" font-weight="300" font-style="italic"
@@ -664,12 +783,17 @@ export function buildTypography(
 ): TypographyResult {
   const recipe = RECIPES[design.genre] ?? RECIPES.unknown;
   const layout = layoutFor(placement, opts.title);
-  const maxCharsPerLine = Math.max(6, Math.floor(layout.titleMaxW / (layout.titleFontSize * 0.55)));
-  const titleLines = wrapText(opts.title, maxCharsPerLine);
+  // Reflow: shrink titleFontSize and rewrap so the title's bottom edge
+  // (incl. glow filter slack) clears the author baseline. Without this
+  // step, long titles that wrap to 4-5 lines crash into the author
+  // baseline and the SVG renders them overlapping.
+  const reflow = reflowTitleForPlacement(layout, recipe, opts.title);
+  const { fontSize: titleFontSize, lines: titleLines, lineHeight: titleLineHeight,
+          authorY, taglineY } = reflow;
 
-  const titleSvg = buildTitleLines(layout, recipe, titleLines);
-  const authorSvg = buildAuthor(layout, opts.author, recipe, design.textColor);
-  const taglineSvg = buildTagline(layout, design.tagline, design.textColor);
+  const titleSvg = buildTitleLines(layout, recipe, titleLines, titleFontSize, titleLineHeight);
+  const authorSvg = buildAuthor(layout, opts.author, recipe, design.textColor, authorY);
+  const taglineSvg = buildTagline(layout, design.tagline, design.textColor, taglineY);
   const seriesSvg = buildSeriesBadge(opts.series, opts.seriesIndex, design.accent);
   const ornamentSvg = buildOrnament(recipe, layout, design.accent);
   const backdropSvg = buildBackdrop(layout, design.background);
@@ -692,7 +816,13 @@ export function buildTypography(
     svg,
     width: W,
     height: H,
-    diag: { placement, recipe: design.genre, ornament: recipe.ornament },
+    diag: {
+      placement,
+      recipe: design.genre,
+      ornament: recipe.ornament,
+      titleFontSize,
+      titleLines: titleLines.length,
+    },
   };
 }
 
