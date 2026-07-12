@@ -254,6 +254,5 @@ export class JsonChatError extends Error {
   }
 }
 
-// Re-export message / options types and omlx helpers for back-compat
-export { chat as omlxChat } from './omlx-client';
-export type { ChatMessage as LegacyChatMessage } from './omlx-client';
+// (intentionally no back-compat re-exports — keep module lean; `chat` and
+// `chatWithStats` are imported directly from './omlx-client' by consumers)

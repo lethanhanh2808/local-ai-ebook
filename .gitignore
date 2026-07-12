@@ -40,14 +40,14 @@ dump.rdb
 backups/
 exmple-books/
 
-# Local tool state and secrets
+# Local tool state and secrets (kept outside the repo on purpose)
 .claude/
 hg_token.md
 omlx-home/
 opencode-home/
 opencode-runtime/
-app/tts-service/MOSS-TTS-Nano/
-app/tts-service/VieNeu-TTS/
+# VieNeu-TTS is intentionally vendored as a git submodule (see .gitmodules);
+# its working tree + .venv stay on disk but are tracked via the submodule pointer.
 
 # Python / Node / app caches
 .venv/
@@ -89,11 +89,13 @@ test-results/
 *.rej
 *.ipynb_checkpoints/
 
-# Local tool state and generated content
-app/tts-service/.venv-moss-nano/lib/python3.11/site-packages/torch/lib/libtorch_cpu.dylib
-opencode-runtime/bin/opencode
-reference/
-hg_token.md
-app/tts-service/MOSS-TTS-Nano
-app/tts-service/VieNeu-TTS
+# TypeScript incremental build cache and ad-hoc scratch files
+# (the latter matches _backfill_*.js and _check_*.js in app/ebook-converter/ —
+#  promote them to scripts/ if you want them tracked)
+*.tsbuildinfo
+_*.[jt]s
+_*.[jt]sx
+_*.py
 
+# Reference material checked out locally for offline docs (submodule candidates)
+reference/
