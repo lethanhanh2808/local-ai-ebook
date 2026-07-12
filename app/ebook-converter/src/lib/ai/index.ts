@@ -228,7 +228,23 @@ export async function chatJSON<T>(opts: ChatOptions): Promise<T> {
   // Strip ```json fences defensively; emit a structured JsonChatError on
   // parse failure so callers (refreshBible, parseBiblePatches) can present
   // the raw model output to the user instead of a generic SyntaxError.
-  const cleaned = raw.replace(/^```(?:json)?\n?/m, '').replace(/```$/m, '').trim();
+  //
+  // BUGFIX 2026-07-12: also strip Qwen3-style  ̲<̲t̲h̲i̲n̲k̲>̲.̲.̲.̲<̲/̲t̲h̲i̲n̲k̲>̲  blocks. oMLX
+  // routes `enable_thinking=false` to chat_template_kwargs, but the
+  // underlying Qwen3-DeepSeek model still emits think blocks regardless
+  // (especially for long structured-output prompts like the attribution
+  // whole-chapter pass that asks the model to analyze 100+ paragraphs).
+  // Without this strip the JSON.parse below fails on the first `<` token
+  // and the whole batch falls back to defaults — exactly the mode in
+  // Hoàng Tộc Tổ Địa ch01 ("0 via LLM, 92 voice mặc định" despite a
+  // populated roster). The regex is intentionally narrow (only wrapped
+  // <think>...</think> blocks, not stray XML), so JSON documents that
+  // legitimately contain literal `<` characters inside string values
+  // aren't accidentally truncated.
+  const cleaned = raw
+    .replace(/```(?:json)?\n?/g, '')
+    .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, '')
+    .trim();
   try {
     return JSON.parse(cleaned) as T;
   } catch (err) {

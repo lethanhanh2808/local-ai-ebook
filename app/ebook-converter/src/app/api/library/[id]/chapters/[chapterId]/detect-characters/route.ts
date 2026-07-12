@@ -234,5 +234,14 @@ export async function POST(
     skipped,
     characters: assignments,
     summary: result?.summary,
+    // BUGFIX 2026-07-12: surface model info on the success path too,
+    // so a stale /settings aiModel surfaces a warning even when detection
+    // produced characters. Otherwise the user only sees the warning when
+    // detection is empty — which is exactly the case where they'd think
+    // "nothing detected, my model must be fine." Include both fields
+    // unconditionally so the UI can flag it either way.
+    model_used: model || '(omlx default)',
+    model_resolution: modelResolution,
+    ...(modelWarning ? { warning: modelWarning } : {}),
   });
 }
