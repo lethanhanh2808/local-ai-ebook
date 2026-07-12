@@ -529,6 +529,48 @@ export function toArtDirection(detection: GenreDetection): GenreArtDirection {
   };
 }
 
+// ── Default title placement per genre ───────────────────────────────────────
+//
+// Picks where on the cover the title overlay should sit BEFORE the AI
+// image is generated. The AI is told to leave that area empty so the
+// final composite doesn't cover the main subject. After the image
+// returns, ai-generate-cover.ts re-scores with pickTitlePlacement()
+// from image-analysis.ts and may override this default.
+//
+// All genres currently prefer the bottom-horizontal band (matches
+// the existing aesthetic). Vietnamese-novel covers universally use
+// bottom-band titles, so this is a safe default. Future tuning can
+// pin specific genres to vertical-side bands.
+//
+// Kept here (rather than in image-analysis.ts) so the genre-detection
+// subsystem owns its full art-direction seed.
+
+import type { TitlePlacement } from './image-analysis';
+
+export const DEFAULT_PLACEMENT: Record<VietnameseGenre, TitlePlacement> = {
+  tu_tieu_thuyet:      'h-bottom',
+  ngon_tinh:           'h-bottom',
+  lich_su:             'h-bottom',
+  do_thi:              'h-bottom',
+  game_system:         'h-bottom',
+  kinh_di:             'h-bottom',
+  khoa_hoc_vien_tuong: 'h-bottom',
+  thieu_nien:          'h-bottom',
+  unknown:             'h-bottom',
+};
+
+/** Pick a default placement using title length as the override signal.
+ *  Long titles wrap awkwardly at the bottom; route them to a
+ *  vertical-side band so each line stays short enough to read. */
+export function pickInitialPlacement(
+  title: string,
+  genre: VietnameseGenre,
+): TitlePlacement {
+  if (title.length > 32) return 'v-right';
+  if (title.length > 26) return 'v-left';
+  return DEFAULT_PLACEMENT[genre];
+}
+
 // Keep the unused-import warning quiet — `path` is reserved for
 // future work that loads keyword sets from JSON on disk so we don't
 // have to recompile when the taxonomy changes.
