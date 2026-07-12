@@ -143,7 +143,13 @@ async function designCoverConcept(opts: AICoverOptions): Promise<CoverDesign> {
     description,
     hint: genre,
   });
-  const art = toArtDirection(detection);
+  // Pass title+author so toArtDirection() can pick per-book variants
+  // (motif / shot / lighting / palette). Without these args, every book
+  // in the same genre falls back to variant index 0 and produces a
+  // near-identical cover. With them, two books in tu_tieu_thuyet get
+  // different subjects / framings / lighting / colour tints while
+  // still feeling like the same genre world.
+  const art = toArtDirection(detection, title, author);
 
   // Step 2 — ask the LLM to write a freeform scene on top of that seed.
   // We pass a deliberately rich system prompt so the model doesn't have
@@ -169,9 +175,12 @@ Hard rules:
 Genre art direction for this book:
 - Genre: ${art.vi} (${art.en})
 - Suggested style: ${art.style}  ← use this unless you have a strong reason not to
-- Motif anchor: ${art.motif}
+- Subject anchor: ${art.motif}      ← THIS BOOK's picked motif (deterministic from title+author)
+- Composition: ${art.picked.shot}
+- Lighting / atmosphere: ${art.picked.lighting}
 - Mood: ${art.mood}
-- Palette: ${art.paletteDescription}`;
+- Palette: ${art.paletteDescription} (accent ${art.accent})
+- Variety picks for this book: motif=${art.picked.motifIndex}, shot=${art.picked.shotIndex}, lighting=${art.picked.lightingIndex}, palette=${art.picked.paletteIndex} — these are fixed for THIS book, so your scene must align with them rather than default to the genre's generic first variant`;
 
   const userMessage = `Sách: "${title}" — ${author}
 Ngôn ngữ: ${language}
@@ -469,7 +478,10 @@ export async function generateAIBookCover(opts: AICoverOptions): Promise<AIGener
     design = await designCoverConcept(opts);
   } catch (err) {
     console.warn('[ai-cover] design step failed, using genre fallback:', err instanceof Error ? err.message : err);
-    const art = toArtDirection(detection);
+    // Same per-book variant picking as the success path — even the
+    // fallback imagePrompt must vary by title+author so a failed LLM
+    // design step still produces a cover unique to the book.
+    const art = toArtDirection(detection, opts.title, opts.author);
     design = {
       ...DEFAULT_DESIGN,
       imagePrompt: art.fallbackImagePrompt,

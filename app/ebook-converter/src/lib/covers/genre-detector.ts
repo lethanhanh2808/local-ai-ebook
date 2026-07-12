@@ -82,6 +82,31 @@ interface GenreSpec {
   palette: { accent: string; bgDark: boolean; description: string };
   mood: string;
   fallbackImagePrompt: string;
+  /**
+   * Per-book variety axes — see "Cover variety" below.
+   *
+   * Each variant array holds 2-4 alternative scene fragments that live
+   * in the SAME genre world but describe DIFFERENT subjects, shots,
+   * lighting moods, or palette accents. At cover-build time we pick
+   * one entry from each axis deterministically (from title+author hash)
+   * so two books in the same genre never produce the same cover.
+   *
+   * The legacy single-value fields (`motif`, `palette`, `fallbackImagePrompt`)
+   * MUST remain in sync with `variant[0]` of each axis — they're
+   * still used as the canonical "this is what genre X looks like"
+   * description in logs and the system prompt header.
+   *
+   *   motifVariants[0]      === motif (single-value field)
+   *   paletteVariants[0]    === palette (single-value field)
+   *
+   * The `fallbackImagePrompt` is composed by templating the picked
+   * motif / shot / lighting / palette into a single sentence — see
+   * `composeFallbackPrompt()`.
+   */
+  motifVariants: string[];
+  shotVariants: string[];
+  lightingVariants: string[];
+  paletteVariants: Array<{ accent: string; description: string }>;
 }
 
 export const GENRE_SPECS: Record<VietnameseGenre, GenreSpec> = {
@@ -120,6 +145,33 @@ export const GENRE_SPECS: Record<VietnameseGenre, GenreSpec> = {
     motif: 'misty mountain peak with ancient cultivator, jade-green aura, floating celestial palace',
     palette: { accent: '#c89b3c', bgDark: true, description: 'jade green / gold / misty white' },
     fallbackImagePrompt: 'A lone immortal cultivator in flowing Hanfu-style robes meditating on the peak of a misty mountain, jade-green energy swirling around them, ancient celestial palace floating in the clouds above, golden koi fish swimming through the mist, dramatic ink-wash painting style with subtle color accents, deep jade-green and gold color palette, epic and mystical mood',
+    // Variety axes — same genre world, different subjects/compositions
+    // per book so two tu_tieu_thuyet books don't look like the same
+    // template. Picked deterministically by title+author hash.
+    motifVariants: [
+      // 0 — keeps legacy single-value `motif` (back-compat)
+      'misty mountain peak with ancient cultivator, jade-green aura, floating celestial palace',
+      // 1 — different subject in the same world
+      'colossal ancient sword thrust into the ground of a jade-green valley, lightning cracking around its runic blade',
+      // 2 — another subject
+      'floating jade pagoda suspended over an abyss of swirling clouds, a lone sword cultivator leaping between stone platforms',
+    ],
+    shotVariants: [
+      'wide establishing shot, subject centered with vast negative space',
+      'low-angle hero shot looking up at the subject against dramatic sky',
+      'close-up of an iconic object (sword / talisman / scroll) with depth-of-field bokeh background',
+    ],
+    lightingVariants: [
+      'pre-dawn blue hour, soft purple-gold rim light on the subject',
+      'high noon with volumetric god-rays piercing through clouds',
+      'moonlit night with silver-blue rim and warm lantern accents',
+    ],
+    paletteVariants: [
+      // 0 — legacy palette (back-compat)
+      { accent: '#c89b3c', description: 'jade green / gold / misty white' },
+      // 1 — cool-shifted sister palette
+      { accent: '#5fb3a8', description: 'deep teal / silver / pale jade' },
+    ],
   },
   ngon_tinh: {
     vi: 'Ngôn tình (lãng mạn)',
@@ -147,6 +199,25 @@ export const GENRE_SPECS: Record<VietnameseGenre, GenreSpec> = {
     motif: 'couple silhouette in warm golden-hour light, soft floral motifs, traditional Vietnamese áo dài or modern elegant outfits',
     palette: { accent: '#d4a373', bgDark: false, description: 'warm sepia / dusty rose / soft gold' },
     fallbackImagePrompt: 'A romantic backlit silhouette of a young couple embracing in a garden of cherry blossoms at golden hour, soft warm light filtering through the petals, delicate floral patterns drifting in the air, painterly watercolor style with soft brushwork, warm sepia and dusty rose color palette, romantic and tender mood',
+    motifVariants: [
+      'couple silhouette in warm golden-hour light, soft floral motifs, traditional Vietnamese áo dài or modern elegant outfits',
+      'lone woman in flowing áo dài walking across a rain-soaked bridge lit by paper lanterns',
+      'two hands almost touching across a sun-dappled café table, scattered rose petals, soft bokeh',
+    ],
+    shotVariants: [
+      'medium portrait, subject waist-up with shallow depth-of-field',
+      'wide cinematic shot of an empty romantic setting (bridge, garden, balcony)',
+      'overhead flat-lay of symbolic objects (letter, dried flower, locket) with soft shadows',
+    ],
+    lightingVariants: [
+      'golden hour, warm backlight with lens flare',
+      'overcast soft daylight, even illumination, pastel tones',
+      'twilight, cool blue ambient with warm window-light accents',
+    ],
+    paletteVariants: [
+      { accent: '#d4a373', description: 'warm sepia / dusty rose / soft gold' },
+      { accent: '#c08497', description: 'dusty rose / blush pink / cream' },
+    ],
   },
   lich_su: {
     vi: 'Cổ trang / Lịch sử / Cung đấu',
@@ -165,6 +236,25 @@ export const GENRE_SPECS: Record<VietnameseGenre, GenreSpec> = {
     motif: 'ornate imperial palace courtyard with red lacquer pillars and golden phoenix motifs, figures in flowing silk robes',
     palette: { accent: '#a82c2c', bgDark: true, description: 'vermilion red / imperial gold / jade' },
     fallbackImagePrompt: 'An ornate imperial palace courtyard at dusk, carved vermilion pillars framing a ceremonial walkway, golden phoenix motifs catching the last warm light, distant lotus ponds reflecting lantern glow, two figures in flowing silk Hanfu standing under a curved bridge, classical Chinese oil painting style with rich vermilion and imperial gold palette, regal and historical mood',
+    motifVariants: [
+      'ornate imperial palace courtyard with red lacquer pillars and golden phoenix motifs, figures in flowing silk robes',
+      'distant Forbidden-City skyline at dawn, embroidered banners catching the first warm light, a single rider on horseback crossing the great marble bridge',
+      'imperial throne room in deep perspective, jade scepters and bronze ceremonial vessels on either side, a single robed silhouette ascending the steps',
+    ],
+    shotVariants: [
+      'wide establishing shot of the palace complex from a distance',
+      'interior medium shot framed by carved columns and hanging silk drapes',
+      'low-angle hero shot of a single figure ascending ceremonial stairs',
+    ],
+    lightingVariants: [
+      'dusk with warm vermilion lantern glow and long indigo shadows',
+      'midday with bright cloud-diffused light, vivid saturated reds',
+      'moonlit night with silver highlights on the gilded roof tiles',
+    ],
+    paletteVariants: [
+      { accent: '#a82c2c', description: 'vermilion red / imperial gold / jade' },
+      { accent: '#7a1a2e', description: 'deep crimson / antique gold / bronze' },
+    ],
   },
   do_thi: {
     vi: 'Đô thị / Hiện đại / Kinh doanh',
@@ -184,6 +274,25 @@ export const GENRE_SPECS: Record<VietnameseGenre, GenreSpec> = {
     motif: 'skyline of Ho Chi Minh City at night with neon reflections, a stylish couple under umbrella in the rain, modern glass architecture',
     palette: { accent: '#0ea5e9', bgDark: true, description: 'electric cyan / neon teal / steel grey' },
     fallbackImagePrompt: 'A modern city skyline at dusk with sleek glass skyscrapers glowing in neon cyan and teal, rain-slicked streets reflecting shimmering lights, a stylish couple sharing an umbrella on a pedestrian bridge in the foreground, cinematic photography style with shallow depth of field, modern urban mood',
+    motifVariants: [
+      'skyline of Ho Chi Minh City at night with neon reflections, a stylish couple under umbrella in the rain, modern glass architecture',
+      'sleek black luxury sedan parked under a wet overpass, neon signage reflecting in the puddles, no figures',
+      'rooftop infinity pool at dusk with the city skyline in the background, a single suited silhouette at the railing',
+    ],
+    shotVariants: [
+      'wide cinematic cityscape with the subject small in the frame for scale',
+      'eye-level street shot, shallow depth-of-field with bokeh city lights',
+      'high-angle aerial perspective looking down on a rain-slicked intersection',
+    ],
+    lightingVariants: [
+      'rainy night with neon reflections and rim-lit silhouettes',
+      'golden hour with long shadows and warm building glow',
+      'overcast daylight with diffused soft shadows, muted saturation',
+    ],
+    paletteVariants: [
+      { accent: '#0ea5e9', description: 'electric cyan / neon teal / steel grey' },
+      { accent: '#fb923c', description: 'amber streetlight / warm orange / charcoal' },
+    ],
   },
   game_system: {
     vi: 'Game / Hệ thống / LitRPG',
@@ -205,6 +314,25 @@ export const GENRE_SPECS: Record<VietnameseGenre, GenreSpec> = {
     motif: 'ethereal floating skill tree with glowing runes, warrior surrounded by spiraling energy, lens flare',
     palette: { accent: '#a78bfa', bgDark: true, description: 'electric purple / neon cyan / white' },
     fallbackImagePrompt: 'A powerful young warrior surrounded by a swirling vortex of electric purple and cyan energy, glowing rune symbols orbiting around them like a halo, a translucent skill-tree floating in the background with ascending power levels, epic cinematic composition with dramatic rim lighting, modern game-cinematic style, power-fantasy mood',
+    motifVariants: [
+      'ethereal floating skill tree with glowing runes, warrior surrounded by spiraling energy, lens flare',
+      'lone swordsman standing before a colossal transparent stat-sheet HUD projecting their level and power, neon glyphs cascading down',
+      'boss arena interior with a swirling purple portal of loot drops and skill upgrades, the hero silhouetted at the threshold',
+    ],
+    shotVariants: [
+      'wide hero shot, subject centered with full skill-tree behind them',
+      'extreme close-up of a glowing rune / weapon detail with bokeh background',
+      'low-angle silhouette against a backdrop of cascading neon glyphs',
+    ],
+    lightingVariants: [
+      'dramatic purple/cyan rim light with volumetric energy haze',
+      'flat neon billboard lighting, saturated cyberpunk palette',
+      'cool blue moonlight base with one warm orange accent highlight',
+    ],
+    paletteVariants: [
+      { accent: '#a78bfa', description: 'electric purple / neon cyan / white' },
+      { accent: '#22d3ee', description: 'electric cyan / hot magenta / white' },
+    ],
   },
   kinh_di: {
     vi: 'Kinh dị / Ma / Quỷ',
@@ -223,6 +351,25 @@ export const GENRE_SPECS: Record<VietnameseGenre, GenreSpec> = {
     motif: 'abandoned courtyard shrouded in fog, twisted trees, single ominous lantern, ghostly figure barely visible',
     palette: { accent: '#7f1d1d', bgDark: true, description: 'deep crimson / ash grey / dark moss' },
     fallbackImagePrompt: 'An ancient Vietnamese abandoned courtyard shrouded in heavy fog, twisted banyan trees with gnarled roots, a single red lantern casting eerie crimson light on crumbling stone walls, a barely visible ghostly figure in white áo dài floating near the gate, dark oil painting style with deep crimson and ash grey palette, haunting and chilling mood',
+    motifVariants: [
+      'abandoned courtyard shrouded in fog, twisted trees, single ominous lantern, ghostly figure barely visible',
+      'long dark staircase descending into a flooded temple crypt, water reflecting a single flickering candle, no figures',
+      'cracked ancestral altar with three extinguished incense sticks, a lone spirit-candle burning blue, offerings half-decayed',
+    ],
+    shotVariants: [
+      'wide symmetric shot down a corridor or staircase with subject centered',
+      'close-up of a single iconic object (lantern / talisman / doll) with bokeh darkness',
+      'low-angle hero shot of a ghostly silhouette emerging from shadow',
+    ],
+    lightingVariants: [
+      'single warm lantern glow surrounded by deep blue-black darkness',
+      'cold blue moonlight with hard-edged shadows',
+      'foggy diffused grey light, low contrast, oppressive atmosphere',
+    ],
+    paletteVariants: [
+      { accent: '#7f1d1d', description: 'deep crimson / ash grey / dark moss' },
+      { accent: '#1f2937', description: 'midnight indigo / bone white / cold teal' },
+    ],
   },
   khoa_hoc_vien_tuong: {
     vi: 'Khoa học viễn tưởng / Tương lai',
@@ -240,6 +387,25 @@ export const GENRE_SPECS: Record<VietnameseGenre, GenreSpec> = {
     motif: 'enormous space station orbiting a teal-and-gold planet, lone astronaut in foreground, lens flare',
     palette: { accent: '#22d3ee', bgDark: true, description: 'deep space blue / cyan / silver' },
     fallbackImagePrompt: 'A lone astronaut standing on an observation deck, a colossal teal-and-gold ringed space station orbiting behind them, distant nebula glowing with electric cyan and silver light, volumetric god rays, cinematic sci-fi film composition with anamorphic lens flares, futuristic and awe-inspiring mood',
+    motifVariants: [
+      'enormous space station orbiting a teal-and-gold planet, lone astronaut in foreground, lens flare',
+      'colossal mech silhouette standing at the edge of an alien megacity, holographic billboards reflecting off chrome armor',
+      'cylindrical rotating space habitat with city lights visible through its transparent hull, a single cargo ship approaching',
+    ],
+    shotVariants: [
+      'wide establishing shot with subject tiny against a vast celestial backdrop',
+      'over-the-shoulder hero shot looking out from a cockpit window',
+      'extreme wide shot of a megacity or space structure in silhouette',
+    ],
+    lightingVariants: [
+      'cold cyan starlight with one warm orange window-light accent',
+      'nebula-glow with magenta and violet gradient sky',
+      'harsh sunlight on chrome, deep saturated contrast',
+    ],
+    paletteVariants: [
+      { accent: '#22d3ee', description: 'deep space blue / cyan / silver' },
+      { accent: '#a78bfa', description: 'violet nebula / chrome / hot pink' },
+    ],
   },
   thieu_nien: {
     vi: 'Thanh xuân / Học đường',
@@ -256,6 +422,25 @@ export const GENRE_SPECS: Record<VietnameseGenre, GenreSpec> = {
     motif: 'sunlit high-school courtyard, cherry-blossom-lined path, two students on a wooden bench',
     palette: { accent: '#f9a8d4', bgDark: false, description: 'soft pink / sky blue / warm sunlight' },
     fallbackImagePrompt: 'A sunlit high school courtyard in late spring, rows of blooming sakura trees lining a brick path, two students in uniform sitting on a wooden bench by a fountain, warm afternoon light casting long shadows, soft watercolor painting style with delicate brushwork, bright pink and sky blue palette, youthful and tender mood',
+    motifVariants: [
+      'sunlit high-school courtyard, cherry-blossom-lined path, two students on a wooden bench',
+      'rooftop at golden hour, a single student leaning on the railing with a backpack, city skyline behind them',
+      'school library aisle, late afternoon sun streaming between bookshelves, an open notebook on the windowsill',
+    ],
+    shotVariants: [
+      'medium shot of two students from a slight distance, environmental',
+      'overhead flat-lay of a desk scattered with textbooks, stationery, and a half-eaten bento',
+      'tracking shot of an empty school corridor with sunlight stripes on the floor',
+    ],
+    lightingVariants: [
+      'late-afternoon golden hour with long warm shadows',
+      'overcast soft daylight, even and gentle',
+      'sunrise with cool blue air and warm rim light',
+    ],
+    paletteVariants: [
+      { accent: '#f9a8d4', description: 'soft pink / sky blue / warm sunlight' },
+      { accent: '#fde68a', description: 'cream / sage green / powder blue' },
+    ],
   },
   unknown: {
     vi: 'Khác / Tổng hợp',
@@ -266,6 +451,25 @@ export const GENRE_SPECS: Record<VietnameseGenre, GenreSpec> = {
     motif: 'abstract gradient with subtle floating elements, no specific subject',
     palette: { accent: '#c89b3c', bgDark: true, description: 'neutral warm gold with deep moody tones' },
     fallbackImagePrompt: 'An elegant abstract cinematic composition, deep moody warm tones with a soft golden glow center-stage and subtle floating particles in the foreground, evocative of mystery and storytelling without a specific subject, professional book cover composition with strong visual hierarchy',
+    motifVariants: [
+      'abstract gradient with subtle floating elements, no specific subject',
+      'soft-focus macro of a single symbolic object (compass / feather / candle) on a dark surface',
+      'silhouetted figure seen from behind, walking into a fog-shrouded horizon with one warm light source',
+    ],
+    shotVariants: [
+      'wide cinematic composition with strong negative space',
+      'extreme close-up of a single textured surface with bokeh',
+      'medium shot, subject centered with vignetted edges',
+    ],
+    lightingVariants: [
+      'single warm key light from off-camera, deep moody shadows',
+      'overcast soft daylight, low contrast',
+      'twilight with cool ambient and one warm accent highlight',
+    ],
+    paletteVariants: [
+      { accent: '#c89b3c', description: 'neutral warm gold with deep moody tones' },
+      { accent: '#64748b', description: 'slate grey / muted teal / off-white' },
+    ],
   },
 };
 
@@ -500,6 +704,132 @@ export function detectGenre(input: GenreDetectionInput): GenreDetection {
   };
 }
 
+// ── Cover variety ───────────────────────────────────────────────────────
+//
+// Two books in the same genre used to look like the same template:
+// every tu_tieu_thuyet novel got "misty mountain peak + jade aura + gold
+// ink", every lich_su novel got "imperial courtyard + vermilion pillars"
+// etc. The single `motif` / `palette` / `fallbackImagePrompt` fields
+// converged the LLM onto the same image every time.
+//
+// Each genre now ships 4 axes of variants:
+//   - motifVariants      (2-3 subjects in the same world)
+//   - shotVariants       (composition / framing)
+//   - lightingVariants   (atmosphere / time of day)
+//   - paletteVariants    (1-2 colour-shifted accents)
+//
+// At cover-build time we pick ONE entry from each axis deterministically
+// from title+author. The combination is unique per book, so two
+// tu_tieu_thuyet novels with different titles never produce the same
+// cover — but they still feel like the same genre (jade / gold / mist
+// for tu tiên, vermilion / imperial for lich_su, etc.).
+//
+// We use the SAME salt-stamped hash the cover-seed already uses
+// (see coverSeed in ai-generate-cover.ts), so variant picks stay in
+// lock-step with the image-generation seed: same book always gets the
+// same cover, even across process restarts.
+
+/** Pick a stable 0..total-1 index from `title|author|axis`. Each axis
+ *  uses its own salt so the picked indices don't correlate across axes
+ *  (otherwise every book would pick the same (motif, shot, lighting)
+ *  triple because their hashes would always have the same high bits).
+ *
+ *  Uses DJB2-style hash for parity with `coverSeed()`. Returns 0 when
+ *  `total <= 1` so callers don't have to guard. */
+function pickVariantIndex(title: string, author: string, axis: string, total: number): number {
+  if (total <= 1) return 0;
+  const s = `${title}|${author}|cover-v5-variant-axis:${axis}`;
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  }
+  return (h >>> 0) % total;
+}
+
+/** The four axes we vary per book. Order matters — different axes get
+ *  different salts in `pickVariantIndex` so they don't correlate. */
+export type VarietyAxis = 'motif' | 'shot' | 'lighting' | 'palette';
+
+/** The picked set returned by `pickVariety()`. All fields are guaranteed
+ *  populated — `palette` is just the resolved entry from `paletteVariants`. */
+export interface PickedVariety {
+  motif: string;
+  shot: string;
+  lighting: string;
+  palette: { accent: string; description: string };
+  /** Diagnostic indices, useful for logging ("this book picked motif=2,
+   *  shot=1, lighting=0, palette=1"). */
+  motifIndex: number;
+  shotIndex: number;
+  lightingIndex: number;
+  paletteIndex: number;
+}
+
+/** Pick one entry from each variety axis, deterministically from
+ *  `title + author`. Two books with the same title|author always get
+ *  the same picks (same book → same cover). */
+export function pickVariety(
+  spec: GenreSpec,
+  title: string,
+  author: string,
+): PickedVariety {
+  const motifIndex = pickVariantIndex(title, author, 'motif', spec.motifVariants.length);
+  const shotIndex = pickVariantIndex(title, author, 'shot', spec.shotVariants.length);
+  const lightingIndex = pickVariantIndex(title, author, 'lighting', spec.lightingVariants.length);
+  const paletteIndex = pickVariantIndex(title, author, 'palette', spec.paletteVariants.length);
+  return {
+    motif: spec.motifVariants[motifIndex],
+    shot: spec.shotVariants[shotIndex],
+    lighting: spec.lightingVariants[lightingIndex],
+    palette: spec.paletteVariants[paletteIndex],
+    motifIndex, shotIndex, lightingIndex, paletteIndex,
+  };
+}
+
+/** Compose the deterministic fallback imagePrompt from the four picked
+ *  variety axes. Replaces the legacy single hardcoded `fallbackImagePrompt`
+ *  string. The sentence is templated to keep the same general structure
+ *  (subject + composition + lighting + style + palette + mood) so the
+ *  image AI sees a familiar shape regardless of which variants were
+ *  picked — only the words inside the brackets change.
+ *
+ *  Example output (tu_tieu_thuyet, motif[1] / shot[0] / lighting[2] /
+ *  palette[1]):
+ *    "A colossal ancient sword thrust into the ground of a jade-green
+ *     valley, lightning cracking around its runic blade. Wide establishing
+ *     shot, subject centered with vast negative space. Moonlit night with
+ *     silver-blue rim and warm lantern accents. Ink wash painting style.
+ *     Deep teal / silver / pale jade palette. Epic and mystical mood." */
+export function composeFallbackPrompt(
+  spec: GenreSpec,
+  picked: PickedVariety,
+): string {
+  const subjectFragment = capFirst(picked.motif);
+  const compositionFragment = capFirst(picked.shot);
+  const lightingFragment = capFirst(picked.lighting);
+  // Style fragment names the genre's recipe so the image model picks
+  // matching brushwork / filters. Falls back to "painterly composition"
+  // if the style enum ever loses its image-side mapping.
+  const styleName = styleToHumanName(spec.style);
+  const paletteFragment = capFirst(picked.palette.description);
+  return `${subjectFragment} ${compositionFragment} ${lightingFragment} ${styleName}, ${paletteFragment} palette. ${capFirst(spec.mood)} mood.`;
+}
+
+function capFirst(s: string): string {
+  if (!s) return s;
+  return s[0].toUpperCase() + s.slice(1);
+}
+
+function styleToHumanName(s: GenreSpec['style']): string {
+  switch (s) {
+    case 'ink':        return 'Ink wash painting style with subtle color accents';
+    case 'watercolor': return 'Painterly watercolor style with soft brushwork';
+    case 'painting':   return 'Classical oil painting style';
+    case 'cinematic':  return 'Cinematic photography style with shallow depth of field';
+    case 'sketch':     return 'Pencil sketch style with light shading';
+  }
+}
+
 /** A small bundle the cover API route / worker can pass straight to
  *  the LLM call — keeps call sites from re-deriving the prompt. */
 export interface GenreArtDirection {
@@ -512,20 +842,49 @@ export interface GenreArtDirection {
   bgDark: boolean;
   paletteDescription: string;
   fallbackImagePrompt: string;
+  /** Picked variants for this specific book. Always populated when
+   *  `toArtDirection` is called with `title + author`. Falls back to
+   *  the legacy single-value fields (variant index 0) when either is
+   *  missing, so old call sites without title/author still work. */
+  picked: PickedVariety;
 }
 
-export function toArtDirection(detection: GenreDetection): GenreArtDirection {
+/** Resolve the per-book art direction. Pass `title + author` to enable
+ *  cover variety (different book → different cover); omit them only in
+ *  legacy paths that haven't been updated yet — they'll get variant
+ *  index 0 across the board, which matches the legacy single-value
+ *  fields exactly (back-compat). */
+export function toArtDirection(
+  detection: GenreDetection,
+  title?: string,
+  author?: string,
+): GenreArtDirection {
   const s = detection.spec;
+  const picked = (title && author)
+    ? pickVariety(s, title, author)
+    : {
+        motif: s.motifVariants[0],
+        shot: s.shotVariants[0],
+        lighting: s.lightingVariants[0],
+        palette: s.paletteVariants[0],
+        motifIndex: 0, shotIndex: 0, lightingIndex: 0, paletteIndex: 0,
+      };
   return {
     vi: s.vi,
     en: s.en,
     style: s.style,
-    motif: s.motif,
+    // Use the PICKED motif as the headline — it's what varies per book.
+    motif: picked.motif,
     mood: s.mood,
-    accent: s.palette.accent,
+    accent: picked.palette.accent,
     bgDark: s.palette.bgDark,
-    paletteDescription: s.palette.description,
-    fallbackImagePrompt: s.fallbackImagePrompt,
+    paletteDescription: picked.palette.description,
+    // Compose the fallback from the picked variants instead of the
+    // legacy single hardcoded string — this is the headline win for
+    // variety because every book gets its own fallback when the LLM
+    // design step fails.
+    fallbackImagePrompt: composeFallbackPrompt(s, picked),
+    picked,
   };
 }
 
