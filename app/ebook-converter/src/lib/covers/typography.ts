@@ -343,26 +343,35 @@ function gradientDefBlock(accent: string, recipe: GenreRecipe): string {
 
   // Soft glow filter (used when recipe.glow is set).
   if (recipe.glow) {
+    // Combined filter: triple-stack drop-shadow (carved depth) PLUS
+    // coloured glow. SVG only allows ONE filter per element, so we
+    // merge both effects into a single filter chain via feMerge and
+    // chain the drop-shadows by feeding the previous result forward.
     defs.push(`
     <filter id="title-glow" x="-30%" y="-30%" width="160%" height="160%">
       <feGaussianBlur in="SourceGraphic" stdDeviation="${recipe.glow.size}" result="blur"/>
       <feFlood flood-color="${recipe.glow.color}" flood-opacity="0.7"/>
       <feComposite in2="blur" operator="in" result="glow"/>
+      <feDropShadow in="glow" dx="0" dy="6" stdDeviation="10" flood-color="#000" flood-opacity="0.85" result="sh1"/>
+      <feDropShadow in="sh1"   dx="0" dy="2" stdDeviation="3"  flood-color="#000" flood-opacity="0.6"  result="sh2"/>
+      <feDropShadow in="sh2"   dx="0" dy="-1" stdDeviation="1" flood-color="#fff" flood-opacity="0.18" result="sh3"/>
       <feMerge>
-        <feMergeNode in="glow"/>
+        <feMergeNode in="sh3"/>
         <feMergeNode in="SourceGraphic"/>
       </feMerge>
     </filter>`);
-  }
-
-  // Triple-stack drop-shadow filter — heavy anchor + tight mid + bright top
-  // for the carved/embossed feel (matches Example 02/08/14 style).
-  defs.push(`
+  } else {
+    // No glow: just the triple-stack drop-shadow for carved depth
+    // (matches Example 02/08/14 style without the colored halo).
+    defs.push(`
     <filter id="title-shadow" x="-20%" y="-20%" width="140%" height="140%">
       <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#000" flood-opacity="0.85"/>
       <feDropShadow dx="0" dy="2" stdDeviation="3"  flood-color="#000" flood-opacity="0.6"/>
       <feDropShadow dx="0" dy="-1" stdDeviation="1" flood-color="#fff" flood-opacity="0.18"/>
-    </filter>
+    </filter>`);
+  }
+
+  defs.push(`
     <filter id="meta-shadow" x="-20%" y="-20%" width="140%" height="140%">
       <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.7"/>
     </filter>`);
@@ -381,8 +390,12 @@ function buildTitleLines(
   const lineHeight = titleFontSize * 1.08;
   const blockStartY = layout.blockY + (recipe.ornament === 'flourish' ? 40 : 24);
   const fill = gradientFor(recipe.fill, '#c89b3c');
-  const glowAttr = recipe.glow ? ' filter="url(#title-glow)"' : '';
-  const shadowAttr = ' filter="url(#title-shadow)"';
+  // SVG only allows ONE filter per element. The `title-glow` filter
+  // (defined when glow is set) bundles both the colored halo AND the
+  // triple drop-shadow chain; otherwise we use the plain shadow filter.
+  const filterAttr = recipe.glow
+    ? ' filter="url(#title-glow)"'
+    : ' filter="url(#title-shadow)"';
   const stroke = recipe.stroke;
 
   return titleLines.map((line, i) => {
@@ -414,7 +427,7 @@ function buildTitleLines(
           font-style="${recipe.italic ? 'italic' : 'normal'}"
           fill="${stroke}" stroke="${stroke}" stroke-width="${recipe.strokeWidth + 1}"
           stroke-linejoin="round" letter-spacing="${recipe.letterSpacing}"
-          transform="rotate(${angle} ${cx} ${cy})"${shadowAttr}>${chEsc}</text>`;
+          transform="rotate(${angle} ${cx} ${cy})"${filterAttr}>${chEsc}</text>`;
         // Fill layer
         const fillLayer = `<text x="${cx}" y="${y}" text-anchor="middle"
           font-family="${recipe.italic ? 'Literata-Italic' : 'Literata-Black'}, 'Noto Serif', Georgia, serif"
@@ -436,7 +449,7 @@ function buildTitleLines(
       font-style="${recipe.italic ? 'italic' : 'normal'}"
       fill="${stroke}" stroke="${stroke}" stroke-width="${recipe.strokeWidth}"
       stroke-linejoin="round" letter-spacing="${recipe.letterSpacing}"
-      ${glowAttr}${shadowAttr}>${safeLine}</text>`;
+      ${filterAttr}>${safeLine}</text>`;
     // Layer 2 — bright gradient fill (visible body)
     const body = `<text x="${titleX}" y="${y}" text-anchor="${textAnchor}"
       font-family="${family}, 'Noto Serif', Georgia, serif"
