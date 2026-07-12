@@ -98,9 +98,11 @@ _*.[jt]sx
 _*.py
 
 # Reference material checked out locally for offline docs (submodule candidates)
+reference
 reference/
 
 # VS Code workspace files (personal IDE config, not for sharing)
 *.code-workspace
 
 hg_token.md
+

@@ -34,6 +34,10 @@ services:
   app:
     build: .
     restart: unless-stopped
+    # SQLite needs ~1s to flush the WAL on shutdown; the default 10s
+    # SIGKILL would lose the last transaction. 30s is generous.
+    stop_grace_period: 30s
+    stop_signal: SIGTERM
     ports:
       - '13100:3100'
     env_file: .env.local
@@ -82,6 +86,9 @@ services:
     # same SQLite database.
     build: .
     restart: unless-stopped
+    # Same graceful-shutdown story as `app` — see comment there.
+    stop_grace_period: 30s
+    stop_signal: SIGTERM
     command: node worker.js
     env_file: .env.local
     environment:
@@ -102,28 +109,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-
-  # VnCoreNLP Vietnamese dependency parser. Sidecar consumed by both `app`
-  # (live read-aloud attribution via /api/.../attribute) and `worker`
-  # (BullMQ pre-generation as Tier 3b). Started lazily so docker compose up
-  # works on machines that don't need it. To enable: `docker compose up -d
-  # vncorenlp` and set USE_VNCORENLP=1 in .env.local.
-  vncorenlp:
-    build:
-      context: ../tts-service/vncorenlp
-    image: local/vncorenlp:1.2
-    restart: unless-stopped
-    ports:
-      - '15030:5030'
-    environment:
-      - JAVA_OPTS=-Xmx2g
-      - VNCORENLP_ANNOTATORS=wseg,pos,ner,parse
-    healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://127.0.0.1:5030/healthz']
-      interval: 15s
-      timeout: 5s
-      retries: 6
-      start_period: 60s
 
 volumes:
   redis-data:

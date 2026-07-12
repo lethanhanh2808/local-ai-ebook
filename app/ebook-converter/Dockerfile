@@ -97,16 +97,29 @@ ENV FONTCONFIG_PATH=/app
 # detector treats it as an optional dep and falls back to a trivial
 # lowercase-comparison matcher when missing, which is fine for the
 # initial detection call (suggestions, not bible persistence).
+#
+# sqlite3 is also installed here so the entrypoint integrity check
+# (docker-entrypoint.sh) can run PRAGMA integrity_check at boot.
+# Without this, a corrupt DB would only be discovered when Prisma
+# throws — by which point traffic has already hit it.
 RUN set -eux; \
   apt-get update; \
-  apt-get install -y --no-install-recommends python3 python3-pip; \
+  apt-get install -y --no-install-recommends python3 python3-pip sqlite3; \
   pip3 install --no-cache-dir --break-system-packages httpx; \
   apt-get purge -y --auto-remove pip; \
   rm -rf /var/lib/apt/lists/*; \
-  python3 -c "import httpx; print('httpx', httpx.__version__)"
+  python3 -c "import httpx; print('httpx', httpx.__version__)"; \
+  sqlite3 --version
+
+# Container entrypoint runs SQLite integrity check + enables WAL journal
+# mode before either server.js or worker.js starts. See
+# scripts/docker-entrypoint.sh for the full logic.
+COPY --chown=nextjs:nodejs scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 USER nextjs
 EXPOSE 3100
 ENV PORT=3100
 
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["node", "server.js"]
