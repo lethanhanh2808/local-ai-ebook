@@ -18,6 +18,11 @@ const LIBRARY_DIR = process.env.LIBRARY_DIR
 
 const COVERS_DIR = path.join(LIBRARY_DIR, 'covers');
 
+// Pack-on-demand cache for downloaded EPUBs whose cover was regenerated.
+// Lives inside the library dir so .dockerignore + gitignore already
+// exclude it; we re-pack only when the cover bytes change.
+const PACKED_DIR = path.join(LIBRARY_DIR, 'packed');
+
 // Per-job NDJSON log files consumed by the Debug Console UI.
 // Lives under data/job-logs/ so .dockerignore + gitignore exclude it naturally.
 const JOB_LOG_DIR = process.env.JOB_LOG_DIR
@@ -29,6 +34,7 @@ export function ensureDirs() {
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
   fs.mkdirSync(LIBRARY_DIR, { recursive: true });
   fs.mkdirSync(COVERS_DIR, { recursive: true });
+  fs.mkdirSync(PACKED_DIR, { recursive: true });
   fs.mkdirSync(JOB_LOG_DIR, { recursive: true });
 }
 
@@ -53,6 +59,14 @@ export function coverPath(bookId: string, ext = 'jpg'): string {
   return path.join(COVERS_DIR, `${bookId}.${ext}`);
 }
 
+/** Path to the on-demand re-packed EPUB (cover embedded). Cached on
+ *  disk so subsequent downloads skip the re-pack if the cover bytes
+ *  haven't changed. The cache is keyed by `<bookId>`; we re-pack when
+ *  the cover mtime / size at the source path differs. */
+export function packedEpubPath(bookId: string): string {
+  return path.join(PACKED_DIR, `${bookId}.epub`);
+}
+
 export function removeFile(filePath: string) {
   try { fs.unlinkSync(filePath); } catch { /* best-effort */ }
 }
@@ -70,7 +84,7 @@ export function writeFileBuf(filePath: string, buf: Buffer) {
   fs.writeFileSync(filePath, buf);
 }
 
-export { UPLOAD_DIR, OUTPUT_DIR, LIBRARY_DIR, COVERS_DIR, JOB_LOG_DIR };
+export { UPLOAD_DIR, OUTPUT_DIR, LIBRARY_DIR, COVERS_DIR, PACKED_DIR, JOB_LOG_DIR };
 
 // ── Book-path resolver ─────────────────────────────────────────────────────
 //

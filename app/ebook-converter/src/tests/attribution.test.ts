@@ -51,21 +51,18 @@ describe('stateful conversation attribution', () => {
     expect(out[1].evidence?.some((e) => e.source === 'history')).toBe(true);
   });
 
-  it('fuses parser confidence above conflicting regex evidence', () => {
+  it('blends regex evidence into the stateful conversation fusion', () => {
     const paragraphs = p(['Minh nhìn Lan rồi nói: “Đi thôi.”']);
     const out = attributeByConversation({
       paragraphs,
       characters,
-      parserOut: {
-        0: { speaker: 'Minh', confidence: 0.9, source: 'parser' },
-      },
       regexOut: {
         0: { speaker: 'Lan', confidence: 0.55, source: 'regex' },
       },
     });
 
-    expect(out[0].speaker).toBe('Minh');
-    expect(out[0].confidence).toBeGreaterThan(0.7);
+    expect(out[0].speaker).toBe('Lan');
+    expect(out[0].confidence).toBeGreaterThan(0.4);
   });
 
   it('resolves gendered pronouns from current scene participants', () => {

@@ -4,19 +4,29 @@
 //
 // Full-attribution pipeline streamed via Server-Sent Events. Driven by the
 // "Full Analysis" Wand2 button on the chapter toolbar — the same UI that
-// the cheap GET route (just regex + parser + local fusion) feeds.
+// the cheap GET route (just regex + local fusion) feeds.
 //
 // The pipeline:
 //   1. Invalidate the cached ChapterAttribution row (so we always recompute).
-//   2. Run attributeByParse (VnCoreNLP) + attributeByRegex.
+//   2. Run attributeByRegex.
 //   3. Run local stateful conversation fusion.
 //   4. Identify unresolved paragraphs (no speaker after step 3).
 //   5. Preflight probe: one cheap chat() call. If it fails → omlxReachable
 //      stays false, the LLM step is skipped, the response still streams
 //      the local stateful result so the modal renders stats.
-//   6. attributeByLLM: batched, concurrent (max 2 in flight), strict name
-//      validation. Failed batches are counted but don't abort the pipeline.
+//   6. attributeByLLM (chunked: 4-paragraph batches × 2 parallel, strict
+//      name validation). In 'combine' mode this only sees paragraphs the
+//      regex + stateful layers couldn't resolve. Failed batches are
+//      counted but don't abort the pipeline. In 'full-llm' mode the LLM
+//      step calls attributeByLLMWholeChapter instead — ONE call covering
+//      ALL paragraphs (resolved + unresolved) for best cross-paragraph
+//      reasoning at the cost of all-or-nothing failure. The user-facing
+//      log line changes from N batches to "Batch 1/1".
 //   7. Re-run stateful fusion with LLM evidence, persist to cache.
+//
+// 2026-07-12: maxDuration bumped 300→600. The whole-chapter mode can run
+// a single ~300s oMLX call on a slow 9B model — 5 min was too tight on
+// long chapters even though chunked mode rarely needs >2 min.
 //
 // Wire format: text/event-stream with `data: <json>\n\n` events.
 //   { type: 'log',      line, phase, wallMs, meta? }   — incremental progress
@@ -28,10 +38,11 @@
 // The /attribute (cheap, GET) endpoint stays JSON because it's small and
 // fast — no point burning SSE overhead on a 200ms response.
 
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { getBook } from '@/lib/db/books';
+import { getSettings } from '@/lib/db/settings';
 import { listCharacters } from '@/lib/db/voices';
 import {
   invalidateAttribution,
@@ -44,20 +55,21 @@ import {
   ATTRIBUTION_VERSION_LLM,
   attributeByConversation,
   attributeByLLM,
-  attributeByParse,
+  attributeByLLMWholeChapter,
   attributeByRegex,
-  buildGenderByChar,
-  callParser,
   computeStats,
   sliceParagraphs,
 } from '@/lib/attribution';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-// Vercel hobby limit is 60s; allow 5 min here because the full pipeline
-// (parser + 80 LLM batches × 90s timeout) can easily run 2-3 minutes when
-// oMLX is slow or busy.
-export const maxDuration = 300;
+// Vercel hobby limit is 60s; allow 10 min here. The 'full-llm' whole-
+// chapter mode can run a single mega-call against a slow local model
+// (Ornith-9B-4bit at ~12 tok/s output can take 90-300s for a 300-
+// paragraph chapter). The chunked 'combine' path runs up to 80 LLM
+// batches × ~10s each ≈ ~13 min worst case, but in practice finishes in
+// 1-3 min on cold-start hardware; 10 min covers both safely.
+export const maxDuration = 600;
 
 // ── oMLX preflight probe ─────────────────────────────────────────────────
 // Cheap "are you alive?" call. If it fails, we skip the LLM step entirely
@@ -145,9 +157,7 @@ export async function POST(
   const params = await props.params;
   const book = await getBook(params.id);
   if (!book) {
-    return new Response(JSON.stringify({ error: 'Book not found' }), {
-      status: 404, headers: { 'Content-Type': 'application/json' },
-    });
+    return NextResponse.json({ error: 'Book not found' }, { status: 404 });
   }
   // Read body early so we can validate mode before opening the stream.
   const rawBody = await req.json().catch(() => ({})) as { mode?: string };
@@ -210,7 +220,7 @@ export async function POST(
         const { html } = await chapterResp.json() as { html: string };
         if (!html) {
           write(controller, { type: 'result', attribution: {}, chapter: null, omlxReachable: false,
-            stats: { parserHits: 0, regexHits: 0, llmHits: 0, conversationHits: 0, sourceDrift: 0, defaults: 0, totalParagraphs: 0, llmFailures: 0, llmRequested: 0 },
+            stats: { regexHits: 0, llmHits: 0, conversationHits: 0, defaults: 0, totalParagraphs: 0, llmFailures: 0, llmRequested: 0 },
             durationMs: Date.now() - t0, llmDurationMs: 0 });
           return;
         }
@@ -236,9 +246,6 @@ export async function POST(
 
         let chars = await listCharacters(params.id);
         let knownNames = chars.flatMap((c) => [c.name, ...(c.aliases ?? [])]);
-        const genderByChar = buildGenderByChar(
-          chars.map((c) => ({ name: c.name, aliases: c.aliases ?? [], gender: c.gender ?? null })),
-        );
         const paragraphs = sliceParagraphs(html);
         let characterContext = chars.map((c) => ({
           name: c.name,
@@ -247,31 +254,32 @@ export async function POST(
         }));
         log(controller, `Load ${paragraphs.length} đoạn + ${chars.length} nhân vật`, 'init');
 
+        // Read Settings once up-front so the LLM phase can pull the
+        // per-mode `enable_thinking` flag without racing the user's
+        // mid-run toggle. Both new columns (2026-07-12) default to
+        // sensible values: Combine=ON, Full-LLM=OFF.
+        const settings = await getSettings();
+        const thinkingCombine = settings.aiThinkingCombine ?? true;
+        const thinkingFullLLM = settings.aiThinkingFullLLM ?? false;
+        log(controller,
+          `Thinking: combine=${thinkingCombine ? 'ON' : 'OFF'}, full-llm=${thinkingFullLLM ? 'ON' : 'OFF'} (Settings)`,
+          'init',
+          { meta: { thinkingCombine, thinkingFullLLM } });
+
         // ── Phase 3: invalidate cache ───────────────────────────────────
         await invalidateAttribution(params.id, chapterIndex);
         log(controller, 'Cache invalidated', 'init');
 
-        // ── Phase 4: parser + regex layers ──────────────────────────────
-        const parserText = paragraphs.map((p) => p.text).join('\n');
-        const parserResp = await callParser(parserText);
-        let parserOut: ChapterAttributionMap = {};
-        let parserReachable = true;
-        if (parserResp) {
-          parserOut = attributeByParse(paragraphs, parserResp.sentences, knownNames, genderByChar);
-          log(controller, `Parser: ${Object.keys(parserOut).length} đoạn gán từ VnCoreNLP`, 'parse');
-        } else {
-          parserReachable = false;
-          log(controller, 'Parser: VnCoreNLP không khả dụng (bỏ qua)', 'parse');
-        }
+        // ── Phase 4: regex layer ────────────────────────────────────────
         const regexOut = attributeByRegex(paragraphs, knownNames);
         log(controller, `Regex: ${Object.keys(regexOut).length} đoạn gán từ pattern`, 'regex');
 
         // ── Phase 5: local baseline fusion ──────────────────────────────
         const localBaseline = attributeByConversation({
-          paragraphs, characters: characterContext, parserOut, regexOut,
+          paragraphs, characters: characterContext, regexOut,
         });
         const localResolved = Object.values(localBaseline).filter((a) => a.speaker).length;
-        log(controller, `Local fusion: ${localResolved} đoạn gán (parser + regex + stateful)`, 'local');
+        log(controller, `Local fusion: ${localResolved} đoạn gán (regex + stateful)`, 'local');
 
         // ── Phase 6: oMLX preflight + LLM batches (skip in local-only) ──
         let llmOut: ChapterAttributionMap = {};
@@ -312,13 +320,26 @@ export async function POST(
         // distinct log line so the user can tell at a glance which knob to
         // turn:
         //   1. caller asked for local-only mode
-        //   2. nothing unresolved after parser + regex + stateful fusion
+        //   2. nothing unresolved after regex + stateful fusion
         //   3. no character roster — the LLM cannot validate speaker names
         //      against a roster of knownNames, so its answers would be
         //      discarded by validateLLMRow anyway.
         const unresolved = paragraphs
           .filter((p) => !localBaseline[p.index]?.speaker)
           .map((p) => p.index);
+        // Decide whether the LLM layer has anything to do BEFORE we burn a
+        // preflight ping on oMLX. Three reasons to skip, each surfacing a
+        // distinct log line so the user can tell at a glance which knob to
+        // turn:
+        //   1. caller asked for local-only mode
+        //   2. nothing unresolved after regex + stateful fusion AND we're
+        //      not in 'full-llm' mode — the whole point of whole-chapter
+        //      mode is to give the LLM the full chapter end-to-end for
+        //      cross-paragraph reasoning, so it intentionally bypasses this
+        //      even when the local layers already resolved everything.
+        //   3. no character roster — the LLM cannot validate speaker names
+        //      against a roster of knownNames, so its answers would be
+        //      discarded by validateLLMRow anyway.
         if (mode === 'local-only') {
           log(controller, 'Mode local-only — bỏ qua LLM', 'preflight');
         } else if (knownNames.length === 0) {
@@ -326,9 +347,9 @@ export async function POST(
             `Chưa có nhân vật trong DB (0 names) — bỏ qua LLM. Chạy "Phân tích nhân vật" trước để populate roster.`,
             'llm',
             { meta: { skipped: 'no-characters', unresolvedCount: unresolved.length } });
-        } else if (unresolved.length === 0) {
+        } else if (mode !== 'full-llm' && unresolved.length === 0) {
           log(controller,
-            `Local fusion đã gán hết ${paragraphs.length}/${paragraphs.length} đoạn — LLM không cần chạy`,
+            `Local fusion đã gán hết ${paragraphs.length}/${paragraphs.length} đoạn — LLM không cần chạy (chuyển sang "Full LLM" mode nếu muốn ép LLM re-attribute toàn bộ chapter)`,
             'llm',
             { meta: { skipped: 'all-resolved' } });
         } else {
@@ -336,61 +357,114 @@ export async function POST(
           log(controller, omlxReachable ? `Preflight: oMLX OK` : `Preflight: oMLX down — bỏ qua LLM`, 'preflight');
 
           if (omlxReachable) {
-            const batches = Math.ceil(unresolved.length / 4);  // matches LLM_BATCH_SIZE
-            log(controller, `LLM: ${unresolved.length} đoạn chưa gán → ${batches} batch (≤2 song song)`, 'llm');
-            const llmStart = Date.now();
-            // Smoothed ETA — average batch duration × remaining batches.
-            let avgBatchMs = 0;
-            let batchesDone = 0;
-            const llmResult = await attributeByLLM({
-              paragraphs,
-              unresolvedIndices: unresolved,
-              knownNames,
-              characterContext,
-              parserOut,
-              regexOut,
-              onBatch: (info) => {
-                batchesDone++;
-                // Exponential moving average so early batches (often warm-up
-                // for cold oMLX) don't poison the ETA forever.
-                const alpha = 0.4;
-                avgBatchMs = avgBatchMs === 0
-                  ? info.durationMs
-                  : avgBatchMs * (1 - alpha) + info.durationMs * alpha;
-                const remaining = Math.max(0, info.total - batchesDone);
-                const etaSec = Math.round((remaining * avgBatchMs) / 1000);
-                const status = info.error
-                  ? `✗ ${info.error.slice(0, 30)}`
-                  : info.ok
-                    ? '✓'
-                    : '· 0 rows';
-                log(controller,
-                  `Batch ${info.idx}/${info.total} ${status} · [${info.indices.join(',')}] · ${Math.round(info.durationMs / 100) / 10}s · ETA ~${etaSec}s · ${batchesDone}/${info.total} done (${batchesDone - llmFailures}✓ ${llmFailures}✗)`,
-                  'llm',
-                  { meta: {
-                    batchIndex: info.idx,
-                    batchTotal: info.total,
-                    batchOk: info.ok,
-                    paragraphs: info.indices,
-                    durationMs: info.durationMs,
-                    etaSec,
-                  } });
-              },
-            });
-            llmDurationMs = Date.now() - llmStart;
-            llmOut = llmResult.map;
-            llmFailures = llmResult.failedBatches;
-            llmRequested = llmResult.requested;
+            if (mode === 'full-llm') {
+              // ── Whole-chapter path (single big chatJSON call) ───────────
+              // 2026-07-12: 'full-llm' mode now runs ONE big call against
+              // ALL paragraphs (resolved + unresolved) instead of the prior
+              // chunked behavior. Trade-off: best cross-paragraph reasoning,
+              // all-or-nothing failure on JSON parse error. Already-resolved
+              // paragraphs are still included because regexOut is folded
+              // into the prompt as `prevSpeaker` hints, and the downstream
+              // fuse step still merges LLM output with the regex/local
+              // baseline.
+              log(controller,
+                `LLM: ${paragraphs.length} đoạn → 1 whole-chapter call (output budget 16384 tokens, ≈${Math.round((paragraphs.length * 0.35 + 30))}s ước tính)`,
+                'llm',
+                { meta: { mode: 'full-llm', paragraphCount: paragraphs.length, outputBudget: 16384 } });
+              const llmStart = Date.now();
+              const llmResult = await attributeByLLMWholeChapter({
+                paragraphs,
+                unresolvedIndices: paragraphs.map((p) => p.index),  // all, ignored by whole-chapter fn
+                knownNames,
+                characterContext,
+                regexOut,
+                // Per-mode thinking toggle (2026-07-12). Driven by the
+                // user-configurable Settings.aiThinkingFullLLM (default
+                // OFF — the prompt dominates the output budget).
+                enableThinking: thinkingFullLLM,
+                onBatch: (info) => {
+                  const status = info.error
+                    ? `✗ ${info.error.slice(0, 60)}`
+                    : info.ok
+                      ? '✓'
+                      : '· 0 rows';
+                  log(controller,
+                    `Batch ${info.idx}/${info.total} ${status} · [${info.indices.length} đoạn] · ${Math.round(info.durationMs / 100) / 10}s`,
+                    'llm',
+                    { meta: {
+                      batchIndex: info.idx,
+                      batchTotal: info.total,
+                      batchOk: info.ok,
+                      paragraphs: info.indices.slice(0, 50),  // cap to keep SSE event small
+                      durationMs: info.durationMs,
+                    } });
+                },
+              });
+              llmDurationMs = Date.now() - llmStart;
+              llmOut = llmResult.map;
+              llmFailures = llmResult.failedBatches;
+              llmRequested = llmResult.requested;
+            } else {
+              // ── Chunked path (existing, 4-paragraph batches × 2 parallel) ──
+              const batches = Math.ceil(unresolved.length / 4);  // matches LLM_BATCH_SIZE
+              log(controller, `LLM: ${unresolved.length} đoạn chưa gán → ${batches} batch (≤2 song song)`, 'llm');
+              const llmStart = Date.now();
+              // Smoothed ETA — average batch duration × remaining batches.
+              let avgBatchMs = 0;
+              let batchesDone = 0;
+              const llmResult = await attributeByLLM({
+                paragraphs,
+                unresolvedIndices: unresolved,
+                knownNames,
+                characterContext,
+                regexOut,
+                // Per-mode thinking toggle (2026-07-12). Driven by the
+                // user-configurable Settings.aiThinkingCombine (default
+                // ON — small batches, accuracy matters more than speed).
+                enableThinking: thinkingCombine,
+                onBatch: (info) => {
+                  batchesDone++;
+                  // Exponential moving average so early batches (often warm-up
+                  // for cold oMLX) don't poison the ETA forever.
+                  const alpha = 0.4;
+                  avgBatchMs = avgBatchMs === 0
+                    ? info.durationMs
+                    : avgBatchMs * (1 - alpha) + info.durationMs * alpha;
+                  const remaining = Math.max(0, info.total - batchesDone);
+                  const etaSec = Math.round((remaining * avgBatchMs) / 1000);
+                  const status = info.error
+                    ? `✗ ${info.error.slice(0, 30)}`
+                    : info.ok
+                      ? '✓'
+                      : '· 0 rows';
+                  log(controller,
+                    `Batch ${info.idx}/${info.total} ${status} · [${info.indices.join(',')}] · ${Math.round(info.durationMs / 100) / 10}s · ETA ~${etaSec}s · ${batchesDone}/${info.total} done (${batchesDone - llmFailures}✓ ${llmFailures}✗)`,
+                    'llm',
+                    { meta: {
+                      batchIndex: info.idx,
+                      batchTotal: info.total,
+                      batchOk: info.ok,
+                      paragraphs: info.indices,
+                      durationMs: info.durationMs,
+                      etaSec,
+                    } });
+                },
+              });
+              llmDurationMs = Date.now() - llmStart;
+              llmOut = llmResult.map;
+              llmFailures = llmResult.failedBatches;
+              llmRequested = llmResult.requested;
+            }
           }
         }
 
         // ── Phase 7: fuse + cache + stats ───────────────────────────────
         const merged = attributeByConversation({
           paragraphs, characters: characterContext,
-          parserOut, regexOut, llmOut,
+          regexOut, llmOut,
         });
         const mergedResolved = Object.values(merged).filter((a) => a.speaker).length;
-        log(controller, `Fuse: ${mergedResolved}/${paragraphs.length} đoạn gán hợp nhất (parser + regex + local + LLM)`, 'fuse');
+        log(controller, `Fuse: ${mergedResolved}/${paragraphs.length} đoạn gán hợp nhất (regex + local + LLM)`, 'fuse');
 
         try {
           await setCachedAttribution(
@@ -418,7 +492,7 @@ export async function POST(
         write(controller, {
           type: 'result',
           attribution: finalPayload.attribution,
-          layers: { parser: parserOut, regex: regexOut, local: localBaseline, llm: llmOut },
+          layers: { regex: regexOut, local: localBaseline, llm: llmOut },
           paragraphTexts: Object.fromEntries(paragraphs.map((p) => [p.index, p.text.slice(0, 800)])),
           mode,
           stats: finalPayload.stats,

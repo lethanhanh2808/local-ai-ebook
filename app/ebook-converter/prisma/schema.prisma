@@ -376,6 +376,15 @@ model Settings {
   //   Default 4096 ≈ safe for a 9B-class 4-bit model on Apple Silicon.
   aiMaxTokens   Int     @default(4096)
   aiTemperature Float   @default(0.2)
+  // Per-mode `enable_thinking` override for the chapter-attribution
+  // analyzer. Thinking ON for the chunked Combine mode (small batches,
+  // accuracy over speed). Thinking OFF for the whole-chapter 'full-llm'
+  // mode (large prompt, token budget is the constraint — chain-of-thought
+  // would burn the output cap before the model emits any rows).
+  // 2026-07-12: surfaced in the Settings UI as two toggles so users can
+  // override per model + workload.
+  aiThinkingCombine   Boolean @default(true)
+  aiThinkingFullLLM   Boolean @default(false)
 
   // ── TTS provider ──────────────────────────────────────────────────────────
   ttsProvider String @default("vieneu")
@@ -495,7 +504,7 @@ model ChapterAttribution {
   chapterIndex  Int // 0-based index into parseEpub().htmlFiles
   payload       String // JSON: Record<number, { speaker?: string, confidence: number, source: string, evidence?: [], state?: {} }>
   sourceMtime   BigInt // mtime of the chapter HTML file when attribution ran
-  parserVersion String   @default("vncorenlp-1.2") // which model produced the result
+  parserVersion String   @default("conversation-v3") // which model produced the result
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

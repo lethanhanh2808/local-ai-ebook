@@ -109,7 +109,7 @@ export async function setCachedAttribution(
   chapterIndex: number,
   payload: ChapterAttributionMap,
   sourceMtime: number,
-  parserVersion: string = 'conversation-v1+vncorenlp-1.2',
+  parserVersion: string = 'conversation-v3',
 ): Promise<void> {
   await prisma.chapterAttribution.upsert({
     where: { bookId_chapterIndex: { bookId, chapterIndex } },
@@ -135,7 +135,7 @@ export async function getOrComputeAttribution(
   chapterIndex: number,
   currentMtime: number,
   computeFn: () => Promise<ChapterAttributionMap>,
-  parserVersion: string = 'conversation-v1+vncorenlp-1.2',
+  parserVersion: string = 'conversation-v3',
 ): Promise<{ payload: ChapterAttributionMap; fromCache: boolean }> {
   const cached = await getCachedAttribution(bookId, chapterIndex, currentMtime, parserVersion);
   if (cached) {

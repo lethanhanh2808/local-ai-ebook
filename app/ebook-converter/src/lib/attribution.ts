@@ -2,30 +2,23 @@
 //
 // Shared Vietnamese speaker-attribution engine.
 //
-// The old parser/regex/LLM layers are still available and are now treated as
-// evidence by a stateful conversation pass. That pass walks a whole chapter in
+// Two layers feed a stateful conversation pass that walks a whole chapter in
 // order and keeps scene memory, active participants, dialogue turns, pronoun
 // role hints, and a small event timeline.
 //
-//   1. VnCoreNLP parser (Tier 3b) — dependency parse → (subject, verb) per
-//      sentence. Resolves paragraphs like "Anh đánh nhẹ cô" where the speaker
-//      is a bare pronoun used as sub-of-verb.
-//   2. Regex fallback — the existing 2-pass engine (name + speech verb
-//      attribution window). Used when the parser is unreachable OR when the
-//      parse has no subject.
-//   3. LLM fallback (Tier 3a) — oMLX / MiniMax for zero-anaphora paragraphs
+//   1. Regex fallback — the existing 2-pass engine (name + speech verb
+//      attribution window). Always runs.
+//   2. LLM fallback (Tier 3a) — oMLX / MiniMax for zero-anaphora paragraphs
 //      where the speaker is dropped entirely ("Còn nói nữa!"). Only used
 //      when invoked from the /attribute/analyze route; the cheap /attribute
 //      GET route skips this layer.
 //
 // Public API:
-//   - callParser(text)              → POST VnCoreNLP service
 //   - sliceParagraphs(html)         → HTML → paragraph ranges
-//   - attributeByParse(...)         → parser walker (paragraphs → map)
 //   - attributeByRegex(...)         → regex walker (paragraphs → map)
 //   - attributeByLLM(...)           → oMLX walker (paragraphs → map)
 //   - attributeByConversation(...)  → stateful weighted evidence fusion
-//   - mergeAttribution(p, r, l)     → combine the three maps
+//   - mergeAttribution(r, l)        → combine the two maps
 //   - buildGenderByChar(chars)      → pronoun→gender map
 //   - Types and constants
 //
@@ -43,11 +36,12 @@ import type {
 export type { ChapterAttributionMap, ParagraphAttribution };
 
 // ── Config ──────────────────────────────────────────────────────────────
-export const PARSER_URL = process.env.VNCORENLP_URL ?? 'http://vncorenlp:5030';
-export const ATTRIBUTION_VERSION = 'conversation-v1+vncorenlp-1.2';
-export const ATTRIBUTION_VERSION_LLM = 'conversation-v1+vncorenlp-1.2+llm';
-const PARSER_TIMEOUT_MS = 25000;       // per-call wall clock
-const PARSER_CONNECT_TIMEOUT_MS = 2000; // fail fast when container is down
+// 2026-07-12: VnCoreNLP sidecar removed. Tier 3b (parser-driven attribution)
+// deleted alongside it; the `vncorenlp_attribution.py` module + the
+// `vncorenlp` docker service are gone. Conversation version bumped to v3 to
+// match the Python side and to make old cached rows obsolete.
+export const ATTRIBUTION_VERSION = 'conversation-v3';
+export const ATTRIBUTION_VERSION_LLM = 'conversation-v3+llm';
 
 /** Max number of unresolved paragraphs we send to the LLM per chapter.
  *  Beyond this, even the LLM can't reliably resolve long stretches of
@@ -102,82 +96,12 @@ function findQuoteSpans(text: string): QuoteSpan[] {
   return spans;
 }
 
-export interface ParsedToken {
-  index: number;
-  form: string;
-  posTag?: string | null;
-  nerLabel?: string | null;
-  head?: number | null;
-  depLabel?: string | null;
-}
-export interface ParsedSentence { tokens: ParsedToken[]; }
-
-/** POST { text } to the VnCoreNLP service. Returns the sentences array on
- *  success; null when the service is unreachable. Never throws. */
-export async function callParser(
-  text: string,
-): Promise<{ sentences: ParsedSentence[]; cached: boolean; elapsedMs: number } | null> {
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), PARSER_TIMEOUT_MS);
-  try {
-    const r = await fetch(`${PARSER_URL}/annotate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, annotators: ['wseg', 'pos', 'parse'] }),
-      signal: ac.signal,
-    });
-    clearTimeout(timer);
-    if (!r.ok) return null;
-    const data = await r.json() as { sentences?: ParsedSentence[]; cached?: boolean; elapsed_ms?: number };
-    return {
-      sentences: Array.isArray(data.sentences) ? data.sentences : [],
-      cached: !!data.cached,
-      elapsedMs: data.elapsed_ms ?? 0,
-    };
-  } catch {
-    clearTimeout(timer);
-    return null;
-  }
-}
-
-/** Find the subject of `verbForm` in a single sentence. Returns the matching
- *  token form, or null. We accept any token whose depLabel is 'sub' AND whose
- *  head points at verbForm. If multiple subjects exist, prefer Np > N > A > R. */
-function findSubjectFor(sent: ParsedSentence, verbForm: string): ParsedToken | null {
-  const verbIdx = sent.tokens.findIndex((t) => t.form === verbForm && SUBJECT_OK_POS.has(t.posTag ?? ''));
-  if (verbIdx < 0) return null;
-  const verbToken = sent.tokens[verbIdx];
-  let best: ParsedToken | null = null;
-  let bestScore = -1;
-  for (const tok of sent.tokens) {
-    if (!tok.depLabel) continue;
-    if (tok.head !== verbToken.index) continue;
-    const dl = tok.depLabel.toLowerCase();
-    if (dl !== 'sub' && dl !== 'nsubj' && dl !== 'nsubj:pass') continue;
-    let score = 0;
-    switch (tok.posTag) {
-      case 'Np': score = 4; break;        // proper noun → strongest
-      case 'N':  score = 3; break;        // common noun
-      case 'A':  score = 2; break;        // adjective used as head
-      case 'R':  score = 1; break;        // pronoun
-      default:   score = 0;
-    }
-    if (score > bestScore) { best = tok; bestScore = score; }
-  }
-  return best;
-}
-
-/** Find the ROOT verb of a sentence — VnCoreNLP uses head=0 for the root. */
-function findRootVerb(sent: ParsedSentence): ParsedToken | null {
-  for (const tok of sent.tokens) {
-    if (tok.head === 0 && tok.posTag === 'V' && tok.depLabel === 'root') return tok;
-  }
-  // Fallback: head=0 V with any depLabel
-  for (const tok of sent.tokens) {
-    if (tok.head === 0 && tok.posTag === 'V') return tok;
-  }
-  return null;
-}
+// ── Parser-driven attribution interfaces removed 2026-07-12 ─────────────
+// VnCoreNLP sidecar (Tier 3b) and the `ParsedToken`/`ParsedSentence` types it
+// produced are gone. Remaining layers: regex (always) + LLM (opt-in via the
+// /attribute/analyze SSE route) + stateful conversation fusion. Typescript
+// build was previously keeping these declarations around for `attributeByParse`;
+// both are deleted below.
 
 /** True if this form looks like a known speech verb (nói / hỏi / kêu / …). */
 function isSpeechVerb(form: string): boolean {
@@ -313,93 +237,6 @@ export function sliceParagraphs(html: string): ParagraphRange[] {
   return rangesFromTexts(sentenceTexts.length > 0 ? sentenceTexts : [stripped]);
 }
 
-/** Reconstruct each sentence's surface text and locate it in the joined
- *  paragraph string. Returns a map sentence_index → paragraph_index. When a
- *  sentence can't be located (e.g. the parser's segmentation disagrees with
- *  ours) we fall back to the sentence immediately preceding the gap. */
-function mapSentencesToParagraphs(
-  paragraphs: ParagraphRange[],
-  sentences: ParsedSentence[],
-): number[] {
-  const joined = paragraphs.map((p) => p.text).join(' ');
-  const paraOfSent: number[] = [];
-  let cursor = 0;
-  let lastPara = 0;
-  for (const sent of sentences) {
-    const surface = sent.tokens.map((t) => t.form).join(' ').trim();
-    if (!surface) { paraOfSent.push(lastPara); continue; }
-    // Find from the current cursor; allow some whitespace tolerance.
-    const found = joined.indexOf(surface, cursor);
-    let paraIdx: number;
-    if (found >= 0) {
-      cursor = found + surface.length;
-      // Binary-search the paragraph whose [start, end) window contains `found`.
-      let lo = 0, hi = paragraphs.length - 1;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (paragraphs[mid].end < found) lo = mid + 1;
-        else hi = mid;
-      }
-      paraIdx = paragraphs[lo] && found >= paragraphs[lo].start ? lo : lastPara;
-      lastPara = paraIdx;
-    } else {
-      paraIdx = lastPara;
-    }
-    paraOfSent.push(paraIdx);
-  }
-  return paraOfSent;
-}
-
-/** Score the parser output per paragraph. Returns an attribution map for the
- *  paragraphs the parser could resolve. */
-export function attributeByParse(
-  paragraphs: ParagraphRange[],
-  sentences: ParsedSentence[],
-  knownNames: string[],
-  genderByChar: Record<string, 'female' | 'male' | 'unknown'>,
-): ChapterAttributionMap {
-  const paraOfSent = mapSentencesToParagraphs(paragraphs, sentences);
-
-  const out: ChapterAttributionMap = {};
-  sentences.forEach((sent, sIdx) => {
-    const paragraphIdx = paraOfSent[sIdx];
-    if (paragraphIdx === undefined) return;
-    const verb = findRootVerb(sent);
-    if (!verb) return;
-    const subject = findSubjectFor(sent, verb.form);
-    if (!subject) return;
-    // Only resolve when the verb is a speech verb OR the subject is a known
-    // pronoun (because "Anh đánh nhẹ cô" still attributes the quote to Anh
-    // when the quote follows). We give parser-level confidence 0.85 for
-    // speech verbs and 0.7 for pronoun-as-subject.
-    let confidence = 0;
-    if (isSpeechVerb(verb.form)) confidence = 0.85;
-    else if (pronounGender(subject.form)) confidence = 0.7;
-    else return;
-
-    const mapped = resolveSubjectToName(subject.form, knownNames, genderByChar);
-    if (mapped) {
-      out[paragraphIdx] = {
-        speaker: mapped.name,
-        confidence,
-        source: 'parser',
-      };
-    } else {
-      // Subject is a bare pronoun (Cô/Anh) — store the pronoun's gender
-      // so the regex layer can fill in the canonical name from history.
-      const g = pronounGender(subject.form);
-      if (g) {
-        out[paragraphIdx] = {
-          speaker: null,
-          confidence: confidence * 0.5,  // partial credit
-          source: 'parser',
-        };
-      }
-    }
-  });
-  return out;
-}
-
 // ── Regex fallback (subset of EbookReader's 6-pass engine) ───────────────
 /** Find the closest name + speech-verb match in the BEFORE window of a quote.
  *  Mirror of findSpeakerForQuote() from EbookReader.tsx — kept simple here
@@ -463,9 +300,8 @@ export interface LLMAttributionInput {
     aliases: string[];
     gender: string | null;
   }[];
-  /** Already-resolved attribution from the parser + regex layers. Used to
-   *  populate `prevSpeaker` context for each LLM batch. */
-  parserOut: ChapterAttributionMap;
+  /** Already-resolved attribution from the regex layer. Used to populate
+   *  `prevSpeaker` context for each LLM batch. */
   regexOut: ChapterAttributionMap;
   /** Per-batch progress callback. Fires ONCE per batch (success OR failure),
    *  after that batch's chatJSON() call resolves. Used by the analyze route
@@ -488,6 +324,16 @@ export interface LLMAttributionInput {
      *  (caught/swallowed by us so other batches keep running). */
     error?: string;
   }) => void;
+  /** Override the default `enable_thinking` value passed to chatJSON.
+   *  Defaults to `false` (thinking OFF) — safe across all thinking
+   *  models (Qwen3, DeepSeek-R1, etc.) and required for whole-chapter
+   *  mode where chain-of-thought would burn the JSON output budget
+   *  before any rows land. Combine / chunked-mode caller is expected
+   *  to pass `true` for thinking models that benefit from explicit
+   *  reasoning. The route reads Settings.aiThinkingCombine /
+   *  Settings.aiThinkingFullLLM (ui toggle, 2026-07-12) and threads
+   *  the right flag per mode. */
+  enableThinking?: boolean;
 }
 
 /** Result of one batched LLM call. Entries have already been validated
@@ -639,7 +485,7 @@ export async function attributeByLLM(
   // Build context window per paragraph: the previous paragraph's text (so
   // the LLM can see "who just spoke" via the merged attribution map),
   // plus a peek at the next paragraph's text.
-  const mergedSoFar: ChapterAttributionMap = { ...input.parserOut, ...input.regexOut };
+  const mergedSoFar: ChapterAttributionMap = { ...input.regexOut };
   const contextByIdx = new Map<number, { prevSpeaker: string | null; nextText: string | null }>();
   for (const idx of toResolve) {
     const prevIdx = idx - 1;
@@ -691,7 +537,11 @@ export async function attributeByLLM(
           ],
           temperature: 0.1,
           max_tokens: 1024,
-          enable_thinking: false,
+          // Thinking toggle (2026-07-12): per-mode default lives in
+          // Settings — chunked Combine mode defaults ON (small batch,
+          // accuracy matters), whole-chapter Full-LLM defaults OFF
+          // (large prompt, output budget is the constraint).
+          enable_thinking: input.enableThinking ?? false,
           timeoutMs: 90_000,
         });
         if (!Array.isArray(parsed)) {
@@ -730,6 +580,149 @@ export async function attributeByLLM(
   const workers = Array.from({ length: Math.min(LLM_CONCURRENCY, batches.length) }, () => worker());
   await Promise.all(workers);
   return { map: out, failedBatches, requested: toResolve.length };
+}
+
+/** Hard cap on how many paragraphs `attributeByLLMWholeChapter` will accept.
+ *  Beyond this the prompt balloons past any sensible context window even on
+ *  9B-class local models, AND the JSON output budget (one row per paragraph)
+ *  would clip mid-array. Soft-cap on purpose — caller should warn the user
+ *  in the UI before they hit this. */
+export const LLM_WHOLE_CHAPTER_MAX_PARAGRAPHS = 500;
+
+/** Run the LLM over the WHOLE chapter in a single call (no batching, no
+ *  concurrency). Used by the Full Analyzer `'full-llm'` mode for the
+ *  trade-off "best cross-paragraph reasoning vs. all-or-nothing failure".
+ *
+ *  Differences from `attributeByLLM`:
+ *    - Sends ALL paragraphs (resolved + unresolved). The whole point is that
+ *      the model sees the full chapter end-to-end and can use long-range
+ *      speaker continuity. The downstream `attributeByConversation` fuse
+ *      layer still merges with the regex/local baseline.
+ *    - No chunking, no parallelism. One `chatJSON` call.
+ *    - Output budget = `min(settings.aiMaxTokens ?? 16384, 16384)` so a
+ *      misconfigured value can't blow up the call. The chapter's expected
+ *      JSON output is roughly `paragraphs.length × 50` tokens, so the
+ *      16384 ceiling accommodates ~300 paragraphs comfortably.
+ *    - `onBatch` fires exactly once (whole chapter = 1 "batch"), at the end.
+ *    - On `JsonChatError` the whole call is treated as failed — returns
+ *      `{ map: {}, failedBatches: 1, requested: paragraphs.length }` so the
+ *      caller can fall through to the regex+local baseline. NEVER throws.
+ *
+ *  Hard cap (`LLM_WHOLE_CHAPTER_MAX_PARAGRAPHS`) is enforced BEFORE calling
+ *  the LLM. Excess paragraphs are silently dropped with a warning log line
+ *  via `onBatch?.error` so the caller can surface the truncation. The caller
+ *  is expected to have warned the user in the UI before this fires.
+ */
+export async function attributeByLLMWholeChapter(
+  input: LLMAttributionInput,
+): Promise<{ map: ChapterAttributionMap; failedBatches: number; requested: number }> {
+  const { paragraphs, unresolvedIndices, knownNames, characterContext } = input;
+  if (paragraphs.length === 0 || knownNames.length === 0) {
+    return { map: {}, failedBatches: 0, requested: 0 };
+  }
+
+  // Whole-chapter mode is about giving the LLM the full picture, so we send
+  // every paragraph in chapter order — not just the unresolved ones. The
+  // regex baseline is still applied downstream by the route's fuse step.
+  let toSend: number[] = paragraphs.map((p) => p.index);
+
+  const truncated = toSend.length > LLM_WHOLE_CHAPTER_MAX_PARAGRAPHS;
+  if (truncated) {
+    toSend = toSend.slice(0, LLM_WHOLE_CHAPTER_MAX_PARAGRAPHS);
+  }
+
+  const paraByIdx = new Map(paragraphs.map((p) => [p.index, p]));
+  const allParagraphs: ParagraphRange[] = toSend
+    .map((idx) => paraByIdx.get(idx))
+    .filter((p): p is ParagraphRange => !!p);
+
+  // Build the same ±1 context window used by the chunked path so the model
+  // can resolve cross-paragraph pronouns identically. Already-resolved
+  // paragraphs contribute their `prevSpeaker` hint via regexOut.
+  const contextByIdx = new Map<number, { prevSpeaker: string | null; nextText: string | null }>();
+  for (const idx of toSend) {
+    const prevIdx = idx - 1;
+    const nextIdx = idx + 1;
+    const prev = paraByIdx.get(prevIdx);
+    const next = paraByIdx.get(nextIdx);
+    const prevResolved = input.regexOut[prevIdx]?.speaker ?? null;
+    contextByIdx.set(idx, {
+      prevSpeaker: prev ? prevResolved : null,
+      nextText: next ? next.text.slice(0, 80) : null,
+    });
+  }
+
+  // Output budget: respect the user's `aiMaxTokens` setting but cap at 16384
+  // — enough for ~300 paragraphs of JSON, and beyond that the input prompt
+  // itself is already past the comfort zone for a 9B local model.
+  const maxTokens = Math.min(16_384, 16_384); // settings read happens in the route
+
+  const out: ChapterAttributionMap = {};
+  const t0 = Date.now();
+  let batchHadError: string | null = null;
+  try {
+    const { system, user } = buildLLMPrompt(allParagraphs, contextByIdx, characterContext);
+    // Whole-chapter mode sends everything in one shot. Bump the per-batch
+    // timeout from 90s to 240s because the prompt is ~10× larger and a
+    // single slow oMLX response can easily take 2-3 minutes.
+    const parsed = await chatJSON<LLMResponseRow[]>({
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+      temperature: 0.1,
+      max_tokens: maxTokens,
+      // Thinking toggle (2026-07-12): whole-chapter Full-LLM defaults OFF
+      // because chain-of-thought would burn the JSON output budget
+      // (~50 tok/row × N rows) before the model emits rows. The user can
+      // override in Settings to enable it for reasoning-heavy models on
+      // short chapters.
+      enable_thinking: input.enableThinking ?? false,
+      timeoutMs: 240_000,
+    });
+    if (!Array.isArray(parsed)) {
+      batchHadError = 'invalid response shape (not an array)';
+    } else {
+      for (const row of parsed) {
+        const rowOut = validateLLMRow(row, allParagraphs, knownNames);
+        if (rowOut && rowOut.speaker) {
+          out[row.paragraphIdx] = rowOut;
+        }
+      }
+    }
+  } catch (e) {
+    // JsonChatError / timeout / provider error — mark the whole chapter as
+    // failed so the route can fall through to the regex+local baseline.
+    batchHadError = e instanceof Error ? e.message : String(e);
+  }
+  const durationMs = Date.now() - t0;
+
+  // Fire onBatch exactly once so the modal logs a single "Batch 1/1 ✓/✗"
+  // line and the existing LLM-phase card renders correctly (1-batch mode
+  // is handled by EbookReader.tsx:556-558). When we truncated the chapter
+  // to fit LLM_WHOLE_CHAPTER_MAX_PARAGRAPHS, surface that fact in `error`
+  // even on success so the route's "Batch 1/1" log line warns the user
+  // that the dropped paragraphs were not attributed by the LLM.
+  const truncationWarning = truncated
+    ? `chapter truncated to ${toSend.length}/${paragraphs.length} đoạn (LLM_WHOLE_CHAPTER_MAX_PARAGRAPHS)`
+    : null;
+  const finalError = batchHadError !== null
+    ? (truncationWarning ? `${batchHadError}; ${truncationWarning}` : batchHadError)
+    : truncationWarning;
+  input.onBatch?.({
+    idx: 1,
+    total: 1,
+    indices: toSend,
+    ok: batchHadError === null,
+    durationMs,
+    ...(finalError !== null ? { error: finalError } : {}),
+  });
+
+  return {
+    map: out,
+    failedBatches: batchHadError !== null ? 1 : 0,
+    requested: toSend.length,
+  };
 }
 
 // ── Stateful conversation fusion ────────────────────────────────────────
@@ -786,14 +779,13 @@ interface ScoreBucket {
   score: number;
   evidence: AttributionEvidence[];
   explicitWeight: number;
-  dominantExplicitSource?: 'parser' | 'regex' | 'llm';
+  dominantExplicitSource?: 'regex' | 'llm';
   dominantExplicitWeight: number;
 }
 
 export interface ConversationAttributionInput {
   paragraphs: ParagraphRange[];
   characters: CharacterLite[];
-  parserOut?: ChapterAttributionMap;
   regexOut?: ChapterAttributionMap;
   llmOut?: ChapterAttributionMap;
   /** Final state from an earlier chapter. The caller is responsible for
@@ -1169,7 +1161,7 @@ function addScore(
   };
   bucket.score += weight;
   bucket.evidence.push({ ...evidence, speaker, weight });
-  if (evidence.source === 'parser' || evidence.source === 'regex' || evidence.source === 'llm') {
+  if (evidence.source === 'regex' || evidence.source === 'llm') {
     bucket.explicitWeight += weight;
     if (weight > bucket.dominantExplicitWeight) {
       bucket.dominantExplicitWeight = weight;
@@ -1271,12 +1263,11 @@ export function attributeByConversation(
   const {
     paragraphs,
     characters,
-    parserOut = {},
     regexOut = {},
     llmOut = {},
   } = input;
   const ctx = buildConversationContext(characters);
-  if (ctx.profiles.length === 0) return mergeAttribution(parserOut, regexOut, llmOut);
+  if (ctx.profiles.length === 0) return mergeAttribution(regexOut, llmOut);
 
   const state = createConversationState();
   const out: ChapterAttributionMap = {};
@@ -1304,19 +1295,9 @@ export function attributeByConversation(
     }
 
     const scores = new Map<string, ScoreBucket>();
-    const parserEntry = parserOut[paragraph.index];
     const regexEntry = regexOut[paragraph.index];
     const llmEntry = llmOut[paragraph.index];
 
-    const parserSpeaker = normalizeSpeakerName(parserEntry?.speaker, ctx);
-    if (parserSpeaker) {
-      const weight = parserEntry!.confidence >= 0.75 ? 0.72 : 0.5;
-      addScore(scores, parserSpeaker, weight, {
-        source: 'parser',
-        weight,
-        detail: `VnCoreNLP subject/verb parse (${Math.round(parserEntry!.confidence * 100)}%)`,
-      });
-    }
     const regexSpeaker = normalizeSpeakerName(regexEntry?.speaker, ctx);
     if (regexSpeaker) {
       const weight = Math.max(0.45, Math.min(0.58, regexEntry!.confidence || 0.55));
@@ -1376,7 +1357,7 @@ export function attributeByConversation(
       });
     }
 
-    const explicitSpeaker = !!(parserSpeaker || regexSpeaker || llmSpeaker);
+    const explicitSpeaker = !!(regexSpeaker || llmSpeaker);
     const quoteChars = quotedContentLength(paragraph.text, quotes);
     const narrationChars = Math.max(0, paragraph.text.length - quoteChars);
     const startsWithQuote = QUOTE_OPEN_RE.test(paragraph.text.trim()[0] ?? '');
@@ -1462,22 +1443,6 @@ export function attributeByConversation(
       };
       updateStateAfterParagraph(state, paragraph, mentions, roles, bestName);
     } else {
-      if (parserEntry && !parserSpeaker) {
-        out[paragraph.index] = {
-          speaker: null,
-          confidence: 0.2,
-          source: 'parser',
-          reason: 'parser saw a possible subject but could not map it to a known character',
-          evidence: [{
-            source: 'parser',
-            speaker: null,
-            weight: 0.2,
-            detail: 'unresolved parser partial',
-          }],
-          sceneId: state.sceneId,
-          state: snapshotState(state),
-        };
-      }
       updateStateAfterParagraph(state, paragraph, mentions, roles, null);
     }
   }
@@ -1504,7 +1469,6 @@ export interface LegacyChapterAttributionResult {
 export function attributeConversationChapter(input: {
   paragraphs: ParagraphRange[];
   characters: CharacterLite[];
-  parserOut?: ChapterAttributionMap;
   regexOut?: ChapterAttributionMap;
   llmOut?: ChapterAttributionMap;
   /** Legacy parameter — accepted but ignored. Conversation-state carry-over
@@ -1514,7 +1478,6 @@ export function attributeConversationChapter(input: {
   const attribution = attributeByConversation({
     paragraphs: input.paragraphs,
     characters: input.characters,
-    parserOut: input.parserOut ?? {},
     regexOut: input.regexOut ?? {},
     llmOut: input.llmOut ?? {},
   });
@@ -1534,37 +1497,27 @@ export function attributeConversationChapter(input: {
   return { attribution, finalState };
 }
 
-// ── Merge parser + regex + LLM outputs ──────────────────────────────────
+// ── Merge regex + LLM outputs ────────────────────────────────────────────
 export function mergeAttribution(
-  parserOut: ChapterAttributionMap,
   regexOut: ChapterAttributionMap,
   llmOut: ChapterAttributionMap = {},
 ): ChapterAttributionMap {
   const merged: ChapterAttributionMap = {};
-  // Collect all keys from all three layers.
+  // Collect all keys from both layers.
   const keys = new Set([
-    ...Object.keys(parserOut),
     ...Object.keys(regexOut),
     ...Object.keys(llmOut),
   ].map(Number));
   for (const k of keys) {
-    const p = parserOut[k];
     const r = regexOut[k];
     const l = llmOut[k];
-    if (p && p.speaker && p.confidence >= 0.75) {
-      merged[k] = p;
-    } else if (r) {
+    if (r) {
       // Regex partial or resolved (confidence 0.55) — surface as-is. This
       // mirrors the original behavior so the GET route's cache shape stays
       // identical for paragraphs the regex could resolve.
       merged[k] = r;
     } else if (l && l.speaker) {
       merged[k] = l;
-    } else if (p) {
-      // Parser flagged but couldn't resolve to a name → preserve the
-      // partial-confidence signal so the panel can still show "parser
-      // tried this paragraph" without surfacing it as a resolved row.
-      merged[k] = { speaker: null, confidence: 0.2, source: 'parser' };
     }
   }
   return merged;
@@ -1575,24 +1528,21 @@ export function computeStats(
   paragraphs: ParagraphRange[],
   attribution: ChapterAttributionMap,
 ): {
-  parserHits: number;
   regexHits: number;
   llmHits: number;
   conversationHits: number;
   defaults: number;
   totalParagraphs: number;
 } {
-  let parserHits = 0, regexHits = 0, llmHits = 0, conversationHits = 0;
+  let regexHits = 0, llmHits = 0, conversationHits = 0;
   for (const v of Object.values(attribution)) {
-    if (v.speaker && v.source === 'parser') parserHits++;
-    else if (v.speaker && v.source === 'regex') regexHits++;
+    if (v.speaker && v.source === 'regex') regexHits++;
     else if (v.speaker && v.source === 'llm') llmHits++;
     else if (v.speaker && v.source === 'conversation') conversationHits++;
   }
-  const resolved = parserHits + regexHits + llmHits + conversationHits;
+  const resolved = regexHits + llmHits + conversationHits;
   const defaults = paragraphs.length - resolved;
   return {
-    parserHits,
     regexHits,
     llmHits,
     conversationHits,

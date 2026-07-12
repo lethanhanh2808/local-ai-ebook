@@ -3,35 +3,32 @@
 // GET /api/library/[id]/chapters/[chapterId]/attribute
 //
 // Per-paragraph speaker attribution for a chapter. Cheap, cache-first call
-// used by the reader on every chapter change. Runs parser + regex as
-// evidence, then a stateful conversation pass (NOT the LLM — that's the
-// /analyze route).
+// used by the reader on every chapter change. Runs regex evidence + a stateful
+// conversation pass (NOT the LLM — that's the /analyze route).
 //
 // Layers (shared from `@/lib/attribution`):
-//   1. VnCoreNLP parser — dependency parse → (subject, verb) per sentence.
-//   2. Regex evidence   — existing local speech-verb/name matcher.
-//   3. Conversation     — scene memory, active participants, turn history,
+//   1. Regex evidence   — existing local speech-verb/name matcher.
+//   2. Conversation     — scene memory, active participants, turn history,
 //                         event timeline and weighted confidence fusion.
-//   4. Default voice    — null speaker for paragraphs nothing could resolve.
+//   3. Default voice    — null speaker for paragraphs nothing could resolve.
 //
 // Results are persisted in `ChapterAttribution` keyed by chapter file mtime,
 // so re-opening the same chapter is O(1) until the HTML is regenerated.
 //
 // Response shape:
 //   {
-//     parserVersion: "conversation-v1+vncorenlp-1.2",
+//     parserVersion: "conversation-v3",
 //     fromCache: bool,
-//     parserReachable: bool,
 //     omlxReachable: false,        // GET route never runs the LLM
 //     chapter: { chapterIndex, chapterId, file } | null,
 //     attribution: {
 //       [paragraphIndex: number]: {
 //         speaker: string | null,
 //         confidence: number,        // 0..1
-//         source: 'parser'|'regex'|'default',
+//         source: 'regex'|'default',
 //       }
 //     },
-//     stats: { parserHits: n, regexHits: n, llmHits: 0, defaults: n, ... }
+//     stats: { regexHits: n, llmHits: 0, defaults: n, ... }
 //   }
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
@@ -40,22 +37,18 @@ import { getBook } from '@/lib/db/books';
 import { listCharacters } from '@/lib/db/voices';
 import {
   getOrComputeAttribution,
-  type ChapterAttributionMap,
 } from '@/lib/db/chapter-attribution';
 import {
   ATTRIBUTION_VERSION,
   attributeByConversation,
-  attributeByParse,
   attributeByRegex,
-  buildGenderByChar,
-  callParser,
   computeStats,
   sliceParagraphs,
 } from '@/lib/attribution';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60; // parser cold-start can be slow first time
+export const maxDuration = 60;
 
 // ── Main handler ─────────────────────────────────────────────────────────
 export async function GET(
@@ -79,11 +72,10 @@ export async function GET(
     return NextResponse.json({
       parserVersion: ATTRIBUTION_VERSION,
       fromCache: false,
-      parserReachable: false,
       omlxReachable: false,
       chapter: null,
       attribution: {},
-      stats: { parserHits: 0, regexHits: 0, llmHits: 0, defaults: 0, totalParagraphs: 0 },
+      stats: { regexHits: 0, llmHits: 0, defaults: 0, totalParagraphs: 0 },
     });
   }
 
@@ -117,34 +109,21 @@ export async function GET(
     aliases: c.aliases ?? [],
     gender: c.gender ?? null,
   }));
-  const genderByChar = buildGenderByChar(
-    chars.map((c) => ({ name: c.name, aliases: c.aliases ?? [], gender: c.gender ?? null })),
-  );
 
   // 5. Slice the HTML into paragraphs that match what EbookReader displays.
   const paragraphs = sliceParagraphs(html);
 
-  // 6. Read-through cache. The computeFn runs the parser + regex pipeline
+  // 6. Read-through cache. The computeFn runs the regex pipeline
   //    (no LLM — that's the /analyze route).
-  let parserReachable = true;
   const { payload, fromCache } = await getOrComputeAttribution(
     params.id,
     chapterIndex,
     mtime,
     async () => {
-      const parserText = paragraphs.map((p) => p.text).join('\n');
-      const parserResp = await callParser(parserText);
-      let parserOut: ChapterAttributionMap = {};
-      if (parserResp) {
-        parserOut = attributeByParse(paragraphs, parserResp.sentences, knownNames, genderByChar);
-      } else {
-        parserReachable = false;
-      }
       const regexOut = attributeByRegex(paragraphs, knownNames);
       return attributeByConversation({
         paragraphs,
         characters: characterContext,
-        parserOut,
         regexOut,
       });
     },
@@ -156,7 +135,6 @@ export async function GET(
   return NextResponse.json({
     parserVersion: ATTRIBUTION_VERSION,
     fromCache,
-    parserReachable,
     omlxReachable: false,  // GET route never invokes the LLM
     chapter: { chapterIndex, chapterId: params.chapterId, file: epub.htmlFiles[chapterIndex] },
     attribution: payload,

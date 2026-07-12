@@ -8,6 +8,7 @@ import { Switch } from '@/components/ui/switch';
 import { Progress } from '@/components/ui/progress';
 import { KbdHint } from '@/components/ui/kbd-hint';
 import { Tooltip } from '@/components/ui/tooltip';
+import { Dialog, DialogBody, DialogFooter } from '@/components/ui/dialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -415,6 +416,26 @@ export const ANALYZE_MODES: AnalyzeModeOption[] = [
   },
 ];
 
+/** Soft-warn cost heuristic for the 'Full LLM' analyzer mode (added 2026-07-12).
+ *  Empirically tuned against Ornith-9B-4bit at ~12 tok/s output on M-series:
+ *    - 100 paragraphs ≈ 65s
+ *    - 200 paragraphs ≈ 100s
+ *    - 300 paragraphs ≈ 135s
+ *  Model:  0.35s per paragraph + 30s constant overhead (prompt eval + JSON overhead).
+ *  Output cost: ~50 tokens/row (idx + speaker + confidence) + 200 tokens baseline
+ *  for the rules + roster block.
+ *  For cloud providers this will be wildly off — but it's a hint, not a commitment. */
+function estimateFullLLM(paragraphCount: number, chapterCharCount: number): {
+  paragraphCount: number;
+  chapterCharCount: number;
+  estimatedSeconds: number;
+  estimatedOutputTokens: number;
+} {
+  const estimatedSeconds = Math.round(paragraphCount * 0.35 + 30);
+  const estimatedOutputTokens = paragraphCount * 50 + 200;
+  return { paragraphCount, chapterCharCount, estimatedSeconds, estimatedOutputTokens };
+}
+
 // ── Full Analyzer modal: shared subcomponents ───────────────────────────
 // Color map kept here so renderLogLine + HumanLogSummary + BatchProgressCard
 // all agree on the phase → Tailwind class mapping. New phases must be
@@ -703,21 +724,17 @@ export interface AnalysisResult {
   chapterTitle: string;
   mode: AnalyzeMode;
   stats: {
-    parserHits: number; regexHits: number; llmHits: number;
+    regexHits: number; llmHits: number;
     conversationHits: number; sourceDrift: number;
     defaults: number; totalParagraphs: number;
     llmFailures?: number; llmRequested?: number;
   };
-  // VnCoreNLP parser removed 2026-07-05 — routes still return
-  // `parserReachable: false` for backwards compat, but this UI no
-  // longer tracks it.
   omlxReachable: boolean;
   durationMs: number;
   llmDurationMs: number;
   log: AnalysisLogLine[];
   attribution?: AttributionMap;
   layers?: {
-    parser: AttributionMap;
     regex: AttributionMap;
     local: AttributionMap;
     llm: AttributionMap;
@@ -808,14 +825,12 @@ function AttributionDebugModal(props: {
     finalConfidence: number;
     finalSource: string;
     // Per-layer answer for the "show evidence" toggle.
-    parser: string | null;
     regex: string | null;
     local: string | null;
     llm: string | null;
   }> = [];
   for (let i = 0; i < totalParagraphs; i++) {
     const finalRow  = lookup(data.attribution, i);
-    const parserRow = lookup(data.layers?.parser, i);
     const regexRow  = lookup(data.layers?.regex, i);
     const localRow  = lookup(data.layers?.local, i);
     const llmRow    = lookup(data.layers?.llm, i);
@@ -825,7 +840,6 @@ function AttributionDebugModal(props: {
       finalSpeaker: finalRow?.speaker ?? null,
       finalConfidence: finalRow?.confidence ?? 0,
       finalSource: finalRow?.source ?? 'default',
-      parser: parserRow?.speaker ?? null,
       regex: regexRow?.speaker ?? null,
       local: localRow?.speaker ?? null,
       llm: llmRow?.speaker ?? null,
@@ -836,7 +850,7 @@ function AttributionDebugModal(props: {
   const speakerSet = new Set<string>();
   for (const r of rows) {
     if (r.finalSpeaker) speakerSet.add(r.finalSpeaker);
-    for (const s of [r.parser, r.regex, r.local, r.llm]) {
+    for (const s of [r.regex, r.local, r.llm]) {
       if (s) speakerSet.add(s);
     }
   }
@@ -1015,13 +1029,8 @@ function AttributionDebugModal(props: {
                       {/* Per-layer evidence — collapsed inline to keep the
                           row scannable. Click to expand? Keep simple for
                           now: show as small badges under the text. */}
-                      {(r.parser || r.regex || r.local || r.llm) && (
+                      {(r.regex || r.local || r.llm) && (
                         <div className="mt-1 flex flex-wrap gap-1 text-[9px]">
-                          {r.parser && (
-                            <span className="px-1 rounded bg-blue-500/10 text-blue-700 dark:text-blue-300">
-                              parse: {r.parser}
-                            </span>
-                          )}
                           {r.regex && (
                             <span className="px-1 rounded bg-indigo-500/10 text-indigo-700 dark:text-indigo-300">
                               regex: {r.regex}
@@ -1139,6 +1148,70 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   // outside click + ESC + after a mode is picked.
   const [analyzerModePickerOpen, setAnalyzerModePickerOpen] = useState(false);
   const analyzerModeBtnRef = useRef<HTMLDivElement | null>(null);
+  // ── Full-LLM pre-flight confirm (added 2026-07-12) ───────────────────
+  // 'full-llm' mode sends the ENTIRE chapter in a single LLM call. On
+  // chapters >300 paragraphs that's slow, expensive, and all-or-nothing on
+  // failure — so we show a soft-warn Dialog before launching it. Users who
+  // already have a recent cached `paragraphTexts` (from a prior analyze
+  // run or the read-aloud ttsParagraphs) skip the lazy fetch entirely.
+  const [fullLLMPending, setFullLLMPending] = useState(false);
+  // Ref-based continuation flag. A Dialog confirm shouldn't re-enter
+  // `runFullAnalysis` synchronously (React batches the state flips, and
+  // gating via state alone is racy). After the user clicks "Chạy Full LLM"
+  // we set this ref; the next call sees it and bypasses the gate.
+  const pendingContinueFullLLMRef = useRef(false);
+  const [fullLLMEstimate, setFullLLMEstimate] = useState<{
+    paragraphCount: number;
+    chapterCharCount: number;
+    estimatedSeconds: number;
+    estimatedOutputTokens: number;
+  } | null>(null);
+  // Heuristic cost estimate, computed per chapter when the user lands on
+  // it. We don't fetch on every render — only when `currentIdx` changes,
+  // and only if we don't already have paragraph text in cache.
+  useEffect(() => {
+    const chapterId = chapters[currentIdx]?.id;
+    if (!chapterId) { setFullLLMEstimate(null); return; }
+    // Best case: paragraph texts already cached from a prior analyzer run
+    // or from a prior full-library reload. The reader keeps these in
+    // `chapterAttributionRef` as Record<number, string>.
+    const cached = chapterAttributionRef.current.get(chapterId);
+    if (cached?.paragraphTexts) {
+      const texts = Object.values(cached.paragraphTexts);
+      if (texts.length > 0) {
+        const charCount = texts.reduce((s, t) => s + t.length, 0);
+        setFullLLMEstimate(estimateFullLLM(texts.length, charCount));
+        return;
+      }
+    }
+    // Fallback: lazy fetch the chapter HTML and approximate paragraph count
+    // by counting <p> tags. We do NOT import `sliceParagraphs` from
+    // `@/lib/attribution` because that module transitively re-exports
+    // `chatJSON` → `omlx-client.ts` → `node-fetch` → `node:net`, which
+    // trips Next.js webpack when bundled into the client. The `?<p>` regex
+    // is good enough for a soft-warn heuristic (the dialog only fires at
+    // >300 paragraphs so ±50% error is fine).
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await fetch(
+          `/api/library/${bookId}/chapters/${encodeURIComponent(chapterId)}?raw=1`,
+        );
+        if (!r.ok || cancelled) return;
+        const { html } = await r.json() as { html?: string };
+        if (cancelled || !html) return;
+        // Count `<p` opening tags (case-insensitive, allow attributes).
+        const tagRe = /<p\b[^>]*>/gi;
+        let paraCount = 0;
+        while (tagRe.exec(html) !== null) paraCount++;
+        // Approximate char count = strip ALL tags then measure body length.
+        const bodyOnly = html.replace(/<[^>]+>/g, '');
+        setFullLLMEstimate(estimateFullLLM(paraCount, bodyOnly.length));
+      } catch { /* offline or 404 — leave estimate null, dialog won't show */ }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookId, currentIdx, chapters]);
   useEffect(() => {
     if (!analyzerModePickerOpen) return;
     const onClick = (e: MouseEvent) => {
@@ -1217,9 +1290,6 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   const chapterParagraphsRef = useRef<Map<string, string[]>>(new Map());  // chapterId → paragraphs
   const prefetchCacheRef = useRef<Map<string, Map<string, Promise<Blob>>>>(new Map()); // chapterId → request key → Promise<Blob>
   // Regex / LLM per-paragraph attribution map keyed by chapterId.
-  // (VnCoreNLP parser removed 2026-07-05 — the map's `source` field
-  //  no longer carries a "parser" value; it's regex / conversation /
-  //  llm / default now.)
   // Fetched lazily by loadChapterAttribution() so we don't slow down the
   // initial chapter paint. detectSpeaker() consults this first and only
   // falls back to the local 6-pass regex when the map has no entry.
@@ -1229,10 +1299,8 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       /** Per-layer per-paragraph maps from the most recent Full Analyzer
        *  run. VoiceDebugPanel reads these to render "regex:/local:/llm:"
        *  chips next to each paragraph — same evidence the analyzer modal
-       *  shows. The `parser` layer is always empty since VnCoreNLP was
-       *  removed 2026-07-05. */
+       *  shows. */
       layers?: {
-        parser: Record<number, { speaker: string | null; confidence: number; source: string }>;
         regex: Record<number, { speaker: string | null; confidence: number; source: string }>;
         local: Record<number, { speaker: string | null; confidence: number; source: string }>;
         llm: Record<number, { speaker: string | null; confidence: number; source: string }>;
@@ -1245,8 +1313,6 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
        *  freshness semantics. */
       paragraphTexts?: Record<number, string>;
       fromCache: boolean;
-      // VnCoreNLP parser removed 2026-07-05 — API still returns
-      // `parserReachable: false` for backwards compat, this ref ignores it.
       crossChapter?: {
         seedApplied: boolean;
         seedReason: 'applied' | 'no-row' | 'stale-chapter' | 'version-mismatch' | 'empty';
@@ -1264,20 +1330,15 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   const [chapterAttributionStats, setChapterAttributionStats] =
     useState<{
       chapterId: string;
-      parserHits: number;
       regexHits: number;
       llmHits: number;
       conversationHits: number;
       sourceDrift?: number;
       defaults: number;
       fromCache: boolean;
-      // VnCoreNLP parser removed 2026-07-05 — API still returns
-      // `parserReachable: false` for backwards compat, this UI ignores it.
       omlxReachable: boolean;
     } | null>(null);
   // ── Full-analysis (regex + LLM) state ──────────────────────────────
-  // (VnCoreNLP parser removed 2026-07-05 — pipeline is now
-  //  regex → conversation-fusion → optional LLM.)
   // Set by the Wand2 toolbar button. Drives the in-flight spinner and the
   // progress hint. Reset to null when the chapter changes.
   const [analysisInFlight, setAnalysisInFlight] = useState(false);
@@ -2182,8 +2243,6 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       const data = await r.json() as {
         attribution: Record<number, { speaker: string | null; confidence: number; source: string }>;
         fromCache: boolean;
-        // VnCoreNLP parser removed 2026-07-05 — API still returns
-        // `parserReachable: false` for backwards compat, we just ignore it.
         omlxReachable: boolean;
         crossChapter?: {
           seedApplied: boolean;
@@ -2197,7 +2256,6 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         // actor rows. Optional on legacy cached rows.
         potentialNewCharacters?: string[];
         stats: {
-          parserHits: number;
           regexHits: number;
           llmHits: number;
           conversationHits: number;
@@ -2209,11 +2267,6 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       chapterAttributionRef.current.set(chapterId, {
         attribution: data.attribution ?? {},
         fromCache: !!data.fromCache,
-        // VnCoreNLP parser removed 2026-07-05 — parserReachable is no
-        // longer surfaced in the chapter attribution ref. We accept the
-        // field on the wire (it always comes back as `false` now) but
-        // don't store it.
-        // (parserReachable: !!data.parserReachable omitted intentionally)
         crossChapter: data.crossChapter
           ? {
               seedApplied: !!data.crossChapter.seedApplied,
@@ -2230,18 +2283,12 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       });
       setChapterAttributionStats({
         chapterId,
-        parserHits: data.stats?.parserHits ?? 0,
         regexHits: data.stats?.regexHits ?? 0,
         llmHits: data.stats?.llmHits ?? 0,
         conversationHits: data.stats?.conversationHits ?? 0,
         sourceDrift: data.stats?.sourceDrift ?? 0,
         defaults: data.stats?.defaults ?? 0,
         fromCache: !!data.fromCache,
-        // VnCoreNLP parser removed 2026-07-05 — parserReachable is no
-        // longer surfaced in the chapter attribution ref. We accept the
-        // field on the wire (it always comes back as `false` now) but
-        // don't store it.
-        // (parserReachable: !!data.parserReachable omitted intentionally)
         omlxReachable: !!data.omlxReachable,
       });
     } catch {
@@ -2267,6 +2314,24 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     const chapterId = chapters[currentIdx]?.id;
     const chapterTitle = chapters[currentIdx]?.title ?? chapterId ?? '?';
     if (!chapterId || analysisInFlight) return;
+    // ── Pre-flight confirm for 'full-llm' on big chapters (added 2026-07-12) ──
+    // Whole-chapter mode is all-or-nothing on the LLM call — on a 600-paragraph
+    // chapter a failed chatJSON() means NO LLM rows land and the chapter falls
+    // back to the regex+local baseline for 600 paragraphs. Surface this risk
+    // BEFORE the user commits. Small chapters (<300 paragraphs) skip the
+    // dialog because the cost is bounded.
+    if (
+      mode === 'full-llm'
+      && !pendingContinueFullLLMRef.current
+      && (fullLLMEstimate?.paragraphCount ?? 0) > 300
+    ) {
+      setFullLLMPending(true);
+      return;  // Dialog confirm handler re-calls runFullAnalysis with the
+               // continuation ref set; cancel handler leaves ref false.
+    }
+    // Consume the continuation flag exactly once. The Dialog confirm sets it
+    // before re-calling us; the re-entrant call falls through here.
+    pendingContinueFullLLMRef.current = false;
     setAnalysisInFlight(true);
     // Wall-clock start — used to synthesize `durationMs` when the server
     // returns JSON (no streaming) so the modal can still show a real total.
@@ -2286,17 +2351,15 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       chapterTitle,
       mode,
       stats: {
-        parserHits: 0, regexHits: 0, llmHits: 0, conversationHits: 0,
+        regexHits: 0, llmHits: 0, conversationHits: 0,
         sourceDrift: 0, defaults: 0, totalParagraphs: 0,
         llmFailures: 0, llmRequested: 0,
       },
-      // VnCoreNLP parser removed 2026-07-05 — `parserReachable` field
-      // dropped from this UI's state shape.
       omlxReachable: false,
       durationMs: 0,
       llmDurationMs: 0,
       log: [],
-      layers: { parser: {}, regex: {}, local: {}, llm: {} },
+      layers: { regex: {}, local: {}, llm: {} },
       failed: false,
       running: true,
     });
@@ -2363,17 +2426,15 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       const isSSE = ctype.includes('text/event-stream');
       let resultData: {
         attribution?: AttributionMap;
-        layers?: { parser: AttributionMap; regex: AttributionMap; local: AttributionMap; llm: AttributionMap };
+        layers?: { regex: AttributionMap; local: AttributionMap; llm: AttributionMap };
         paragraphTexts?: Record<string, string>;
-        // VnCoreNLP parser removed 2026-07-05 — `parserReachable` field
-        // no longer read by this UI.
         omlxReachable?: boolean;
         mode?: AnalyzeMode;
         durationMs?: number;
         llmDurationMs?: number;
         chapter?: { chapterIndex: number; chapterId: string; file: string };
         stats?: {
-          parserHits: number; regexHits: number; llmHits: number;
+          regexHits: number; llmHits: number;
           conversationHits: number; sourceDrift?: number;
           llmFailures?: number; llmRequested?: number;
           defaults: number; totalParagraphs: number;
@@ -2431,7 +2492,6 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
               const logLine = buildLogLine(evt);
               appendLog(logLine);
               // Optimistic "what's running" hint in the toolbar progress line.
-              // (VnCoreNLP removed 2026-07-05 — filter only on LLM / oMLX now.)
               if (typeof window !== 'undefined' && /\bLLM\b|\boMLX\b/.test(logLine.text)) {
                 setAnalysisProgress(`Đang chạy: ${logLine.text}`);
               }
@@ -2471,10 +2531,10 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
             attribution?: AttributionMap;
             omlxReachable?: boolean;
             chapter?: { chapterIndex: number; chapterId: string; file: string };
-            stats?: { parserHits?: number; regexHits?: number; llmHits?: number; conversationHits?: number; sourceDrift?: number; defaults?: number; totalParagraphs?: number; llmFailures?: number; llmRequested?: number };
+            stats?: { regexHits?: number; llmHits?: number; conversationHits?: number; sourceDrift?: number; defaults?: number; totalParagraphs?: number; llmFailures?: number; llmRequested?: number };
             // Future-proofed — the SSE result event carries these too; if
             // the server starts emitting them in JSON mode we pick them up.
-            layers?: { parser: AttributionMap; regex: AttributionMap; local: AttributionMap; llm: AttributionMap };
+            layers?: { regex: AttributionMap; local: AttributionMap; llm: AttributionMap };
             paragraphTexts?: Record<string, string>;
             mode?: AnalyzeMode;
             durationMs?: number;
@@ -2488,13 +2548,12 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
             // endpoint doesn't ship it, but the modal will still render
             // the merged attribution result. The voice-debug panel's
             // per-evidence chips will just show empty in this branch.
-            layers: json.layers ?? { parser: {}, regex: {}, local: {}, llm: {} },
+            layers: json.layers ?? { regex: {}, local: {}, llm: {} },
             paragraphTexts: json.paragraphTexts,
             mode: json.mode ?? mode,
             durationMs: json.durationMs ?? Math.max(0, Date.now() - pipelineStartMs),
             llmDurationMs: json.llmDurationMs ?? 0,
             stats: json.stats ? {
-              parserHits:        json.stats.parserHits        ?? 0,
               regexHits:         json.stats.regexHits         ?? 0,
               llmHits:           json.stats.llmHits           ?? 0,
               conversationHits:  json.stats.conversationHits  ?? 0,
@@ -2510,8 +2569,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
           // empty when the run completes. The headline number is the most
           // useful summary a user wants to scan after a full analysis.
           if (resultData.stats) {
-            const total = (resultData.stats.parserHits ?? 0)
-                        + (resultData.stats.regexHits ?? 0)
+            const total = (resultData.stats.regexHits ?? 0)
                         + (resultData.stats.llmHits ?? 0)
                         + (resultData.stats.conversationHits ?? 0);
             appendLog({
@@ -2558,22 +2616,17 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
           layers: resultData.layers,
           paragraphTexts: paragraphTextsRecord,
           fromCache: false,
-          // VnCoreNLP parser removed 2026-07-05 — see comment above.
-        // (parserReachable: !!resultData.parserReachable omitted)
         });
       }
       setAttributionRefreshTick((t) => t + 1);
       setChapterAttributionStats({
         chapterId,
-        parserHits: resultData.stats.parserHits ?? 0,
         regexHits: resultData.stats.regexHits ?? 0,
         llmHits: resultData.stats.llmHits ?? 0,
         conversationHits: resultData.stats.conversationHits ?? 0,
         sourceDrift: resultData.stats.sourceDrift ?? 0,
         defaults: resultData.stats.defaults ?? 0,
         fromCache: false,
-        // VnCoreNLP parser removed 2026-07-05 — see comment above.
-        // (parserReachable: !!resultData.parserReachable omitted)
         omlxReachable: !!resultData.omlxReachable,
       });
 
@@ -2611,7 +2664,6 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       // Final modal state with stats filled in.
       pushModal({
         stats: {
-          parserHits: resultData.stats.parserHits ?? 0,
           regexHits: resultData.stats.regexHits ?? 0,
           llmHits: resultData.stats.llmHits ?? 0,
           conversationHits: resultData.stats.conversationHits ?? 0,
@@ -2621,8 +2673,6 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
           llmFailures: resultData.stats.llmFailures ?? 0,
           llmRequested: resultData.stats.llmRequested ?? 0,
         },
-        // VnCoreNLP parser removed 2026-07-05 — see comment above.
-        // (parserReachable: !!resultData.parserReachable omitted)
         omlxReachable: !!resultData.omlxReachable,
         mode: resultData.mode ?? mode,
         durationMs: resultData.durationMs ?? 0,
@@ -2641,9 +2691,6 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
           ? `oMLX lỗi (${resultData.stats.llmFailures ?? 0} batch fail)`
           : 'oMLX không chạy';
       setAnalysisProgress(
-        // VnCoreNLP parser removed 2026-07-05 — `parserHits` no longer in the
-        // success summary (always 0). Kept the type field for backwards compat
-        // with the API response shape.
         `Full analysis xong — ${resultData.stats.regexHits} regex, ${resultData.stats.conversationHits ?? 0} conversation, ${llmPart}`,
       );
       setAttributionDebugOpen(true);
@@ -3169,9 +3216,9 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
    *  a character does NOT trigger that character's voice.
    *
    *  Tiered attribution:
-   *    1. Server-side parser/regex attribution map (VnCoreNLP Tier 3b +
-   *       regex fallback) — keyed by paragraph index, loaded once per
-   *       chapter via loadChapterAttribution().
+   *    1. Server-side regex attribution map (cached per chapter) — keyed by
+   *       paragraph index, loaded once per chapter via
+   *       loadChapterAttribution().
    *    2. Local 6-pass regex (findSpeakerForQuote) — used when the map has
    *       no entry for this paragraph OR when the user has toggled the
    *       parser off. */
@@ -3185,9 +3232,8 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
 
     // ── Tier 1: server-side attribution map ───────────────────────────
     // Only used when we know our paragraph index AND the map is loaded for
-    // the current chapter. The map's source can be 'parser' (VnCoreNLP),
-    // 'regex' (the server's own regex fallback), or 'parser' with
-    // speaker=null (low-confidence flag — fall through to local regex).
+    // the current chapter. The map's source can be 'regex', 'llm',
+    // 'conversation', or 'default'. speaker=null falls through to local regex.
     const currentChapter = chapters[currentIdx];
     if (paragraphIndex !== undefined && currentChapter) {
       const mapEntry = chapterAttributionRef.current.get(currentChapter.id);
@@ -3455,8 +3501,8 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     }
     ttsDebug('pregenerateChapter: paragraph count', { chapterId: ch.id, count: paragraphs.length });
 
-    // Load server-side attribution (parser + regex + LLM) so detectSpeaker()
-    // can pick VnCoreNLP's answer over the local regex when both are
+    // Load server-side attribution (regex + optional LLM) so detectSpeaker()
+    // can pick the cached answer over the local regex when both are
     // available. Fire-and-forget — pregenerate doesn't block on it.
     void loadChapterAttribution(ch.id);
 
@@ -4896,6 +4942,73 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         </DropdownMenu>
       </header>
 
+      {/* ── Full-LLM soft-warn dialog (added 2026-07-12) ──────────────────
+          Pre-flight confirm for the 'Full LLM' analyzer mode on chapters
+          with >300 paragraphs. Surfaces the cost estimate (paragraphs,
+          chars, seconds, output tokens) so the user knows what they're
+          committing to BEFORE the ~minute-long LLM call starts. Cancel
+          closes without invoking the analyzer; confirm sets the
+          continuation ref and re-enters runFullAnalysis — which now
+          bypasses this gate because pendingContinueFullLLMRef === true. */}
+      <Dialog
+        open={fullLLMPending}
+        onOpenChange={(open) => { if (!open) setFullLLMPending(false); }}
+        title="Full LLM trên chương lớn"
+        description="Bạn sắp gửi TOÀN BỘ chương qua một LLM call. Có thể chậm và tốn token."
+        widthClass="max-w-md"
+      >
+        <DialogBody>
+          {fullLLMEstimate && (
+            <div className="space-y-3 text-sm">
+              <div className="flex justify-between gap-3">
+                <span className="text-muted-foreground">Số đoạn:</span>
+                <span className="font-medium tabular-nums">{fullLLMEstimate.paragraphCount}</span>
+              </div>
+              <div className="flex justify-between gap-3">
+                <span className="text-muted-foreground">Độ dài chương:</span>
+                <span className="font-medium tabular-nums">
+                  {(fullLLMEstimate.chapterCharCount / 1000).toFixed(1)}k chars
+                </span>
+              </div>
+              <div className="flex justify-between gap-3">
+                <span className="text-muted-foreground">Ước tính thời gian:</span>
+                <span className="font-medium tabular-nums">~{fullLLMEstimate.estimatedSeconds}s</span>
+              </div>
+              <div className="flex justify-between gap-3">
+                <span className="text-muted-foreground">Output tokens:</span>
+                <span className="font-medium tabular-nums">~{fullLLMEstimate.estimatedOutputTokens}</span>
+              </div>
+              <p className="text-xs text-amber-600 dark:text-amber-400 pt-2 border-t border-border/50 leading-relaxed">
+                Nếu LLM trả về JSON không hợp lệ (timeout, bị cắt giữa chừng,
+                model hallucinate idx), kết quả có thể bị mất một phần và những
+                đoạn đó sẽ fallback về voice mặc định. Chạy lại với mode
+                &quot;Combine&quot; để retry chỉ những đoạn chưa gán.
+              </p>
+            </div>
+          )}
+        </DialogBody>
+        <DialogFooter>
+          <button
+            type="button"
+            onClick={() => setFullLLMPending(false)}
+            className={cn(buttonClasses({ variant: 'ghost', size: 'sm' }))}
+          >
+            Hủy
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setFullLLMPending(false);
+              pendingContinueFullLLMRef.current = true;
+              void runFullAnalysis('full-llm');
+            }}
+            className={cn(buttonClasses({ variant: 'default', size: 'sm' }))}
+          >
+            Chạy Full LLM
+          </button>
+        </DialogFooter>
+      </Dialog>
+
       {/* ── Keyboard shortcuts overlay (UI Polish §5.3) ─────────────────
           Opens on '?' / Shift+/. ESC closes. Uses the hand-rolled
           focus-trapping modal substrate (matches Analyzer drawer
@@ -5850,7 +5963,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
                 <div className={cn('rounded-md border border-border px-3 py-2', dividerCls)}>
                   <div className={cn('text-[10px] uppercase tracking-wide', mutedCls)}>Đã gán</div>
                   <div className={cn('text-lg font-semibold mt-0.5 text-emerald-600 dark:text-emerald-400')}>
-                    {analysisModal.stats.parserHits + analysisModal.stats.regexHits
+                    {analysisModal.stats.regexHits
                       + analysisModal.stats.llmHits + analysisModal.stats.conversationHits}
                   </div>
                 </div>
@@ -5867,8 +5980,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
                   <div className={cn('text-lg font-semibold mt-0.5')}>{analysisModal.stats.sourceDrift}</div>
                 </div>
 
-                {/* Evidence-source breakdown — VnCoreNLP parser removed 2026-07-05
-                    so we no longer show the `parser` chip (always 0). */}
+                {/* Evidence-source breakdown */}
                 <div className={cn('rounded-md border border-border px-3 py-2 col-span-2 sm:col-span-4', dividerCls)}>
                   <div className={cn('text-[10px] uppercase tracking-wide mb-1', mutedCls)}>Nguồn suy ra</div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -5884,11 +5996,8 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
                   </div>
                 </div>
 
-                {/* Service reachability — only oMLX is shown now. VnCoreNLP
-                    was removed 2026-07-05; the pipeline is regex →
-                    conversation-fusion → optional LLM, and oMLX
-                    reachability is the only gate that can drop the
-                    LLM step. */}
+                {/* Service reachability — oMLX is the only gate that can
+                    drop the LLM step (regex + conversation-fusion always run). */}
                 <div className={cn('rounded-md border border-border px-3 py-2 col-span-2', dividerCls)}>
                   <div className={cn('text-[10px] uppercase tracking-wide mb-1', mutedCls)}>Services</div>
                   <div className="flex flex-wrap items-center gap-2">

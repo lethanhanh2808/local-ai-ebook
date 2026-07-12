@@ -107,8 +107,14 @@ function buildTypoCss(f: string, size: number, lh: number, text: string, indent:
           which raises specificity to (1 ID, 1 class, 1 element) — high
           enough to beat any "p" or "section" rule the EPUB might inject
           via inline style attributes or surviving <style> blocks.
-     The columns shorthand sets both column-count and column-width so we
-     defeat either form of embedded CSS. */
+     BUGFIX 2026-07-12 — the previous rule used the \`columns: 1\` shorthand,
+     which ALSO sets \`column-width: auto\`. In a multi-column parent, that
+     makes each <p> expand to the FULL PARENT WIDTH (820px) instead of the
+     current column width (378px), so 3 columns of text bleed into the
+     820px clip from neighbouring page tracks. Fix: use \`column-count: 1\`
+     alone (no shorthand, no \`column-width: auto\`) so the p's natural
+     column-width applies. Also add \`max-width: 100%; box-sizing: border-box\`
+     as defense-in-depth in case any future CSS tries to overflow. */
   #epub-clip .epub-spread p,
   #epub-clip .epub-spread section,
   #epub-clip .epub-spread div,
@@ -117,9 +123,9 @@ function buildTypoCss(f: string, size: number, lh: number, text: string, indent:
   #epub-clip .epub-spread li,
   #epub-clip .epub-spread dd,
   #epub-clip .epub-spread dt {
-    columns: 1 !important;
     column-count: 1 !important;
-    column-width: auto !important;
+    max-width: 100%;
+    box-sizing: border-box;
   }
   /* Headings and HRs should always span across the spread's columns. */
   h1, h2, h3, h4, h5, h6, hr { column-span: all; }
@@ -205,6 +211,14 @@ function buildSpreadCss(
        This makes page-track boundary align exactly with clip edges, so the
        visible area is always exactly 2 columns wide. */
     width: 100%;
+    /* BUGFIX 2026-07-12 — defense-in-depth: clip horizontal overflow on
+       the spread itself. The clip's \`overflow-x: auto\` only clips
+       visually; it doesn't constrain descendant layout. If a future
+       CSS change (or embedded EPUB style) makes any child wider than
+       the spread's 820px box, the content would otherwise leak into
+       the visible clip area as if from the adjacent page track. */
+    max-width: 100%;
+    overflow: hidden;
   }
   /* Truly narrow viewport (phone-width iframe): revert to single-column
      scroll. Threshold lowered to 400px so the 2-column layout stays on

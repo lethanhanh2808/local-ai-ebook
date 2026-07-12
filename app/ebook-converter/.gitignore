@@ -12,6 +12,9 @@ data/full-runtime/
 data/tmp-chars/
 data/voices/
 data/backups/
+# Throwaway debug scripts written by Claude/agents at the project root
+# (e.g. `.tmp-spread-diag.mjs`). Not part of the build.
+.tmp-*.mjs
 # SQLite files — main DB plus WAL sidecars (-wal, -shm, -journal).
 # These are runtime artifacts; the schema lives in prisma/schema.prisma
 # and migration history lives in prisma/migrations/.

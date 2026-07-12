@@ -20,7 +20,12 @@
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:ui": "playwright test --ui",
     "verify": "npm run lint && npm run typecheck && npm test && npm run test:python && npm run build && npm run test:e2e:local:smoke",
-    "db:push": "prisma db push",
+    "db:migrate": "bash scripts/db-migrate.sh",
+    "db:migrate:create": "bash scripts/db-migrate.sh --create",
+    "db:snapshot": "bash scripts/db-snapshot.sh",
+    "db:verify": "bash scripts/db-verify.sh",
+    "db:status": "bash scripts/db-migrate.sh --skip-snapshot --skip-restart --no-verify --help",
+    "db:push:danger": "echo 'Use `npm run db:migrate:create -- --name <x>` instead. `prisma db push` is unsafe on a live DB (2026-07-12 corruption incident). If you REALLY need it, run: bash scripts/db-migrate.sh --skip-restart --skip-snapshot && prisma db push && bash scripts/db-verify.sh && docker compose up -d app worker' && exit 1",
     "db:studio": "prisma studio",
     "db:generate": "prisma generate"
   },

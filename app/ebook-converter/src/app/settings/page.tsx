@@ -15,6 +15,7 @@ import {
   Mic, Languages, Wand2, ShieldOff, ExternalLink,
   Cloud, Server, Wrench, Trash2, Image as ImageIcon, Zap, Activity, Smartphone,
   Plus, Database, Bookmark, Palette, Monitor, Sun, Moon, BookOpen,
+  Brain,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -38,6 +39,10 @@ interface Settings {
   aiModel: string;
   aiMaxTokens: number;
   aiTemperature: number;
+  // Per-mode enable_thinking override for the chapter-attribution analyzer
+  // (2026-07-12). Surface as two toggles in the AI section.
+  aiThinkingCombine: boolean;
+  aiThinkingFullLLM: boolean;
   ttsProvider: string;
   defaultAiEnhance: boolean;
   defaultAiWatermarkClean: boolean;
@@ -72,7 +77,7 @@ interface WatermarkRow {
 }
 
 const AI_PROVIDERS = [
-  { id: 'omlx-local',    label: 'OMLX (local)',     desc: 'Local Qwen/DeepSeek — không cần API key, chạy trên máy. Để nhanh chọn model 4-bit (FastContext-1B hoặc Qwen3.5-9B-4bit).', Icon: Server, needsKey: false, defaultModel: 'FastContext-1.0-4B-SFT-Dynamic-4bit-MLX', defaultUrl: '', defaultMaxTokens: 8192 },
+  { id: 'omlx-local',    label: 'OMLX (local)',     desc: 'Local Qwen/DeepSeek — không cần API key, chạy trên máy. Để nhanh chọn model 4-bit (Ornith-9B-4bit hoặc Qwen3.5-9B-4bit).', Icon: Server, needsKey: false, defaultModel: 'Ornith-1.0-9B-mlx-4Bit', defaultUrl: '', defaultMaxTokens: 16384 },
   { id: 'minimax-cloud', label: 'MiniMax Cloud',    desc: 'MiniMax Text-01 / Image-01 — cloud nhanh, cần API key',     Icon: Cloud,   needsKey: true,  defaultModel: 'MiniMax-Text-01', defaultUrl: 'https://api.minimax.io/v1', defaultMaxTokens: 16384 },
   { id: 'openai',        label: 'OpenAI',           desc: 'GPT-4o / GPT-4 / o1 — chất lượng cao, cần OpenAI key',         Icon: Sparkles, needsKey: true,  defaultModel: 'gpt-4o-mini',  defaultUrl: 'https://api.openai.com/v1', defaultMaxTokens: 16384 },
   { id: 'custom',        label: 'Custom (OpenAI-compatible)', desc: 'Together / Anyscale / llama.cpp / bất kỳ endpoint nào', Icon: Wrench,  needsKey: true,  defaultModel: '',             defaultUrl: '',                   defaultMaxTokens: 8192  },
@@ -531,7 +536,9 @@ export default function SettingsPage() {
                 onChange={(v) => update('aiModel', v)}
                 onRefresh={() => fetchModels('text')}
                 onPickFast={() => {
-                  const fast = textModels.find((m) => m.includes('1B') || m.includes('FastContext'))
+                  // Prefer smaller / 4-bit variants when available — fits the
+                  // 17.76 GB unified-memory ceiling with headroom for KV cache.
+                  const fast = textModels.find((m) => m.includes('4B') || m.includes('Ornith'))
                     ?? textModels.find((m) => m.includes('4bit'))
                     ?? textModels[0];
                   if (fast) update('aiModel', fast);
@@ -583,6 +590,48 @@ export default function SettingsPage() {
                   onChange={(e) => update('aiTemperature', parseFloat(e.target.value))}
                   className="w-full"
                 />
+              </div>
+
+              {/* Per-mode `enable_thinking` toggles (2026-07-12).
+                  Combine (chunked, default ON) — small batches where the
+                  reasoning trace fits in the output budget AND accuracy
+                  > speed. Full-LLM (whole-chapter, default OFF) — large
+                  prompt, chain-of-thought would consume the JSON output
+                  cap before rows land. Users can flip either based on
+                  their model's behavior. */}
+              <div className="space-y-1.5 sm:col-span-2 rounded-md border border-border/40 bg-muted/20 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex-1 min-w-0">
+                    <label htmlFor="settings-ai-thinking-combine" className="text-xs font-medium flex items-center gap-1.5">
+                      <Brain className="h-3.5 w-3.5 text-muted-foreground" />
+                      Thinking — Combine mode
+                    </label>
+                    <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">
+                      Bật <span className="font-mono">enable_thinking</span> cho các batch nhỏ (4 đoạn/batch). Khuyến nghị ON cho model thinking (Qwen3, DeepSeek-R1).
+                    </p>
+                  </div>
+                  <Switch
+                    id="settings-ai-thinking-combine"
+                    checked={settings.aiThinkingCombine ?? true}
+                    onCheckedChange={(v) => update('aiThinkingCombine', v)}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-3 pt-2 border-t border-border/40">
+                  <div className="flex-1 min-w-0">
+                    <label htmlFor="settings-ai-thinking-full-llm" className="text-xs font-medium flex items-center gap-1.5">
+                      <Brain className="h-3.5 w-3.5 text-muted-foreground" />
+                      Thinking — Full LLM mode
+                    </label>
+                    <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">
+                      Bật <span className="font-mono">enable_thinking</span> cho whole-chapter LLM call. Mặc định OFF vì prompt lớn chiếm hết output budget trước khi kịp xuất rows.
+                    </p>
+                  </div>
+                  <Switch
+                    id="settings-ai-thinking-full-llm"
+                    checked={settings.aiThinkingFullLLM ?? false}
+                    onCheckedChange={(v) => update('aiThinkingFullLLM', v)}
+                  />
+                </div>
               </div>
             </div>
 
@@ -678,7 +727,7 @@ export default function SettingsPage() {
                   <span>1 (chậm)</span><span>4 (cân bằng)</span><span>8 (nhanh)</span>
                 </div>
                 <p className="text-[10px] text-muted-foreground">
-                  Số conversion chạy đồng thời. Tăng để tận dụng AI provider nhanh (FastContext, MiniMax), giảm cho máy yếu.
+                  Số conversion chạy đồng thời. Tăng để tận dụng AI provider nhanh (local 4B/9B, MiniMax), giảm cho máy yếu.
                 </p>
               </div>
               <div className="space-y-1.5">

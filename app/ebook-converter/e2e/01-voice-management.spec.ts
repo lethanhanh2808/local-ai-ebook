@@ -20,11 +20,11 @@ test.describe('Voice management pipeline', () => {
   test('1. First detection on chapter003 inserts characters with smart voice matching', async ({ page }) => {
     const result = await runDetectOnChapter(page, 'chapter003');
 
-    // FastContext is non-deterministic — may return 0 chars sometimes.
+    // Local oMLX models are non-deterministic — may return 0 chars sometimes.
     // We require AT LEAST 1 character and verify all the structural invariants.
     // (If the model returns 0, the other tests verify the system works on other chapters.)
     if (result.detected === 0) {
-      test.skip(true, 'FastContext returned 0 chars this run — model variance, not a bug');
+      test.skip(true, 'OMLX model returned 0 chars this run — model variance, not a bug');
       return;
     }
 

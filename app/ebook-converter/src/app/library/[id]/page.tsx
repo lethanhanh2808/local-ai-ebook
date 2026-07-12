@@ -55,7 +55,24 @@ export default async function BookDetailPage(props: { params: Promise<{ id: stri
         }
       />
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-4 lg:grid-cols-[180px_1fr_1fr]">
+        {/* Cover — the route serves the stored PNG (or SVG placeholder
+            when no coverPath is set yet). No cache-buster needed because
+            this is a server-rendered page: each request re-reads from the
+            DB, and the route already returns Cache-Control: no-cache,
+            must-revalidate so the browser re-validates on back-forward
+            navigation. */}
+        <Card className="p-3">
+          <div className="aspect-[2/3] w-full overflow-hidden rounded-md bg-muted">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={`/api/library/${book.id}/cover`}
+              alt={book.title}
+              className="h-full w-full object-cover"
+            />
+          </div>
+        </Card>
+
         <Card className="p-5 space-y-3">
           <h2 className="text-sm font-semibold">Thông tin</h2>
           <dl className="space-y-1 text-xs">

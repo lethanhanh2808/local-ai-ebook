@@ -92,7 +92,7 @@ import type { ChapterAttributionMap } from '../lib/db/chapter-attribution';
 
 const BOOK_ID = 'book-pin-001';
 const CHAPTER_IDX = 2;
-const PARSER_VERSION = 'conversation-v3+vncorenlp-1.2';
+const PARSER_VERSION = 'conversation-v3';
 
 function emptyMap(): ChapterAttributionMap {
   return {};

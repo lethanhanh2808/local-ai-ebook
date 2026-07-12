@@ -11,8 +11,6 @@
 //     paragraph (so you can sanity-check which quote drove the choice)
 //   • the SOURCE of the attribution (regex / conversation / llm / default)
 //     so you can tell which paragraphs each layer solved
-//     (VnCoreNLP parser removed 2026-07-05 — parser rows are always 0
-//      but the field is kept for backwards compat with the API shape)
 //   • the count of paragraphs attributed to each character + voice
 //
 // Used to triage whether mis-routed audio is from attribution (the speaker
@@ -51,10 +49,8 @@ export interface ChapterAttributionInfo {
    *  Analyzer run. Lets the panel render "regex: X / local: Y / llm: Z"
    *  chips under each paragraph — same evidence the analyzer modal
    *  shows — so the user can see HOW each layer voted, not just the
-   *  final winner. The `parser` layer is always empty since VnCoreNLP
-   *  was removed 2026-07-05. */
+   *  final winner. */
   layers?: {
-    parser: Record<number, ChapterAttributionRow>;
     regex: Record<number, ChapterAttributionRow>;
     local: Record<number, ChapterAttributionRow>;
     llm: Record<number, ChapterAttributionRow>;
@@ -65,9 +61,6 @@ export interface ChapterAttributionInfo {
    *  rows render immediately after a Full Analyzer. Stored on the same
    *  ref entry as `attribution` / `layers` so both share freshness. */
   paragraphTexts?: Record<number, string>;
-  // VnCoreNLP parser removed 2026-07-05 — the API still returns
-  // `parserReachable: false` for backwards compat, but this UI
-  // doesn't consume it.
   /** D1 cross-chapter seed status for this chapter — populated from
    *  `/attribute`'s `crossChapter` block so the panel can paint "state
    *  carried from chapter N" vs "fresh start" vs "skipped (stale)". */
@@ -88,15 +81,12 @@ export interface ChapterAttributionInfo {
 
 interface ChapterAttributionStats {
   chapterId: string;
-  parserHits: number;
   regexHits: number;
   llmHits: number;
   conversationHits: number;
   sourceDrift?: number;
   defaults: number;
   fromCache: boolean;
-  // VnCoreNLP parser removed 2026-07-05 — API still returns
-  // `parserReachable: false` for backwards compat, this UI ignores it.
   omlxReachable: boolean;
 }
 
@@ -138,8 +128,7 @@ interface ParagraphRow {
   activeCharacters?: string[];
   /** Per-evidence-layer speakers from the most recent Full Analyzer run.
    *  Painted as small "regex: X / local: Y / llm: Z" chips under each
-   *  paragraph so the user can see how each layer voted. `parser` is
-   *  always empty since VnCoreNLP was removed 2026-07-05. */
+   *  paragraph so the user can see how each layer voted. */
   layers?: {
     regex?: string | null;
     conversation?: string | null;
@@ -392,7 +381,7 @@ export function VoiceDebugPanel({
 
   // Aggregate counts: how many paragraphs each (name|voice) pair produced.
   const summary = useMemo(() => {
-    const counts = new Map<string, { speaker: string; voice: string; paragraphs: number; lines: number; parserHits: number; stateHits: number }>();
+    const counts = new Map<string, { speaker: string; voice: string; paragraphs: number; lines: number; stateHits: number }>();
     for (const r of rows) {
       const key = `${r.speaker.name ?? '(unattributed)'}::${r.speaker.voiceName ?? '(default)'}`;
       const entry = counts.get(key) ?? {
@@ -400,12 +389,10 @@ export function VoiceDebugPanel({
         voice: r.speaker.voiceName ?? '(default)',
         paragraphs: 0,
         lines: 0,
-        parserHits: 0,
         stateHits: 0,
       };
       entry.paragraphs += 1;
       if (r.firstQuote) entry.lines += 1;
-      if (r.source === 'parser' || r.source === 'cache-parser') entry.parserHits += 1;
       if (r.source === 'conversation' || r.source === 'cache-conversation') entry.stateHits += 1;
       counts.set(key, entry);
     }
@@ -416,10 +403,6 @@ export function VoiceDebugPanel({
     const withQuote = rows.filter((r) => r.firstQuote !== null);
     const attributed = withQuote.filter((r) => r.status === 'attributed');
     const unattributed = withQuote.filter((r) => r.status === 'unattributed');
-    // (VnCoreNLP parser removed 2026-07-05 — parserSolved is always 0
-    //  now. Kept the field shape for backwards compat with the stats
-    //  display + cache rows.)
-    const parserSolved = 0;
     const regexSolved = rows.filter((r) => r.source === 'regex' || r.source === 'cache-regex').length;
     const llmSolved = rows.filter((r) => r.source === 'llm' || r.source === 'cache-llm').length;
     const conversationSolved = rows.filter((r) => r.source === 'conversation' || r.source === 'cache-conversation').length;
@@ -428,7 +411,6 @@ export function VoiceDebugPanel({
       withQuote: withQuote.length,
       attributed: attributed.length,
       unattributed: unattributed.length,
-      parserSolved,
       regexSolved,
       llmSolved,
       conversationSolved,
@@ -539,10 +521,6 @@ export function VoiceDebugPanel({
                 • {chapterAttributionStats.sourceDrift} source drift
               </span>
             )}
-            {/* VnCoreNLP parser removed 2026-07-05 — the
-                "parser reachable / unreachable" pill is gone with it.
-                Routes still return `parserReachable: false` for
-                backwards compat; we just don't surface it here. */}
             {chapterAttributionStats.omlxReachable ? (
               <span className="opacity-60">• oMLX reachable</span>
             ) : (
@@ -564,7 +542,6 @@ export function VoiceDebugPanel({
               <th className="font-normal pr-2">Speaker</th>
               <th className="font-normal pr-2">Voice</th>
               <th className="font-normal text-right">¶</th>
-              <th className="font-normal text-right">parser</th>
               <th className="font-normal text-right">state</th>
             </tr>
           </thead>
@@ -578,9 +555,6 @@ export function VoiceDebugPanel({
                   {s.voice}
                 </td>
                 <td className="text-right tabular-nums py-0.5">{s.paragraphs}</td>
-                <td className="text-right tabular-nums py-0.5 opacity-70">
-                  {s.parserHits > 0 ? s.parserHits : '—'}
-                </td>
                 <td className="text-right tabular-nums py-0.5 opacity-70">
                   {s.stateHits > 0 ? s.stateHits : '—'}
                 </td>
@@ -640,8 +614,7 @@ export function VoiceDebugPanel({
                     modal's inline badges. Only shown when the panel has
                     actually run an analyzer pass (layers is set); before
                     a Full Analyzer run we don't have layer data so we
-                    skip the row entirely. (VnCoreNLP parser layer is
-                    gone since 2026-07-05 — no `parse:` chip here.) */}
+                    skip the row entirely. */}
                 {r.layers && (r.layers.regex || r.layers.conversation || r.layers.llm) && (
                   <div className="mt-0.5 flex flex-wrap gap-1 text-[9px]">
                     {r.layers.regex && (
@@ -721,7 +694,6 @@ export function VoiceDebugPanel({
         Green = attributed to a character voice. Amber = unattributed, falls back to default voice.
         Violet badge = local regex solved it.
         Amber badge = oMLX LLM solved it. State badge = conversation memory/fusion solved it.
-        (VnCoreNLP parser removed 2026-07-05 — sky/parser badge is gone.)
         Inline <code className="font-mono opacity-80">regex:/local:/llm:</code> chips show what each
         evidence layer voted — only render after a Full Analyzer run.
         If a Ưu Nhi line shows amber, the attribution logic missed — check the snippet for

@@ -96,13 +96,13 @@ export function StatsView() {
         <h2 className="text-sm font-semibold text-muted-foreground mb-3 uppercase tracking-wide">By Reading Status</h2>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {(['unread', 'reading', 'read', 'archived'] as const).map((s) => (
-            <div key={s} className="p-4 flex items-center gap-3">
+            <Card key={s} className="p-4 flex items-center gap-3">
               {STATUS_ICON[s]}
               <div>
                 <p className="text-xl font-bold">{statusMap[s] ?? 0}</p>
                 <p className={`text-xs px-1.5 py-0.5 rounded-full font-medium capitalize inline-block mt-0.5 ${STATUS_COLOR[s]}`}>{s}</p>
               </div>
-            </div>
+            </Card>
           ))}
         </div>
       </div>
@@ -112,13 +112,13 @@ export function StatsView() {
         <h2 className="text-sm font-semibold text-muted-foreground mb-3 uppercase tracking-wide">By Language</h2>
         <div className="grid gap-3 sm:grid-cols-3">
           {stats.byLanguage.map((l) => (
-            <div key={l.language} className="p-4 flex items-center gap-3">
+            <Card key={l.language} className="p-4 flex items-center gap-3">
               <Globe className="h-5 w-5 text-primary/70" />
               <div>
                 <p className="text-xl font-bold">{l._count}</p>
                 <p className="text-xs text-muted-foreground">{LANG_LABEL[l.language] ?? l.language}</p>
               </div>
-            </div>
+            </Card>
           ))}
         </div>
       </div>

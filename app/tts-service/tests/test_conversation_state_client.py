@@ -115,7 +115,7 @@ class TestLoadConversationState(unittest.TestCase):
             "found": True,
             "bookId": "abc-123",
             "lastChapterIndex": 5,
-            "parserVersion": "conversation-v3+vncorenlp-1.2",
+            "parserVersion": "conversation-v3",
             "snapshot": {
                 "sceneId": 5,
                 "currentSpeaker": "Y Đằng Ưu Nhi",
@@ -163,7 +163,7 @@ class TestFetchChapterAttribution(unittest.TestCase):
 
     def test_returns_attribution_and_cross_chapter(self):
         body = {
-            "parserVersion": "conversation-v3+vncorenlp-1.2",
+            "parserVersion": "conversation-v3",
             "fromCache": False,
             "parserReachable": True,
             "omlxReachable": False,

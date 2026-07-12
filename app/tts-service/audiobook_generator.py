@@ -25,18 +25,6 @@ from typing import Optional
 
 import httpx
 
-# Tier 3b — VnCoreNLP parser-driven attribution. Imported lazily below so the
-# module remains importable when VnCoreNLP is not running (e.g. local dev
-# without the sidecar). The vncorenlp_attribution module itself fails
-# gracefully if the parser is unreachable.
-try:
-    import vncorenlp_attribution as _tier3b
-    _TIER3B_AVAILABLE = True
-except Exception as _e:
-    print(f"[tier3b] vncorenlp_attribution import failed: {_e}", file=sys.stderr)
-    _tier3b = None
-    _TIER3B_AVAILABLE = False
-
 # ── Defaults ────────────────────────────────────────────────────────────────
 # 2026-07-12: VieNeu is the sole TTS backend. Piper + MOSS-TTS-Nano were
 # removed. UNIFIED_TTS_URL is preserved as a back-compat alias for VIENEU_URL.
@@ -226,10 +214,10 @@ def find_quote_spans(text: str) -> list[tuple[int, int, str]]:
 
 def split_paragraphs_with_offsets(plain: str) -> list[tuple[int, int, str]]:
     """Split `plain` on blank lines and return [(start, end, text), ...] for
-    each paragraph. Used by Tier 3b to attribute dialogue segments that fall
-    inside a given paragraph. The `plain` text passed in here is the same
-    text used by `_regex_segment_chapter` for quote spans, so paragraph
-    offsets line up with quote offsets."""
+    each paragraph. Used by `_regex_segment_chapter` to attribute dialogue
+    segments to the paragraph they fall in, which feeds the stateful scene
+    memory (`_update_state`). The `plain` text passed in here is the same
+    text used for quote spans, so paragraph offsets line up with quote offsets."""
     if not plain:
         return []
     paragraphs: list[tuple[int, int, str]] = []
@@ -826,41 +814,29 @@ def split_into_segments(html_body: str, cmap: dict) -> list[dict]:
     Narration is further split into ≤ NARRATION_CHUNK_TARGET-char chunks at
     sentence boundaries so each TTS call stays short.
 
-    Pipeline (Tier 1 / 3b / 3a):
-      1. Tier 3b — VnCoreNLP parser (best-effort, runs once per chapter).
-         Produces a per-paragraph { speaker, confidence, source } map.
-      2. Tier 3a — oMLX segmentation + emotion (opt-in via USE_LLM_SEGMENTER).
-      3. Tier 1  — regex fallback (always runs as the last resort).
+    Pipeline (Tier 1 / 3a):
+      1. Tier 3a — oMLX segmentation + emotion (opt-in via USE_LLM_SEGMENTER).
+      2. Tier 1  — regex fallback (always runs as the last resort).
 
-    Tier 3b is consulted BEFORE the regex/Tier 3a path even runs. For the
-    regex path we override per-quote; for the Tier 3a path we patch the LLM's
-    character attribution where the parser is more confident.
+    The previous Tier 3b VnCoreNLP parser layer was retired on 2026-07-12
+    (VnCoreNLP sidecar removed). The regex/3a path now drives attribution
+    off paragraph offsets + conversation-state memory alone.
     """
     plain = strip_html(html_body)
     if not plain:
         return []
 
-    # ── Tier 3b: VnCoreNLP parser-driven attribution ────────────────────
-    # Best-effort. When the sidecar is unreachable we silently get an empty
-    # map and every quote falls through to the regex layer.
-    tier3b_attribution: dict[int, dict] = {}
+    # Paragraph offsets feed the stateful scene memory (`_update_state`) by
+    # tagging each quote with the paragraph index it falls in. Cheap to
+    # compute — kept even after the Tier 3b parser removal.
     paragraph_offsets: list[tuple[int, int, str]] = []
-    if ATTRIBUTION_ENGINE == "conversation_v3" and _TIER3B_AVAILABLE:
+    if ATTRIBUTION_ENGINE == "conversation_v3":
         paragraph_offsets = split_paragraphs_with_offsets(plain)
-        paragraphs_text = [t for (_, _, t) in paragraph_offsets]
-        try:
-            tier3b_attribution = _tier3b.attribute_chapter(plain, cmap,
-                                                           paragraphs_text)
-        except Exception as e:
-            print(f"[tier3b] unexpected error, falling back: {e}",
-                  file=sys.stderr)
-            tier3b_attribution = {}
 
     # ── Tier 3a: LLM-based segmentation + emotion ────────────────────────
     if USE_LLM_SEGMENTER:
         try:
             llm_segs = _llm_segment_chapter(plain, cmap,
-                                            tier3b_attribution=tier3b_attribution,
                                             paragraph_offsets=paragraph_offsets)
             if llm_segs:
                 # Resolve voices + inject emotions for each segment
@@ -885,7 +861,6 @@ def split_into_segments(html_body: str, cmap: dict) -> list[dict]:
 
     # ── Regex path (existing, now factored as _regex_segment_chapter) ───
     return _regex_segment_chapter(plain, cmap,
-                                  tier3b_attribution=tier3b_attribution,
                                   paragraph_offsets=paragraph_offsets)
 
 
@@ -1078,7 +1053,6 @@ def _llm_segment_chapter(
     plain: str,
     cmap: dict,
     *,
-    tier3b_attribution: Optional[dict[int, dict]] = None,
     paragraph_offsets: Optional[list[tuple[int, int, str]]] = None,
 ) -> list[dict]:
     """Chunked oMLX segmentation. Splits into ≤ LLM_SEGMENT_MAX_CHARS chunks at
@@ -1276,7 +1250,6 @@ def _regex_segment_chapter(
     plain: str,
     cmap: dict,
     *,
-    tier3b_attribution: Optional[dict[int, dict]] = None,
     paragraph_offsets: Optional[list[tuple[int, int, str]]] = None,
 ) -> list[dict]:
     """Original regex-based splitter. Kept as a Tier-3a fallback when oMLX is
@@ -1753,9 +1726,9 @@ def _regex_segment_chapter(
 
     # ── Stateful conversation memory + weighted evidence fusion ─────────
     # This mirrors the TypeScript attributeByConversation() pass. The regex
-    # helper above and Tier 3b parser map are kept as evidence, while scene
-    # participants, recent actors, pronouns and dialogue turns can resolve
-    # otherwise-unattributed quotes.
+    # helper above is the sole explicit-attribution layer (VnCoreNLP parser
+    # removed 2026-07-12); scene participants, recent actors, pronouns and
+    # dialogue turns can resolve otherwise-unattributed quotes.
     conversation_state: dict = {
         "scene_id": 0,
         "active": {},  # canonical → {score, last, spoken}
@@ -1997,17 +1970,17 @@ def _regex_segment_chapter(
                 bucket["dominant_source"] = source
 
     def _fuse_speaker(regex_speaker: Optional[str],
-                      parser_speaker: Optional[str],
-                      parser_conf: float,
                       context_text: str,
                       quote_text: str,
                       paragraph_idx: int,
                       explicit_parser_source: str = "") -> tuple[Optional[str], str, list[dict], float]:
+        # `explicit_parser_source` is a backward-compat no-op slot kept on the
+        # signature: when the VnCoreNLP parser layer was retired (2026-07-12)
+        # callers stopped passing anything here, but downstream callers still
+        # pass through the attribute slot, so we keep it to avoid a wider
+        # refactor.
+        del explicit_parser_source
         scores: dict = {}
-        if parser_speaker:
-            weight = 0.72 if parser_conf >= 0.85 else 0.50
-            _add_score(scores, parser_speaker, weight, "parser",
-                       f"VnCoreNLP subject/verb parse ({int(parser_conf * 100)}%)")
         if regex_speaker:
             _add_score(scores, regex_speaker, 0.55, "regex",
                        "nearby speech-verb/name pattern")
@@ -2033,7 +2006,7 @@ def _regex_segment_chapter(
             _add_score(scores, conversation_state["last_actor"], 0.12,
                        "timeline", "last actor carried over from event timeline")
 
-        implicit_turn = not (regex_speaker or parser_speaker) and len(quote_text) <= 120
+        implicit_turn = not regex_speaker and len(quote_text) <= 120
         current_speaker = conversation_state.get("current_speaker")
         if implicit_turn and current_speaker:
             active_names = list(conversation_state["active"].keys())
@@ -2100,21 +2073,6 @@ def _regex_segment_chapter(
         non_spoken = is_non_spoken_quote(
             plain, q_start, q_end, forward_prev_quote_end[q_idx]
         )
-        # ── Tier 3b: parser-driven override for this quote's paragraph ──
-        # When the VnCoreNLP layer has a confident (>0.7) speaker for this
-        # paragraph AND the regex layer can't find a stronger signal, use
-        # the parser's answer. This catches pronoun-subject paragraphs
-        # like "Anh đánh nhẹ cô" that the regex misses entirely.
-        tier3b_speaker: Optional[str] = None
-        tier3b_source = ""
-        tier3b_conf = 0.0
-        if not non_spoken and tier3b_attribution and paragraph_offsets:
-            p_idx = p_idx_for_quote
-            entry = tier3b_attribution.get(p_idx)
-            if entry and entry.get("speaker") and entry.get("confidence", 0) >= 0.7:
-                tier3b_speaker = entry["speaker"]
-                tier3b_source = "parser"
-                tier3b_conf = float(entry.get("confidence", 0) or 0)
         # The quoted dialogue itself — regex pass.
         regex_speaker = None if non_spoken else find_speaker_for_quote(
             q_start, q_end, forward_prev_quote_end[q_idx]
@@ -2130,14 +2088,14 @@ def _regex_segment_chapter(
                 None, "narrator-non-spoken-quote", [], 1.0
             )
         else:
+            # NOTE 2026-07-12: previously fused in a Tier 3b parser override
+            # here. VnCoreNLP sidecar was retired; the regex + stateful
+            # layers are now the sole explicit attribution sources.
             speaker_name, attribution_source, evidence, confidence = _fuse_speaker(
                 regex_speaker,
-                tier3b_speaker,
-                tier3b_conf,
                 context_text,
                 clean_content,
                 p_idx_for_quote,
-                tier3b_source,
             )
         vid, vname, _ = _resolve_segment_voice(speaker_name, cmap, default_voice_id)
         char_tone = char_tones.get(speaker_name) if speaker_name else None
@@ -2154,8 +2112,6 @@ def _regex_segment_chapter(
         }
         if non_spoken:
             seg["attribution_source"] = attribution_source
-        elif tier3b_source:
-            seg["attribution_source"] = attribution_source or tier3b_source
         elif attribution_source:
             seg["attribution_source"] = attribution_source
         if evidence:

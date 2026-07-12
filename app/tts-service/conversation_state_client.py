@@ -37,7 +37,9 @@ import httpx
 
 DEFAULT_BASE_URL = "http://localhost:3000"
 ATTRIBUTION_VERSION_HEADER = "x-attribution-version"
-ATTRIBUTION_VERSION = "conversation-v3+vncorenlp-1.2"
+# Bumped 2026-07-12 after retiring the VnCoreNLP sidecar; matches
+# ATTRIBUTION_VERSION in conversation_attribution.py.
+ATTRIBUTION_VERSION = "conversation-v3"
 
 
 def _base_url() -> str:

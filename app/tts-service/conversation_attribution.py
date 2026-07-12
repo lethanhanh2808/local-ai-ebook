@@ -37,7 +37,7 @@ regression.
 
 Public API
 ----------
-  ATTRIBUTION_VERSION              # "conversation-v3+vncorenlp-1.2"
+  ATTRIBUTION_VERSION              # "conversation-v3"
   ConversationStateSnapshot        # dataclass mirroring JS interface
   ConversationChapterResult        # dataclass with attribution + finalState + ...
   build_context(chars)             # ConversationContext — alias map + name regex
@@ -68,14 +68,46 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Optional
 
-from vncorenlp_attribution import PROPER_NAME_RE
-
 # Re-use vi_g2p's diacritic helpers so Python ↔ JS stay aligned.
 import vi_g2p
 
 
+# PROPER_NAME_RE was originally imported from `vncorenlp_attribution.py`
+# (the now-retired VnCoreNLP sidecar module, deleted 2026-07-12). The regex
+# itself is parser-independent — it just recognises capital-led Vietnamese
+# names in running prose — so it's inlined here verbatim. The original
+# module comment is preserved so future readers know the parity contract
+# the regex satisfies.
+#
+# Inlined from vncorenlp_attribution.py (commit a70ccb4e), which kept it in
+# parity with PROPER_NAME_RE in src/lib/attribution.ts:
+# two-to-six capital-led words, with the leading separator excluded from the
+# capture and punctuation/whitespace terminating the candidate.
+#
+# Python's stdlib ``re`` has no ``\p{Lu}``/``\p{L}``, while the browser-side
+# attribution engine uses those Unicode properties to discover previously
+# unseen Vietnamese names.  Build the Vietnamese uppercase class from Unicode
+# case semantics instead of a broad code-point range: ranges such as ``À-Ỹ``
+# also contain lowercase ``đ``, ``ơ`` and ``ư`` and used to turn ordinary
+# prose into bogus character candidates.
+_UPPER_VI_CHARS = "".join(
+    chr(codepoint)
+    for codepoint in range(0x00C0, 0x1F00)
+    if chr(codepoint).isalpha() and chr(codepoint).isupper()
+)
+_CAP_LETTER_CLASS = f"[A-Z{re.escape(_UPPER_VI_CHARS)}]"
+_LETTER = r"[^\W\d_]"
+
+PROPER_NAME_RE = re.compile(
+    rf"(?:^|[^\w])({_CAP_LETTER_CLASS}{_LETTER}*"
+    rf"(?:\s+{_CAP_LETTER_CLASS}{_LETTER}*){{1,5}})"
+    rf"(?=\s|[,.:;!?…]|$)",
+    re.UNICODE,
+)
+
+
 # ── Constants ─────────────────────────────────────────────────────────────
-ATTRIBUTION_VERSION = "conversation-v3+vncorenlp-1.2"
+ATTRIBUTION_VERSION = "conversation-v3"
 
 # Tunables from the JS side — kept here so the parity test pins both
 # values exactly.  Drift on these is a behavioural change that should
@@ -121,8 +153,9 @@ MENTION_LOOKBACK = 22
 MENTION_MAX_WORDS = 6
 
 # Vietnamese pronouns — mirror of FEMALE_PRONOUNS / MALE_PRONOUNS in
-# `src/lib/attribution.ts` and PRONOUNS_FEMALE / PRONOUNS_MALE in
-# `vncorenlp_attribution.py`.
+# `src/lib/attribution.ts`.
+# (PRONOUNS_FEMALE / PRONOUNS_MALE used to live in `vncorenlp_attribution.py`,
+# which was deleted 2026-07-12 alongside the VnCoreNLP sidecar.)
 FEMALE_PRONOUN_WORDS = frozenset({"cô", "chị", "bà", "em gái", "con gái", "nàng", "nữ"})
 MALE_PRONOUN_WORDS = frozenset({"anh", "ông", "chú", "bác", "em trai", "con trai", "chàng", "nam"})
 
@@ -832,8 +865,9 @@ ANY_VERB_RE = re.compile(
 # NOTE on stdlib-vs-JS regex parity: the JS side uses Unicode property
 # escapes `[^\p{L}]` for boundary detection.  stdlib `re` doesn't
 # support `\p{L}` directly, so we approximate with `[^\W\d_]` — "not
-# (non-word, digit, underscore)" = "letter or ideograph".  See
-# `vncorenlp_attribution._UPPER_VI_CHARS` for the same workaround.
+# (non-word, digit, underscore)" = "letter or ideograph".  The
+# `_UPPER_VI_CHARS` constant defined above uses the same Unicode case
+# semantic workaround for the `\p{Lu}` half.
 NARRATIVE_PRONOUN_CUE_RE = re.compile(
     rf"(?:^|[\W\d_])({FEMALE_PRONOUN_TEXT}|{MALE_PRONOUN_TEXT})"
     rf"\s+[^,。.!?''\"\"「」『』]{{0,90}}?"
