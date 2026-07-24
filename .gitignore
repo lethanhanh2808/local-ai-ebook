@@ -35,6 +35,12 @@ dump.rdb
 *.wav
 *.m4a
 *.epub
+# Negation: the ebook-converter checks in a deterministic fixture EPUB under
+# app/ebook-converter/samples/ as a stable target for image-preservation
+# regression tests (Phase 2 of NEXT_UP_PLAN.md). The blanket *.epub rule
+# above would otherwise ignore it.
+!app/ebook-converter/samples/**/*.epub
+!app/ebook-converter/samples/**/*.EPUB
 
 # Local backups and sample content
 backups/

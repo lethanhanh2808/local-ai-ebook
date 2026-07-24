@@ -29,6 +29,10 @@ documented here.
 
 - **Two stale emotion tests updated.** `detect-emotion.test.ts` previously asserted that two-or-more `…` ellipsis should map to `căng thẳng`, but the production code intentionally removed that density fallback on 2026-07-11 (VieNeu already reads `…` as a natural short pause; the trigger made every trailing-thought paragraph sound tense). Tests now assert the intentional `neutral` fallback and reference the source header comment.
 
+### Test fixtures
+
+- **Deterministic illustrated fixture EPUB committed.** `samples/fixture-illustrated-novel.epub` (21 KB, 12 entries, SHA256 `5f893ddd179ccab41343ea224862450a7e12bf0d95150cf2f98b006a21469fdc`) ships in the repo so the Phase 2 interior-image-preservation tests have a stable target. Built by `scripts/build-fixture-epub.mjs` (one-off, uses `sharp` + `yazl`); structure is 1 cover (600×900), 2 figures (300×200) plus a base64 data-URI variant, and 4 chapters covering the control / inline / block-level / short cases. A `.sha256` sidecar lets future asserts pin against accidental modifications. Parent `.gitignore` updated with a scoped `!app/ebook-converter/samples/**/*.epub` negation so the blanket `*.epub` rule (which exists to exclude user-library books from version control) doesn't sweep the fixture away.
+
 ## [Unreleased] - 2026-07-11
 
 ### Reader and playback experience
