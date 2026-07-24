@@ -214,15 +214,24 @@ These are independent of each other and of Phases 1-3. Pick one when there's ban
 
 ### 4.1 Deterministic Playwright fixture EPUB for E2E
 
-> **Status:** ⬜ Pending
-> **Effort:** ½ day
-> **Files:** `app/ebook-converter/e2e/fixtures/minimal-novel.epub` (new), `app/ebook-converter/e2e/_seed.spec.ts` (new)
+> **Status:** ✅ Done (2026-07-24)
+> **Files:** `app/ebook-converter/scripts/build-minimal-epub-fixture.mjs` (new — deterministic builder), `app/ebook-converter/e2e/fixtures/minimal-novel.epub` (new — 2.98 KB, 5 entries, SHA256 `1f3164d7…`), `app/ebook-converter/e2e/fixtures/minimal-novel.epub.sha256` (new — sidecar), `app/ebook-converter/src/tests/minimal-fixture-epub.test.ts` (new — 1 case pinning SHA + parse shape), `app/ebook-converter/e2e/seed-fixture.global-setup.ts` (new — Playwright globalSetup seed), `app/ebook-converter/e2e/helpers.ts` (env > seed-file > legacy fallback), `app/ebook-converter/playwright.config.ts` (wires globalSetup; `E2E_SKIP_SEED=1` opt-out), `app/ebook-converter/e2e/README.md` (documents fixture + seed flow), `.gitignore` (scoped negations for `e2e/fixtures/**/*.epub` + per-run `.seed-book.json` ignore)
 
 A SECOND fixture — much simpler (1 chapter, no images, no cover, minimal metadata) — for Playwright E2E. The existing `samples/` books are too big and stateful for `npm run test:e2e:local:smoke`.
 
-**Why:** The E2E suite (8 specs) currently depends on whatever's in the user's library. A fixture makes the suite deterministic and lets it run in CI.
+**Why:** The E2E suite (8 specs) previously depended on whatever's in the user's library. A fixture makes the suite deterministic and lets it run in CI without an uploaded book.
 
-**Acceptance:** New minimal fixture; new seed spec; existing smoke tests re-pointed at the fixture.
+**Implementation:**
+- **Builder (`scripts/build-minimal-epub-fixture.mjs`)** is a 224-line pure-yazl / Node-crypto script. No sharp, no PNGs, no data-URI images. Constants: `IDENTIFIER = 'urn:uuid:e2e-minimal-novel-2026-07-24'`, frozen `MODIFIED_DATE = '2026-07-24T00:00:00Z'`, 1 chapter (`ch001.xhtml`), ~10 short Vietnamese paragraphs. Writes a SHA256 sidecar next to the EPUB so the seed setup can verify integrity at startup.
+- **Fixture** is exactly 2.98 KB, 5 entries (mimetype, META-INF/container.xml, OEBPS/content.opf, OEBPS/nav.xhtml, OEBPS/Text/ch001.xhtml). No cover, no images, no inline data-URIs.
+- **Vitest pin (`src/tests/minimal-fixture-epub.test.ts`)** asserts: SHA matches sidecar, on-disk size < 20 KB, `parseEpub` returns metadata (title/author/language), `htmlFiles` is exactly `['OEBPS/Text/ch001.xhtml']`, `imageFiles` is `[]`, chapter has ≥ 5 paragraphs, HTML contains `id="ch001"` and the chapter title. Catches fixture drift before the E2E suite runs.
+- **Playwright `globalSetup` (`e2e/seed-fixture.global-setup.ts`)** runs ONCE per `playwright` invocation. Steps: (1) verify SHA against sidecar, (2) fast-path reuse any existing library row matching `Tiểu Thuyết Tối Giản (E2E)` + `Bộ Kiểm Thử`, (3) multipart upload via `/api/upload` with `aiEnhance=false / aiWatermarkClean=false / deepFormat=false / readerFriendly=true`, (4) poll `/api/jobs` for `completed` (90 s timeout), (5) poll `/api/library` for the matching row (30 s timeout), (6) write `e2e/.seed-book.json` and set `process.env.E2E_BOOK_ID` for child specs.
+- **`helpers.ts` precedence** is `E2E_BOOK_ID` env → `.seed-book.json` → legacy `ffa65ac0-…` fallback. Smoke specs that call `resolveTestBook(page)` automatically pick up the seeded fixture book.
+- **CI opt-out** is `E2E_SKIP_SEED=1 E2E_BOOK_ID=<pre-baked-id>`. `playwright.config.ts` checks `E2E_SKIP_SEED` before wiring the globalSetup; existing pre-baked-library runs are unaffected.
+
+**Acceptance:** New minimal fixture; new deterministic seed flow; smoke tests run against the fixture book by default; CI can opt out via `E2E_SKIP_SEED=1`.
+
+Test totals: **211/211 JS tests pass** (was 210/210 after Phase 3.3; +1 from the new minimal-fixture vitest test); `tsc --noEmit` clean. Python tests untouched in this phase.
 
 ### 4.2 One-click local service restart in Settings
 

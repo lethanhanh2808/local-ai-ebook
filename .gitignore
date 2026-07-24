@@ -41,6 +41,12 @@ dump.rdb
 # above would otherwise ignore it.
 !app/ebook-converter/samples/**/*.epub
 !app/ebook-converter/samples/**/*.EPUB
+# Phase 4.1: a SECOND, much smaller fixture EPUB under
+# app/ebook-converter/e2e/fixtures/ serves as the Playwright E2E
+# target. Keep it tracked for the same reason as the Phase 2 sample
+# (deterministic byte-stable test fixture).
+!app/ebook-converter/e2e/fixtures/**/*.epub
+!app/ebook-converter/e2e/fixtures/**/*.EPUB
 
 # Local backups and sample content
 backups/
@@ -81,6 +87,11 @@ data/
 cache/
 playwright-report/
 test-results/
+# Phase 4.1: .seed-book.json is written by
+# `app/ebook-converter/e2e/seed-fixture.global-setup.ts` once per
+# Playwright run; the resolved book ID shifts each run so the file
+# must not be checked in.
+app/ebook-converter/e2e/.seed-book.json
 
 # OS/editor noise
 .DS_Store

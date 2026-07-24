@@ -1,10 +1,31 @@
 // e2e/helpers.ts
 // Shared helpers for the voice management E2E tests.
 
+import fs from 'fs';
+import path from 'path';
 import { Page, expect } from '@playwright/test';
 
 const DEFAULT_BOOK_ID = 'ffa65ac0-4010-40ea-9239-2fcea39c848f';
-const BOOK_ID = process.env.E2E_BOOK_ID ?? DEFAULT_BOOK_ID;
+const SEED_FILE = path.resolve(__dirname, '.seed-book.json');
+
+// Resolve the test book ID with the following precedence:
+//   1. E2E_BOOK_ID env var (explicit override, used by CI for legacy runs)
+//   2. .seed-book.json written by `seed-fixture.global-setup.ts`
+//      (Phase 4.1: deterministic per-run upload of `fixtures/minimal-novel.epub`)
+//   3. DEFAULT_BOOK_ID fallback (older behavior — first book in the library
+//      via `resolveTestBook`)
+function resolveDefaultBookId(): string {
+  if (process.env.E2E_BOOK_ID) return process.env.E2E_BOOK_ID;
+  if (fs.existsSync(SEED_FILE)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(SEED_FILE, 'utf8')) as { id?: string };
+      if (parsed.id) return parsed.id;
+    } catch { /* fall through */ }
+  }
+  return DEFAULT_BOOK_ID;
+}
+
+const BOOK_ID = resolveDefaultBookId();
 const BASE_URL = (process.env.E2E_BASE_URL ?? 'http://localhost:3100').replace(/\/$/, '');
 
 export interface E2EBook {

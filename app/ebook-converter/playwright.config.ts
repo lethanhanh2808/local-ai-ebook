@@ -22,6 +22,14 @@ export default defineConfig({
   expect: {
     timeout: 10_000,
   },
+  // Phase 4.1 — seeds the E2E library with the committed
+  // `e2e/fixtures/minimal-novel.epub` so smoke + GUI specs no longer
+  // depend on a real book the user happened to upload. Runs ONCE per
+  // `playwright` invocation. Skipped when E2E_SKIP_SEED=1 (e.g. when
+  // CI points at a pre-baked library via E2E_BOOK_ID).
+  globalSetup: process.env.E2E_SKIP_SEED === '1'
+    ? undefined
+    : './e2e/seed-fixture.global-setup.ts',
   reporter: [['list'], ['html', { open: 'never' }]],
   outputDir: 'test-results/e2e-artifacts',
   use: {

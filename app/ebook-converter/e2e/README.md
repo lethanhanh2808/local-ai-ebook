@@ -50,6 +50,29 @@ cd /Volumes/EXT-SSD/Users/anhl/Local-AI
 
 ## Test Book
 
+### Phase 4.1 — deterministic fixture (default)
+
+By default the suite seeds a small, fixed fixture into the library at the start of every run. The seed is driven by `seed-fixture.global-setup.ts` (Playwright `globalSetup`) and writes:
+
+| File | Purpose |
+| --- | --- |
+| `e2e/fixtures/minimal-novel.epub` (2.98 KB, 5 entries) | Committed deterministic EPUB — 1 chapter, no cover, no images. |
+| `e2e/fixtures/minimal-novel.epub.sha256` | SHA256 sidecar so the seed setup errors out loudly if the fixture drift. |
+| `e2e/.seed-book.json` (gitignored) | Per-run output: `{ id, title, author, seededAt }` of the resolved Book row. |
+
+Behavior:
+1. On startup, the globalSetup reads the fixture, verifies SHA256, uploads it via `/api/upload`, polls `/api/jobs` until the conversion job is `completed`, and finally queries `/api/library` for the matching book row.
+2. `e2e/helpers.ts` resolves `BOOK_ID` with precedence `E2E_BOOK_ID` env var → `.seed-book.json` → legacy `ffa65ac0…` fallback.
+3. Smoke specs use `resolveTestBook(page)` which honors the same precedence — they automatically pick up the seeded fixture book.
+
+Skip the seed when the library is already pre-baked (e.g. CI):
+
+```bash
+E2E_SKIP_SEED=1 E2E_BOOK_ID=<pre-baked-id> npm run test:e2e:local
+```
+
+### Legacy fallback
+
 The existing deeper voice tests default to:
 
 ```text

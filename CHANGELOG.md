@@ -65,6 +65,17 @@ documented here.
 - **Python regression test** (`test_actor_alternation_bump.py`, 4 cases) pins: constants `0.36 / 0.48`, the bump fires on alternating seed history, no bump on same-speaker history, no bump on history length < 2. Tests seed `ConversationStateSnapshot.dialogueHistory` directly so they don't depend on a multi-paragraph walk.
 - **Phase 3.3 of `docs/NEXT_UP_PLAN.md` complete** — Phase 3 backlog (3.1 gitignore, 3.2 per-genre floor, 3.3 alternation parity) all done.
 
+### E2E deterministic fixture (Phase 4.1)
+
+- **A deterministic minimal-novel EPUB now seeds the E2E library.** The Playwright suite previously depended on whatever book the user happened to upload. `app/ebook-converter/scripts/build-minimal-epub-fixture.mjs` is a pure-yazl builder (no sharp, no PNGs) that emits a 2.98 KB EPUB with one Vietnamese chapter, no cover, no images, frozen `MODIFIED_DATE = '2026-07-24T00:00:00Z'`, frozen `IDENTIFIER = 'urn:uuid:e2e-minimal-novel-2026-07-24'`. The output (`app/ebook-converter/e2e/fixtures/minimal-novel.epub`) is committed alongside a SHA256 sidecar so the seed setup can verify integrity before upload.
+- **Playwright `globalSetup` runs once per invocation.** `app/ebook-converter/e2e/seed-fixture.global-setup.ts` (1) verifies the SHA against the sidecar, (2) fast-path reuses any existing library row matching `Tiểu Thuyết Tối Giản (E2E)` + `Bộ Kiểm Thử`, (3) multipart-uploads via `/api/upload` with `aiEnhance=false / aiWatermarkClean=false / deepFormat=false / readerFriendly=true`, (4) polls `/api/jobs` for `completed` (90 s timeout), (5) polls `/api/library` for the matching row (30 s timeout), (6) writes `e2e/.seed-book.json` and sets `process.env.E2E_BOOK_ID` for child specs. Total cold seed: ~3-5 s on a warm worker.
+- **Helpers.ts precedence.** `resolveDefaultBookId()` returns `E2E_BOOK_ID` env → `.seed-book.json` → legacy `ffa65ac0…` fallback. Smoke specs that call `resolveTestBook(page)` automatically pick up the seeded fixture book. Legacy deeper-voice specs (which intentionally wipe rows for `E2E_BOOK_ID`) keep their old behaviour but now also target the seeded book by default — `E2E_BOOK_ID=<other-id>` overrides cleanly.
+- **CI opt-out.** `E2E_SKIP_SEED=1 E2E_BOOK_ID=<pre-baked-id>` skips the globalSetup entirely (`playwright.config.ts` checks the env before wiring it). Pre-baked-library CI runs are unaffected.
+- **Fixture drift protection.** New `app/ebook-converter/src/tests/minimal-fixture-epub.test.ts` pins the SHA, on-disk size, parsed metadata (title/author/language), exact `htmlFiles` / `imageFiles` shape, and that the chapter HTML carries `id="ch001"` plus the expected title. Runs as part of the regular vitest suite (211/211 total).
+- **Gitignore scoping.** Blanket `*.epub` ignores are negated for `app/ebook-converter/e2e/fixtures/**/*.epub` so the fixture stays tracked; `app/ebook-converter/e2e/.seed-book.json` is gitignored as a per-run artifact.
+- **README updated.** `app/ebook-converter/e2e/README.md` documents the fixture + seed flow, the helper precedence, and the CI opt-out path.
+- **Phase 4.1 of `docs/NEXT_UP_PLAN.md` complete.** Test totals: **211/211 JS** tests pass (was 210/210 after Phase 3.3; +1 from the new minimal-fixture vitest test); `tsc --noEmit` clean. Python tests untouched in this phase.
+
 ## [Unreleased] - 2026-07-11
 
 ### Reader and playback experience
