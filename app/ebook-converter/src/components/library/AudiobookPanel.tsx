@@ -55,6 +55,7 @@ export function AudiobookPanel({ bookId, onChapterAudioReady }: Props) {
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [buildingM4B, setBuildingM4B] = useState(false);
   const [polling, setPolling] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -147,6 +148,30 @@ export function AudiobookPanel({ bookId, onChapterAudioReady }: Props) {
       body: JSON.stringify({ action: 'regenerate_one', chapterFile }),
     });
     await fetchStatus();
+  };
+
+  // Trigger the M4B download. Use a programmatic <a download> click so the
+  // browser handles the navigation + Content-Disposition: attachment header
+  // natively, and the user stays on the library page (vs. window.location
+  // which navigates away during the 30-90s ffmpeg encode). `fetch + blob`
+  // would force the entire file through React memory; the anchor trick lets
+  // the browser stream it.
+  const handleDownloadM4B = () => {
+    if (buildingM4B) return;
+    setBuildingM4B(true);
+    const a = document.createElement('a');
+    a.href = `/api/library/${bookId}/audiobook/m4b`;
+    a.rel = 'noopener';
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    // The browser starts the download immediately on click(), so we can
+    // re-enable the button after a brief cooldown. A more rigorous signal
+    // would listen for download completion via `fetch + blob` (see comment
+    // above) but that defeats the streaming. 8 s covers the HTTP round-trip
+    // + typical file-save dialog latency.
+    setTimeout(() => setBuildingM4B(false), 8_000);
   };
 
   const playChapter = (chapterFile: string) => {
@@ -266,15 +291,16 @@ export function AudiobookPanel({ bookId, onChapterAudioReady }: Props) {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => {
-                // Anchor-style navigation triggers the browser's native download UI
-                // via the route's Content-Disposition: attachment header.
-                window.location.href = `/api/library/${bookId}/audiobook/m4b`;
-              }}
+              onClick={handleDownloadM4B}
+              disabled={buildingM4B}
               title="Tải file .m4b (Apple Books / Voice / podcast app)"
             >
-              <Download className="h-3.5 w-3.5 mr-1" />
-              Tải .m4b
+              {buildingM4B ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+              ) : (
+                <Download className="h-3.5 w-3.5 mr-1" />
+              )}
+              {buildingM4B ? 'Đang xuất…' : 'Tải .m4b'}
             </Button>
           )}
           {summary && summary.ready > 0 && (

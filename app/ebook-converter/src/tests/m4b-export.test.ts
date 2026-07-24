@@ -2,13 +2,19 @@
 //
 // Phase 4.5 of docs/NEXT_UP_PLAN.md — unit tests for the M4B export helper.
 //
-// Test plan (6 cases):
+// Test plan (11 cases):
 //   1. buildFfMetadata with empty chapters throws
 //   2. buildFfMetadata with one chapter emits ;FFMETADATA1 magic + START=0/END
 //   3. buildFfMetadata with three chapters uses cumulative START/END math
-//   4. UTF-8 Vietnamese titles + special chars escape per FFMETADATA1 rules
-//   5. exportM4B spawns ffmpeg with the correct arg set WITH cover AND WITHOUT
-//   6. exportM4B throws M4BExportError{code:'ENOENT'} when spawn ENOENT fires
+//   4. Pins chapter boundary ordering (ch2 starts exactly where ch1 ends) —
+//      catches off-by-one regressions that looser assertions miss
+//   5. Rounds fractional durations and throws on non-positive/NaN
+//   6. UTF-8 Vietnamese titles + special chars escape per FFMETADATA1 rules
+//   7. exportM4B spawns ffmpeg with the correct arg set WITH cover
+//   8. exportM4B spawns ffmpeg with the correct arg set WITHOUT cover
+//   9. exportM4B throws M4BExportError{code:'ENOENT'} when spawn ENOENT fires
+//  10. exportM4B silently strips a missing cover (audio still exports)
+//  11. exportM4B throws M4BExportError{code:'EUNKNOWN'} when chapter missing
 //
 // The mocking pattern mirrors src/tests/calibre-probe.test.ts:36-61 — we
 // override node:fs.existsSync and node:child_process.spawn so the helper
@@ -195,6 +201,41 @@ describe('buildFfMetadata', () => {
     expect(out).toContain('END=32500');
   });
 
+  it('pins chapter boundary ordering (ch2 starts exactly where ch1 ends)', () => {
+    // This is the test that catches off-by-one regressions: the END of
+    // chapter N must equal the START of chapter N+1. Subtle regressions
+    // (e.g. cursor updated before END computed) would slip past looser
+    // assertions like the one above.
+    const out = buildFfMetadata({
+      title: 'T',
+      chapters: [
+        { title: 'A', durationMs: 10_000 },
+        { title: 'B', durationMs: 15_000 },
+        { title: 'C', durationMs: 7_500 },
+      ],
+    });
+    const starts = Array.from(out.matchAll(/^START=(\d+)$/gm)).map((m) => Number(m[1]));
+    const ends = Array.from(out.matchAll(/^END=(\d+)$/gm)).map((m) => Number(m[1]));
+    expect(starts).toEqual([0, 10_000, 25_000]);
+    expect(ends).toEqual([10_000, 25_000, 32_500]);
+    // Chapter N's END equals Chapter N+1's START (no gap, no overlap).
+    for (let i = 0; i < ends.length - 1; i++) {
+      expect(ends[i]).toBe(starts[i + 1]);
+    }
+  });
+
+  it('rounds fractional durations and throws on non-positive', () => {
+    // 12.6 ms becomes 13 (Math.round). 0 throws.
+    const out = buildFfMetadata({
+      title: 'T',
+      chapters: [{ title: 'A', durationMs: 12.6 }],
+    });
+    expect(out).toContain('END=13');
+    expect(() => buildFfMetadata({ title: 'T', chapters: [{ title: 'A', durationMs: 0 }] })).toThrow();
+    expect(() => buildFfMetadata({ title: 'T', chapters: [{ title: 'A', durationMs: -1 }] })).toThrow();
+    expect(() => buildFfMetadata({ title: 'T', chapters: [{ title: 'A', durationMs: NaN }] })).toThrow();
+  });
+
   it('escapes Vietnamese + special characters per FFMETADATA1 rules', () => {
     const out = buildFfMetadata({
       title: 'Truyện: "Kẻ ngoài"\\cửa',
@@ -275,5 +316,31 @@ describe('exportM4B', () => {
 
     await expect(exportM4B(baseOpts())).rejects.toBeInstanceOf(M4BExportError);
     await expect(exportM4B(baseOpts())).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('silently strips coverPath when the file does not exist (audio still exports)', async () => {
+    state.exists.truthy.add(path.join(AUDIOBOOKS, 'foo', '001.mp3'));
+    state.exists.truthy.add(path.join(AUDIOBOOKS, 'foo', '002.mp3'));
+    // Cover path is OUTSIDE the uploads/library roots so it would fail
+    // assertWithinRoots — we expect the helper to silently fall back to
+    // the no-cover branch rather than throwing ESAFEPATH.
+    await exportM4B({ ...baseOpts(), coverPath: '/nonexistent/cover.jpg' });
+
+    expect(state.spawn.calls).toBe(1);
+    const args = state.spawn.lastArgs!;
+    // Without a usable cover, the -map 2:v chain must NOT appear.
+    expect(args).not.toContain('2:v');
+    expect(args).not.toContain('attached_pic');
+    const iCount = args.filter((a) => a === '-i').length;
+    expect(iCount).toBe(2);
+  });
+
+  it('throws M4BExportError{code:"EUNKNOWN"} when a chapter file is missing on disk', async () => {
+    // Note: NOT 'ESAFEPATH' — the path was inside the root; the file is
+    // just missing. The route surfaces this as a generic 500 rather than
+    // a security/traversal error.
+    state.exists.truthy.add(path.join(AUDIOBOOKS, 'foo', '001.mp3'));
+    // 002 is intentionally absent from existsState.
+    await expect(exportM4B(baseOpts())).rejects.toMatchObject({ code: 'EUNKNOWN' });
   });
 });

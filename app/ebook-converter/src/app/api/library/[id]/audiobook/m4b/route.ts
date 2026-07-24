@@ -25,6 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { getBook } from '@/lib/db/books';
 import { getAudiobookSummary, listChapters } from '@/lib/db/audiobook';
+import { resolveCoverPath } from '@/lib/storage';
 import { assertWithinRoots, pathRoots } from '@/lib/storage/safe-path';
 import { exportM4BOnce, getActualDurations, M4BExportError } from '@/lib/tools/m4b';
 
@@ -52,11 +53,15 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
   }
 
   const summary = await getAudiobookSummary(bookId);
-  if (summary.total === 0 || summary.ready !== summary.total) {
+  // Reject when ANY chapter is failed — a failed chapter means the concat
+  // would have a gap. The user must reset + regenerate to clear failures
+  // before an M4B export can succeed.
+  if (summary.total === 0 || summary.failed > 0 || summary.ready !== summary.total) {
     return NextResponse.json(
       {
         error: 'Chưa đủ chương để xuất M4B',
         ready: summary.ready,
+        failed: summary.failed,
         total: summary.total,
         missing: summary.total - summary.ready,
       },
@@ -69,12 +74,13 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
   // durationMs. We defense-in-depth the audioPath against the audiobooks
   // root even though `getBook`/`listChapters` already comes from the DB.
   const chapters = await listChapters(bookId);
-  if (chapters.length === 0) {
+  const readyChapters = chapters.filter((c) => c.status === 'ready' && c.audioPath);
+  if (readyChapters.length === 0 || readyChapters.length !== summary.total) {
     return NextResponse.json({ error: 'Chưa đủ chương để xuất M4B' }, { status: 409 });
   }
 
   const audioRoots = [pathRoots().audiobooks];
-  const inputs = chapters.map((ch) => {
+  const inputs = readyChapters.map((ch) => {
     const audioPath = assertWithinRoots(ch.audioPath, audioRoots);
     return {
       audioPath,
@@ -83,8 +89,11 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
     };
   });
 
-  // Cover art is optional — the book's cover may live in uploads or library.
-  const coverPath = resolveCover(bookId);
+  // Cover art is optional — covers live in LIBRARY_DIR/covers/<bookId>.<ext>
+  // (see src/lib/storage/index.ts:coverPath). Reuse the existing helper so
+  // we honour the same cross-mount fallback + path repair that the rest of
+  // the app uses.
+  const coverPath = await resolveCoverPath({ id: book.id, coverPath: (book as { coverPath?: string | null }).coverPath ?? null });
 
   // Output lives in audiobooks dir under the book id so it's discoverable.
   const outputPath = path.join(pathRoots().audiobooks, bookId, `${bookId}.m4b`);
@@ -106,7 +115,7 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
     const result = await exportM4BOnce(bookId, {
       outputPath,
       bookTitle: book.title,
-      author: (book as { author?: string }).author,
+      ...(book.author ? { author: book.author } : {}),
       chapters: inputs.map((i) => ({ audioPath: i.audioPath, title: i.title, durationMs: i.durationMs })),
       ...(coverPath ? { coverPath } : {}),
       durations: filtered,
@@ -171,27 +180,4 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
     console.error(`[m4b] unexpected error for book=${bookId}:`, err);
     return NextResponse.json({ error: 'Xuất M4B thất bại' }, { status: 500 });
   }
-}
-
-/** Look up the book's cover image. Returns null if not present — the helper
- *  silently skips the cover rather than failing the export. */
-function resolveCover(bookId: string): string | null {
-  const roots = pathRoots();
-  const candidates = [
-    path.join(roots.uploads, bookId, 'cover.jpg'),
-    path.join(roots.uploads, bookId, 'cover.jpeg'),
-    path.join(roots.uploads, bookId, 'cover.png'),
-    path.join(roots.library, bookId, 'cover.jpg'),
-    path.join(roots.library, bookId, 'cover.jpeg'),
-    path.join(roots.library, bookId, 'cover.png'),
-  ];
-  for (const candidate of candidates) {
-    try {
-      const safe = assertWithinRoots(candidate, [roots.uploads, roots.library]);
-      if (fs.existsSync(safe)) return safe;
-    } catch {
-      // Outside the allowed roots — try next.
-    }
-  }
-  return null;
 }

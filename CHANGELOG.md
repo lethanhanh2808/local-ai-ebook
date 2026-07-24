@@ -122,7 +122,7 @@ documented here.
 **New files:**
 - `src/lib/tools/m4b.ts` — helper. Pure `buildFfMetadata({ title, artist?, chapters }) → string` emits `;FFMETADATA1` magic header + `TIMEBASE=1/1000` chapter blocks with cumulative START/END. `exportM4B(opts)` spawns ffmpeg with the canonical arg set (branches on `coverPath` for the `-map 2:v -c:v copy -disposition:v:0 attached_pic` chain). `getActualDurations(audioPaths)` batch ffprobe for drift correction. `exportM4BOnce(bookId, opts)` per-book mutex from a module-scoped `Map<string, Promise>` — double-click waste prevention. Typed `M4BExportError` with code variants `ENOENT | ETIMEOUT | ENONZERO | ESAFEPATH | EUNKNOWN` mirroring `CalibreConvertError`.
 - `src/app/api/library/[id]/audiobook/m4b/route.ts` — `GET` handler with status gating: 404 book → 409 generating → 409 not-all-chapters-ready → 503 ffmpeg-missing → 200 stream with `Content-Type: audio/mp4` + `Content-Disposition: attachment`. Vietnamese error strings. Tmpdir cleanup on stream close.
-- `src/tests/m4b-export.test.ts` — 7 new unit tests covering: `buildFfMetadata` empty-chapters throw, single chapter block (magic header + TIMEBASE), three-chapter cumulative START/END math, UTF-8 Vietnamese + special-character escaping, `exportM4B` arg set with cover (verifies input index 2 + `-map 2:v -attached_pic`), arg set without cover (exactly 2 `-i` flags, no `2:v`), `proc.on('error') ENOENT` graceful degradation.
+- `src/tests/m4b-export.test.ts` — 11 new unit tests covering: `buildFfMetadata` empty-chapters throw, single chapter block (magic header + TIMEBASE), three-chapter cumulative START/END math, **strict chapter boundary ordering** (ch N's END == ch N+1's START — catches off-by-one regressions that looser assertions miss), fractional-duration rounding + non-positive/NaN throw, UTF-8 Vietnamese + special-character escaping, `exportM4B` arg set with cover (verifies input index 2 + `-map 2:v -attached_pic`), arg set without cover (exactly 2 `-i` flags, no `2:v`), `proc.on('error') ENOENT` graceful degradation, silent cover-strip when cover missing/out-of-root (audio still exports), chapter-file-missing throws `EUNKNOWN` rather than masquerading as `ESAFEPATH`.
 
 **Modified:**
 - `src/components/library/AudiobookPanel.tsx` — `<Download>` added to `lucide-react` imports. New "Tải .m4b" button rendered inside the action row when `summary.ready === summary.total && summary.total > 0` (no gaps in the concat). Direct anchor-style navigation triggers the browser's native download UI via `Content-Disposition: attachment`.
@@ -144,7 +144,9 @@ documented here.
 - Per-book cache invalidation tied to `configHash`.
 - PNG → JPEG conversion (most source covers are already JPEG; PNG is supported via `-c:v copy`).
 
-**Test totals:** **259/259 JS** tests pass (was 252/252 after Phase 4.3; +7 from Phase 4.5). `tsc --noEmit` clean. Python tests untouched.
+**Test totals:** **263/263 JS** tests pass (was 252/252 after Phase 4.3; +11 from Phase 4.5). `tsc --noEmit` clean. Python tests untouched.
+
+**Smoke test verified (post-review, 2026-07-24):** Ran the real `exportM4B` helper against two ffmpeg-generated sine MP3s (5s + 4s, 96 kbps mono 24 kHz) with a 320×320 JPEG cover. ffprobe confirmed: AAC-LC audio stream at index 0 (24 kHz mono, 68 kbps); 2 chapter entries with `time_base=1/1000` and exact cumulative boundaries (0→5000, 5000→9000); mjpeg cover stream at index 2 with `DISPOSITION:attached_pic=1` (the flag Apple Books / Voice look for in the `covr` atom). 80,351 bytes total for the 9.04s output.
 
 ## [Unreleased] - 2026-07-11
 

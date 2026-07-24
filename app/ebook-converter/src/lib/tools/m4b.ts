@@ -151,20 +151,19 @@ export function buildFfMetadata(opts: {
 
 // ── Path validation ─────────────────────────────────────────────────────────
 
-function validateInputs(opts: M4BExportOptions): { audioRoots: string[]; coverRoots: string[] } {
+/** Validate inputs and return a sanitized copy of opts with coverPath
+ *  cleared if the cover file is missing or its path is outside the
+ *  allowed roots (the cover is optional, so we silently fall back to
+ *  an audio-only M4B rather than failing). */
+function validateInputs(opts: M4BExportOptions): M4BExportOptions {
   const roots = pathRoots();
   const audioRoots = [roots.audiobooks];
   const coverRoots = [roots.uploads, roots.library];
 
   for (const ch of opts.chapters) {
+    let safe: string;
     try {
-      const safe = assertWithinRoots(ch.audioPath, audioRoots);
-      if (!existsSync(safe)) {
-        throw new M4BExportError(
-          `Chapter audio missing: ${safe}`,
-          'ESAFEPATH',
-        );
-      }
+      safe = assertWithinRoots(ch.audioPath, audioRoots);
     } catch (err) {
       if (err instanceof M4BExportError) throw err;
       throw new M4BExportError(
@@ -172,23 +171,29 @@ function validateInputs(opts: M4BExportOptions): { audioRoots: string[]; coverRo
         'ESAFEPATH',
       );
     }
-  }
-
-  if (opts.coverPath) {
-    try {
-      const safe = assertWithinRoots(opts.coverPath, coverRoots);
-      if (!existsSync(safe)) {
-        // Cover is optional — skip silently rather than failing the export.
-        // Caller can detect via opts.coverPath still being set after return.
-        return { audioRoots, coverRoots: [] };
-      }
-    } catch {
-      // Same — silent skip for the cover.
-      return { audioRoots, coverRoots: [] };
+    // Path is inside the root — check existence separately so the route
+    // surfaces a 500 (data loss / race condition) rather than masking it
+    // as a 500 ESAFEPATH (security/traversal). The path itself is NOT
+    // echoed back to the client in the route handler.
+    if (!existsSync(safe)) {
+      throw new M4BExportError(
+        `Chapter audio file not found on disk`,
+        'EUNKNOWN',
+      );
     }
   }
 
-  return { audioRoots, coverRoots };
+  let coverPath = opts.coverPath;
+  if (coverPath) {
+    try {
+      const safe = assertWithinRoots(coverPath, coverRoots);
+      if (!existsSync(safe)) coverPath = undefined;
+    } catch {
+      coverPath = undefined;
+    }
+  }
+
+  return { ...opts, coverPath };
 }
 
 // ── Spawn ────────────────────────────────────────────────────────────────────
@@ -203,7 +208,10 @@ export async function exportM4B(opts: M4BExportOptions): Promise<M4BExportResult
     throw new M4BExportError('exportM4B: tmpDir is required', 'EUNKNOWN');
   }
 
-  validateInputs(opts);
+  // validateInputs may strip coverPath if missing or outside allowed roots.
+  // Use the returned sanitized copy from here on.
+  // eslint-disable-next-line no-param-reassign
+  opts = validateInputs(opts);
 
   const binary = opts.binaryPath ?? 'ffmpeg';
   const timeoutMs = opts.timeoutMs ?? 300_000;

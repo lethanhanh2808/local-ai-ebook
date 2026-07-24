@@ -345,7 +345,7 @@ Replace the "stream MP3" audiobook output with a single `.m4b` file that has cha
 - **`-movflags +faststart`** — required for iOS progressive streaming in Apple Books.
 - **Filename sanitization** matches the per-chapter route at `src/app/api/library/[id]/audiobook/[chapterFile]/route.ts:55-57`: `[^\x20-\x7E]` → `_`, slice 80. UTF-8 preserved in FFMETADATA1 `title=` for in-player display.
 
-**Acceptance:** ✅ "Tải .m4b" button on the audiobook panel (rendered only when `summary.ready === summary.total && summary.total > 0`); the resulting `.m4b` opens in Apple Books / Voice / etc. with chapter markers visible and cover art embedded. 259/259 vitest + tsc clean.
+**Acceptance:** ✅ "Tải .m4b" button on the audiobook panel (rendered only when `summary.ready === summary.total && summary.total > 0`); the resulting `.m4b` opens in Apple Books / Voice / etc. with chapter markers visible and cover art embedded. 263/263 vitest + tsc clean. Smoke test verified end-to-end with real ffmpeg: AAC-LC stream + chapter markers with exact cumulative boundaries + `DISPOSITION:attached_pic=1` cover (Apple Books `covr` atom).
 
 ---
 
