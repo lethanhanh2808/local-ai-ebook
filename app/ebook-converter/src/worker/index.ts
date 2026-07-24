@@ -7,7 +7,7 @@ import fs from 'fs';
 // refresh even if the var was already in the shell environment
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local'), override: true });
 dotenv.config({ path: path.resolve(process.cwd(), '.env'), override: false });
-import { Worker } from 'bullmq';
+import { UnrecoverableError, Worker } from 'bullmq';
 import IORedis from 'ioredis';
 import { QUEUE_NAME, ConversionJobData, redisConnection } from '../lib/queue';
 import { updateJob } from '../lib/db/jobs';
@@ -15,6 +15,7 @@ import { getSettings } from '../lib/db/settings';
 import { runConversionPipeline } from '../lib/pipeline/conversion-pipeline';
 import { outputPath } from '../lib/storage';
 import { prisma } from '../lib/db/client';
+import { probeCalibre, convertWithCalibre } from '../lib/tools/calibre';
 
 // Use a dedicated connection for the liveness ping (separate from BullMQ
 // which sometimes has its own connection state). This is more reliable.
@@ -90,7 +91,7 @@ getWorkerConcurrency().then((n) => { activeConcurrency = n; });
 const worker = new Worker<ConversionJobData>(
   QUEUE_NAME,
   async (job) => {
-    const { jobId, inputPath, originalExt, filename, aiEnhance, aiWatermarkClean, deepFormat, readerFriendly, aiPrompt } = job.data;
+    const { jobId, inputPath, originalExt, filename, aiEnhance, aiWatermarkClean, deepFormat, readerFriendly, aiPrompt, requiresPreprocessing } = job.data;
 
     // Reset per-job log
     try { fs.writeFileSync(jobLogPath(jobId), ''); } catch { /* noop */ }
@@ -128,6 +129,54 @@ const worker = new Worker<ConversionJobData>(
       const out = outputPath(jobId);
       log('info', 'paths', `input=${inputPath} output=${out}`);
 
+      // Phase 4.3 — Calibre pre-step. When the upload route flagged this job
+      // as needing preprocessing (MOBI), convert to a staged .epub via
+      // ebook-convert and swap the pipeline input. The pre-step occupies
+      // ticks 3-8 (validate=1, preprocess=3-8) so the progress bar is
+      // monotonically increasing.
+      let effectiveInputPath = inputPath;
+      let effectiveOriginalExt = originalExt;
+      if (requiresPreprocessing) {
+        await tick(3, 'preprocess-resolve');
+        const probe = await probeCalibre(true); // fresh probe in worker process
+        if (!probe.ok) {
+          log('error', 'preprocess-resolve', probe.error ?? 'Calibre missing');
+          throw new UnrecoverableError(probe.error ?? 'Calibre (ebook-convert) not installed');
+        }
+        log('info', 'preprocess-resolve', `using ${probe.path} (${probe.version ?? 'unknown version'})`, {
+          path: probe.path, version: probe.version,
+        });
+
+        await tick(5, 'preprocess-convert');
+        const stagedPath = path.join(path.dirname(inputPath), `${jobId}-staged.epub`);
+        const tConv = Date.now();
+        let lastPct = 5;
+        const heartbeat = setInterval(() => {
+          if (lastPct < 7) { lastPct += 1; void tick(lastPct, 'preprocess-convert'); }
+        }, 10_000);
+        try {
+          await convertWithCalibre(inputPath, stagedPath, {
+            binaryPath: probe.path ?? undefined,
+            onLog: (chunk) => log('info', 'preprocess-convert', chunk.slice(-200)),
+          });
+        } catch (err) {
+          clearInterval(heartbeat);
+          log('error', 'preprocess-convert', `ebook-convert failed: ${String(err)}`);
+          // Calibre errors are non-recoverable (bad MOBI, missing dep). Skip
+          // BullMQ retries — each attempt would re-fail identically.
+          throw new UnrecoverableError(`Calibre preprocess failed: ${String(err)}`);
+        }
+        clearInterval(heartbeat);
+        const elapsed = Date.now() - tConv;
+        const bytes = fs.statSync(stagedPath).size;
+        log('info', 'preprocess-done', `staged EPUB written in ${elapsed}ms (${bytes} bytes)`, {
+          bytes, elapsedMs: elapsed, stagedPath,
+        });
+
+        effectiveInputPath = stagedPath;
+        effectiveOriginalExt = 'epub';
+      }
+
       // Read current model/provider from settings so the JobCard can show it
       const settings = await getSettings();
       log('info', 'config', `provider=${settings.aiProvider} model=${settings.aiModel}`);
@@ -141,9 +190,9 @@ const worker = new Worker<ConversionJobData>(
       }
 
       const result = await runConversionPipeline({
-        inputPath,
+        inputPath: effectiveInputPath,
         outputPath: out,
-        originalExt,
+        originalExt: effectiveOriginalExt,
         onProgress: tick,
         aiEnhance: aiEnhance ?? false,
         aiWatermarkClean: aiWatermarkClean ?? false,
@@ -242,9 +291,11 @@ const worker = new Worker<ConversionJobData>(
     // AI enhancement on a 12-chapter book takes ~10-15 min on slow local
     // models (5-15 tok/s × 12 chapters × ~700 output tokens each). The
     // default 30s lockDuration + 15s renewal would mark the job as stalled
-    // mid-pipeline. Use a 5-min lock with 1-min renewal — comfortable
-    // headroom for both light enhance AND deep format paths.
-    lockDuration: 5 * 60_000,
+    // mid-pipeline. Use an 8-min lock with 1-min renewal — comfortable
+    // headroom for both light enhance AND deep format paths, plus the
+    // MOBI→EPUB Calibre pre-step (Phase 4.3) which adds a few seconds at
+    // the start of the job.
+    lockDuration: 8 * 60_000,
     lockRenewTime: 60_000,
     // Give the worker 1 min to detect a truly-stalled job (vs the 30s
     // default, which would falsely fire on a long AI call).

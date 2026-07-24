@@ -8,7 +8,7 @@
 //   4. Tips / supported formats
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 import {
@@ -33,11 +33,16 @@ interface Job {
   createdAt: string; errorMsg: string | null;
 }
 
-const SUPPORTED_FORMATS = [
+const BASE_SUPPORTED_FORMATS = [
   { ext: 'EPUB',  desc: 'EPUB 2/3 — đầu vào/ra chính' },
   { ext: 'HTML',  desc: 'Trang web đã lưu' },
   { ext: 'TXT',   desc: 'Văn bản thuần' },
 ];
+
+interface CalibreFormat {
+  extension: string;
+  description: string;
+}
 
 export default function ConvertPage() {
   const toast = useToast();
@@ -52,6 +57,10 @@ export default function ConvertPage() {
   } | null>(null);
   const [workerStarting, setWorkerStarting] = useState(false);
   const [workerActionMsg, setWorkerActionMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  // Phase 4.3 — Calibre probe. When ok, the "Định dạng hỗ trợ" card
+  // surfaces Calibre-handled formats (MOBI for v1) so users discover that
+  // they can drag in Kindle files.
+  const [calibreFormats, setCalibreFormats] = useState<CalibreFormat[]>([]);
 
   const fetchJobs = useCallback(async () => {
     try {
@@ -73,6 +82,33 @@ export default function ConvertPage() {
       });
     } catch { /* ignore */ }
   }, []);
+
+  // Phase 4.3 — Calibre probe is independent of worker status. We fire-and-
+  // forget on mount; the 60s server-side cache keeps this cheap.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/tools/calibre', { cache: 'no-store' });
+        if (!res.ok) return;
+        const json = (await res.json()) as { ok: boolean; formats: CalibreFormat[] };
+        if (!cancelled && json.ok) setCalibreFormats(json.formats);
+      } catch { /* best-effort */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Phase 4.3 — merge base formats with Calibre-discoverable ones for the
+  // "Định dạng hỗ trợ" card. When the probe returns no formats (Calibre
+  // missing), we render just the base trio.
+  const supportedFormats = useMemo(() => {
+    if (calibreFormats.length === 0) return BASE_SUPPORTED_FORMATS;
+    const extra = calibreFormats.map((f) => ({
+      ext: f.extension.toUpperCase(),
+      desc: f.description,
+    }));
+    return [...BASE_SUPPORTED_FORMATS, ...extra];
+  }, [calibreFormats]);
 
   useEffect(() => { void fetchJobs(); void fetchWorkerStatus(); }, [fetchJobs, fetchWorkerStatus, refreshKey]);
 
@@ -361,12 +397,23 @@ export default function ConvertPage() {
             Định dạng hỗ trợ
           </h3>
           <div className="space-y-1.5">
-            {SUPPORTED_FORMATS.map((f) => (
+            {supportedFormats.map((f) => (
               <div key={f.ext} className="flex items-center gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
                 <span className="rounded bg-primary/15 px-2 py-0.5 text-[10px] font-bold text-primary tabular-nums">
                   .{f.ext.toLowerCase()}
                 </span>
                 <span className="text-xs">{f.desc}</span>
+              </div>
+            ))}
+            {calibreFormats.map((f) => (
+              <div key={f.extension} className="flex items-center gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
+                <span className="rounded bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-300 tabular-nums">
+                  .{f.extension}
+                </span>
+                <span className="text-xs">
+                  {f.description}{' '}
+                  <span className="text-[10px] text-muted-foreground">(qua Calibre)</span>
+                </span>
               </div>
             ))}
           </div>

@@ -15,7 +15,7 @@ import {
   Mic, Languages, Wand2, ShieldOff, ExternalLink,
   Cloud, Server, Wrench, Trash2, Image as ImageIcon, Zap, Activity, Smartphone,
   Plus, Database, Bookmark, Palette, Monitor, Sun, Moon, BookOpen,
-  Brain,
+  Brain, Download,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -26,6 +26,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { cn } from '@/lib/utils';
 import { ServiceHealth } from '@/components/status/ServiceHealth';
+import { CalibrePanel } from '@/components/status/CalibrePanel';
 import { ErrorState } from '@/components/layout/ErrorState';
 import { useToast } from '@/components/ui/toast';
 import { useTheme, type ThemeMode } from '@/components/theme/ThemeProvider';
@@ -189,7 +190,7 @@ export default function SettingsPage() {
   useEffect(() => {
     const syncHash = () => {
       const next = window.location.hash.slice(1);
-      if (['ai', 'tts', 'conversion', 'watermarks', 'image', 'appearance'].includes(next)) setActiveTab(next);
+      if (['ai', 'tts', 'conversion', 'watermarks', 'image', 'appearance', 'importers'].includes(next)) setActiveTab(next);
     };
     syncHash();
     window.addEventListener('hashchange', syncHash);
@@ -424,6 +425,9 @@ export default function SettingsPage() {
           </TabsTrigger>
           <TabsTrigger value="appearance" className="gap-1.5">
             <Palette className="h-3.5 w-3.5" /> Giao diện
+          </TabsTrigger>
+          <TabsTrigger value="importers" className="gap-1.5">
+            <Download className="h-3.5 w-3.5" /> Importers
           </TabsTrigger>
         </TabsList>
 
@@ -1027,6 +1031,11 @@ export default function SettingsPage() {
               Mở thư viện
             </Link>
           </Card>
+        </TabsContent>
+
+        {/* ── Importers tab (Phase 4.3) ──────────────────────────────────── */}
+        <TabsContent value="importers" className="space-y-4 outline-none">
+          <CalibrePanel />
         </TabsContent>
       </Tabs>
 

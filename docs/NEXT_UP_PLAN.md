@@ -245,15 +245,31 @@ The `ServiceHealth` component already shows "is this up?"; this adds "and here's
 
 ### 4.3 Calibre-based optional import pipeline
 
-> **Status:** ⬜ Pending (gated)
-> **Effort:** 1 week
-> **Files:** `app/ebook-converter/src/lib/import/calibre.ts` (new), `app/ebook-converter/src/app/api/import/calibre/route.ts` (new), upload UI updates
+> **Status:** ✅ Done (Phase 4.3, 2026-07-24) — v1 scoped to **MOBI only**
+> **Effort:** 1 day (was estimated 1 week; MOBI-only scope was 1 day)
+> **Files:** see file list below
 
-Wrap Calibre's `ebook-convert` for PDF/DOCX/MOBI/AZW3 → EPUB. New route; new Settings → Importers section that probes `which ebook-convert` and reports availability. Update the upload UI to show "Calibre" as a fallback option for the currently-disabled formats (gated on Calibre being installed).
+Wrap Calibre's `ebook-convert` so users can upload MOBI (Kindle) files. The worker auto-converts MOBI → staged EPUB before the regular pipeline runs. When Calibre is missing, the upload UI surfaces a Vietnamese "install Calibre" hint that links to Settings → Importers, and MOBI uploads are 415'd with a friendly message pointing at the same panel.
 
-**Why gated:** Requires Calibre to be installed; we don't want to break the "no Calibre" experience. The feature should be discoverable but not advertised in the default upload UI.
+**Why v1 = MOBI only:** Scoping to MOBI (the most common non-EPUB input for Vietnamese-novel readers) eliminated the PDF OCR question entirely and kept the surface area small. The pre-step machinery is format-agnostic — adding PDF/DOCX/AZW3 later is just appending rows to `CALIBRE_FORMATS` + surfacing them in the UI. No architectural changes.
 
-**Acceptance:** A PDF and a DOCX convert to a valid EPUB via the new path; the `samples/` PDF cases (none today) get a real pipeline.
+**Acceptance:** A real `.mobi` upload runs through `preprocess-resolve → preprocess-convert → preprocess-done` NDJSON stages and produces an EPUB that validates at the same level as a direct EPUB upload. On a Calibre-less machine, the UploadZone shows an amber banner + Settings → Importers shows a 3-row status panel (path/version/formats) with a manual "Re-check" button. 12 new tests, 252/252 total.
+
+**Implementation details:**
+
+- **Probe helper** — `src/lib/tools/calibre.ts` exports `probeCalibre(force)` + `convertWithCalibre(input, output, opts)`. Resolution chain: `CALIBRE_EBOOK_CONVERT` env override → 4 absolute-path candidates (`/opt/homebrew`, `/usr/local`, `/usr/bin`, `/opt/calibre`) → bare `ebook-convert` on `PATH`. Per-process in-memory cache (60s TTL). Mirrors `resolvePython()` at `src/app/api/library/[id]/characters/detect/route.ts:61-73` (no `which`, only `fs.existsSync`). `convertWithCalibre()` mirrors `convertToMp3` graceful-degradation pattern at `src/worker/audiobook.ts:217-275`.
+- **Format table** — `src/lib/tools/calibre-formats.ts` single-source-of-truth array. v1 has one row (MOBI). Future formats are append-only.
+- **API route** — `src/app/api/tools/calibre/route.ts` returns `{ ok, path, version, error, checkedAt, formats, bannerText, installUrl }`. 503 when missing. `?force=1` bypasses cache.
+- **Worker pre-step** — `src/worker/index.ts` runs `preprocess-resolve → preprocess-convert → preprocess-done` between line 129 (`paths` log) and the pipeline call. Tick percentages 3 → 5 → 6/7 (heartbeat) → 8 (hand-off). `probeCalibre(true)` forces fresh probe in worker process. Errors throw `bullmq.UnrecoverableError` — no BullMQ retries on non-recoverable Calibre failures (avoids 2–6 min wasted attempts). Worker `lockDuration` bumped `5min → 8min` to accommodate the extra step.
+- **Upload route** — `src/app/api/upload/route.ts` extends `ALLOWED_EXTENSIONS` with Calibre formats when probe succeeds, 415s MOBI uploads with a Vietnamese hint when probe fails. Queue payload gets `requiresPreprocessing: calibre.has(ext)`.
+- **Queue** — `ConversionJobData.requiresPreprocessing?: boolean` (Phase 4.3).
+- **UI** —
+  - `<CalibrePanel>` (`src/components/status/CalibrePanel.tsx`) — 3-row status (path/version/formats), "Re-check" button, "Cách hoạt động" footer card.
+  - `<UploadZone>` (`src/components/jobs/UploadZone.tsx`) — `acceptedTypes` derived from probe; amber banner + Settings link when missing; "MOBI" appended to supported-formats line when present.
+  - `<ConvertPage>` (`src/app/convert/page.tsx`) — `supportedFormats` `useMemo` merges base 3 + Calibre-discovered formats for the "Định dạng hỗ trợ" card.
+  - `<SettingsPage>` — 7th tab "Importers" (`<Download>` icon) at line 429-431 + matching `<TabsContent>` rendering `<CalibrePanel />` at line 1036-1039. Hash-sync allow-list extended.
+- **Tests** — `src/tests/calibre-probe.test.ts` (8 cases: env override + 4 candidate paths + missing-all + cache hit + convert happy path + convert missing) + `src/tests/calibre-worker-integration.test.ts` (4 cases: MOBI fires pre-step + EPUB skips + defensive guard + missing-Calibre throws UnrecoverableError). Drops a real POSIX shim into a tempdir to drive probe + conversion organically. 12 new tests; 252/252 total.
+
 
 ### 4.4 Character merge/split UI with confidence review
 

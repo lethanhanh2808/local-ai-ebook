@@ -94,6 +94,25 @@ documented here.
 - **29 new unit tests** (15 in `character-alias-confidence.test.ts` + 14 in `character-merge-api.test.ts`). Confidence tests cover each fold method, sample-lines bonus cap, crowding decay at aliasCount 3/4/5, self-alias short-circuit, clamping, rounding, empty inputs, tier classification, threshold constants. Merge/split tests cover happy path + every error branch (self-merge, survivor/absorbed not-found, profile-conflict, shared-alias default vs override, empty-aliases, name-collision, source-not-found) plus `patchCharacterAlias` (mark wrong, clamp confidence, alias-not-found). Total: **240/240 JS** tests pass (was 211/211 after Phase 4.1; +29 from Phase 4.4); `tsc --noEmit` clean. Python tests untouched.
 - **Phase 4.4 of `docs/NEXT_UP_PLAN.md` complete.**
 
+### Calibre MOBI import (Phase 4.3, v1 = MOBI only)
+
+- **MOBI uploads auto-convert to EPUB before the regular pipeline runs.** New `src/lib/tools/calibre.ts` exposes `probeCalibre(force)` + `convertWithCalibre(input, output, opts)`. Resolution chain: `CALIBRE_EBOOK_CONVERT` env override → 4 absolute-path candidates (`/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/opt/calibre`) → bare `ebook-convert` on `PATH`. Per-process in-memory cache (60s TTL) — `force=true` bypasses. Mirrors `resolvePython()` at `src/app/api/library/[id]/characters/detect/route.ts:61-73` (no `which`, only `fs.existsSync`). `convertWithCalibre()` mirrors the `convertToMp3` graceful-degradation pattern at `src/worker/audiobook.ts:217-275`: `proc.on('error')` typed-error fallback, half-written output cleaned up on failure, throttled stderr tail (1/250 ms).
+- **Format table single source of truth.** `src/lib/tools/calibre-formats.ts` is a typed `CALIBRE_FORMATS` array. v1 has one row (MOBI). Future formats (PDF/DOCX/AZW3) are append-only — no architectural changes.
+- **`GET /api/tools/calibre?force=0|1`** — `src/app/api/tools/calibre/route.ts` thin wrapper. Wire: `{ ok, path, version, error, checkedAt, formats[], bannerText, installUrl }`. 503 when missing.
+- **Upload route** (`src/app/api/upload/route.ts`) — base allow-list `['epub','html','htm','txt']` plus Calibre formats when probe succeeds. MOBI upload with Calibre missing returns 415 + Vietnamese hint pointing at `/settings#importers`. Queue payload gets `requiresPreprocessing: calibre.has(ext)`.
+- **Worker pre-step** (`src/worker/index.ts`) — between line 129 (`paths` log) and the pipeline call, when `requiresPreprocessing=true`:
+  1. `preprocess-resolve` — `probeCalibre(true)` (forces fresh probe in worker process); throws `UnrecoverableError` on missing.
+  2. `preprocess-convert` — `convertWithCalibre(input, ${jobId}-staged.epub)` with 180s timeout, 10s heartbeat tick (5→6→7). Throws `UnrecoverableError` on non-recoverable Calibre failure (bad MOBI / missing dep) so BullMQ doesn't waste 2–6 min retrying.
+  3. `preprocess-done` — NDJSON entry with bytes + elapsedMs in meta. `inputPath` swapped to staged `.epub`, `originalExt` overridden to `'epub'` for the regular pipeline.
+  Tick percentages 1 → 3 → 5 → 6/7 → 8 are monotonic. Worker `lockDuration` bumped `5min → 8min` to accommodate the extra step.
+- **UI** —
+  - `<CalibrePanel>` (`src/components/status/CalibrePanel.tsx`) — 3-row status panel (path/version/formats) + "Re-check" button calling `?force=1` + amber banner with install link when missing + "Cách hoạt động" footer card.
+  - `<UploadZone>` (`src/components/jobs/UploadZone.tsx`) — `acceptedTypes` `useMemo` derived from probe; amber banner above dropzone when missing; "MOBI" appended to "Supported formats" line when present.
+  - `<ConvertPage>` (`src/app/convert/page.tsx`) — `supportedFormats` `useMemo` merges base 3 + Calibre-discovered formats for the "Định dạng hỗ trợ" card.
+  - `<SettingsPage>` — 7th `<TabsTrigger value="importers">` (icon: `<Download>`) + matching `<TabsContent>` rendering `<CalibrePanel />`. Hash-sync allow-list extended.
+- **12 new unit tests** (8 in `calibre-probe.test.ts`: env override + 4 candidate paths + missing-all + cache hit + convert happy path + convert missing; 4 in `calibre-worker-integration.test.ts`: MOBI fires pre-step + EPUB skips + defensive guard + missing-Calibre throws `UnrecoverableError`). Drops a real POSIX shim into a tempdir + prepends tempdir to `PATH` to drive probe + conversion organically. Total: **252/252 JS** tests pass (was 240/240 after Phase 4.4; +12 from Phase 4.3); `tsc --noEmit` clean. Python tests untouched.
+- **Phase 4.3 of `docs/NEXT_UP_PLAN.md` complete.** Scoped to MOBI only for v1; PDF/DOCX/AZW3 deferred to a follow-up phase via append-only additions to `CALIBRE_FORMATS`.
+
 ## [Unreleased] - 2026-07-11
 
 ### Reader and playback experience

@@ -8,11 +8,32 @@ import { createJob } from '@/lib/db/jobs';
 import { getQueue } from '@/lib/queue';
 import { ensureDirs, uploadPath, UPLOAD_DIR, jobLogPath } from '@/lib/storage';
 import { clientIp, consume, rateLimitResponse } from '@/lib/utils/rate-limit';
+import { probeCalibre } from '@/lib/tools/calibre';
+import { CALIBRE_FORMATS, findCalibreFormat } from '@/lib/tools/calibre-formats';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const ALLOWED_EXTENSIONS = new Set(['epub', 'html', 'htm', 'txt']);
+const BASE_ALLOWED_EXTENSIONS = new Set(['epub', 'html', 'htm', 'txt']);
+
+/** Resolve which extensions are accepted for this request. When Calibre is
+ *  available, the Calibre-supported extensions (currently MOBI) are added.
+ *  When Calibre is missing, the Calibre-only extensions still surface in
+ *  the 415 message so the user can click through to Settings → Importers
+ *  to install it. Phase 4.3 of docs/NEXT_UP_PLAN.md. */
+async function resolveAllowedExtensions(): Promise<{
+  base: Set<string>;
+  calibre: Set<string>;
+  available: boolean;
+}> {
+  const base = new Set(BASE_ALLOWED_EXTENSIONS);
+  const calibre = new Set<string>();
+  // Force a fresh probe so cold-cache uploads after install don't see the
+  // 60s lag.
+  const probe = await probeCalibre(true);
+  if (probe.ok) for (const f of CALIBRE_FORMATS) calibre.add(f.extension);
+  return { base, calibre, available: probe.ok };
+}
 const configuredMaxMb = Number(process.env.MAX_FILE_SIZE_MB ?? 100);
 const MAX_FILE_SIZE_MB = Number.isFinite(configuredMaxMb) && configuredMaxMb > 0
   ? Math.min(configuredMaxMb, 1024)
@@ -64,8 +85,24 @@ export async function POST(req: NextRequest) {
 
     const originalName = toSafeFilename(path.basename(file.name));
     const ext = originalName.split('.').pop()?.toLowerCase() ?? '';
-    if (!ALLOWED_EXTENSIONS.has(ext)) {
-      return NextResponse.json({ error: `Unsupported file type: .${ext}` }, { status: 415 });
+    const { base, calibre, available } = await resolveAllowedExtensions();
+    if (!base.has(ext)) {
+      if (!calibre.has(ext)) {
+        return NextResponse.json({ error: `Unsupported file type: .${ext}` }, { status: 415 });
+      }
+      // Format is in CALIBRE_FORMATS — needs the preprocessor.
+      const fmt = findCalibreFormat(ext);
+      if (!available) {
+        return NextResponse.json(
+          {
+            error: `Calibre is required for .${ext} but is not installed. Open Settings → Importers for the install link (${fmt?.description ?? ext}).`,
+          },
+          { status: 415 },
+        );
+      }
+      // Calibre available — fall through to the existing path. The
+      // requiresPreprocessing flag below routes the worker through the
+      // MOBI → EPUB pre-step.
     }
 
     const jobId = uuid();
@@ -147,7 +184,14 @@ export async function POST(req: NextRequest) {
 
       await queue.add(
         'convert',
-        { jobId, inputPath: savePath, originalExt: ext, filename: originalName, aiEnhance, aiWatermarkClean, deepFormat, readerFriendly, aiPrompt },
+        {
+          jobId, inputPath: savePath, originalExt: ext, filename: originalName,
+          aiEnhance, aiWatermarkClean, deepFormat, readerFriendly, aiPrompt,
+          // Phase 4.3 — true when the input is in CALIBRE_FORMATS (MOBI).
+          // The worker pre-step runs ebook-convert → staged .epub, then
+          // hands off to the regular pipeline.
+          requiresPreprocessing: calibre.has(ext),
+        },
         { jobId },
       );
     }

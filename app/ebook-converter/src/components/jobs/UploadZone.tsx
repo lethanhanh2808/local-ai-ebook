@@ -1,16 +1,18 @@
 'use client';
 // src/components/jobs/UploadZone.tsx
 // Drag-and-drop upload zone + AI Enhancement options
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Upload, FileText, Loader2, Sparkles, ChevronDown, ChevronUp, ShieldOff, Wand2, Zap, Smartphone } from 'lucide-react';
+import { Upload, FileText, Loader2, Sparkles, ChevronDown, ChevronUp, ShieldOff, Wand2, Zap, Smartphone, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
+import Link from 'next/link';
 
-const ACCEPTED_TYPES = {
+// Base MIME types that the pipeline handles directly (no preprocessing).
+const BASE_ACCEPTED_TYPES: Record<string, string[]> = {
   'application/epub+zip': ['.epub'],
   'application/octet-stream': ['.epub'],
   'application/x-zip-compressed': ['.epub'],
@@ -18,6 +20,12 @@ const ACCEPTED_TYPES = {
   'text/html': ['.html', '.htm'],
   'text/plain': ['.txt'],
 };
+
+interface CalibreProbeResponse {
+  ok: boolean;
+  formats: Array<{ extension: string; mimeTypes: string[]; description: string }>;
+  installUrl: string;
+}
 
 interface UploadZoneProps {
   onJobCreated: (jobId: string, filename: string) => void;
@@ -40,6 +48,40 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
   // When ON (default), uploaded files start converting immediately.
   // When OFF, files are saved as 'pending' and the user must click "Start" in the queue.
   const [autoStart, setAutoStart] = useState(true);
+  // Phase 4.3 — Calibre probe. When ok=true, MOBI is added to the dropzone
+  // accept list. When ok=false, a banner points the user to Settings →
+  // Importers to install Calibre. `null` means we haven't fetched yet; the
+  // dropzone still works for EPUB/HTML/TXT during that window.
+  const [calibre, setCalibre] = useState<CalibreProbeResponse | null>(null);
+
+  // Phase 4.3 — fetch Calibre probe on mount. The API does its own 60s
+  // caching on the server side so we don't need an interval here.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/tools/calibre', { cache: 'no-store' });
+        if (!res.ok) return;
+        const json = (await res.json()) as CalibreProbeResponse;
+        if (!cancelled) setCalibre(json);
+      } catch { /* best-effort */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const acceptedTypes = useMemo(() => {
+    if (!calibre?.ok) return BASE_ACCEPTED_TYPES;
+    // Merge in Calibre-handled MIME types so the dropzone accepts them.
+    const merged: Record<string, string[]> = { ...BASE_ACCEPTED_TYPES };
+    for (const f of calibre.formats) {
+      for (const mime of f.mimeTypes) {
+        const ext = `.${f.extension}`;
+        const existing = merged[mime] ?? [];
+        if (!existing.includes(ext)) merged[mime] = [...existing, ext];
+      }
+    }
+    return merged;
+  }, [calibre]);
 
   // Sync initial AI-flag state from /settings on mount (so users don't
   // toggle "Deep Format" in /settings, come here, and see the wrong default).
@@ -100,7 +142,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    accept: ACCEPTED_TYPES,
+    accept: acceptedTypes,
     maxSize: 100 * 1024 * 1024,
     disabled: uploading,
     multiple: true,
@@ -108,6 +150,26 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
 
   return (
     <div className="space-y-3">
+      {/* Phase 4.3 — Calibre missing banner. Only render when the probe has
+          resolved (calibre !== null) and reports ok=false. While still
+          loading (calibre === null) we render nothing — the dropzone still
+          works for EPUB/HTML/TXT and we don't want to flash a banner for a
+          transient probe miss. */}
+      {calibre && !calibre.ok && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-800 dark:text-amber-200">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <p className="font-medium">Calibre chưa được cài — MOBI / AZW3 không upload được.</p>
+            <p className="mt-0.5 text-amber-900/80 dark:text-amber-200/80">
+              Mở{' '}
+              <Link href="/settings#importers" className="font-medium underline underline-offset-2">
+                Settings → Importers
+              </Link>{' '}
+              để cài <code className="bg-amber-500/15 px-1 rounded">ebook-convert</code>.
+            </p>
+          </div>
+        </div>
+      )}
       <div
         {...getRootProps()}
         className={cn(
@@ -146,7 +208,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
               <div>
                 <p className="text-base font-medium">Drop ebooks here or click to browse</p>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  EPUB · HTML · TXT &mdash; up to 100 MB each
+                  EPUB · HTML · TXT{calibre?.ok ? ' · MOBI' : ''} &mdash; up to 100 MB each
                 </p>
               </div>
               <Button variant="outline" size="sm" className="mt-2" type="button">Choose files</Button>

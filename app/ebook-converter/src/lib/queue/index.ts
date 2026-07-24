@@ -17,6 +17,10 @@ export interface ConversionJobData {
    *  animations, blur, text-shadow, fixed-position decorative pseudos). */
   readerFriendly?: boolean;
   aiPrompt?: string;
+  /** True when the input needs an external-tool pre-step (e.g. MOBI → EPUB
+   *  via Calibre) before the regular conversion pipeline can run. Phase 4.3
+   *  of docs/NEXT_UP_PLAN.md. */
+  requiresPreprocessing?: boolean;
 }
 
 export interface AudiobookChapterJobData {
