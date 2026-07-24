@@ -51,6 +51,12 @@ services:
       - UNIFIED_TTS_URL=http://host.docker.internal:5020
       - TTS_SERVICE_URL=http://host.docker.internal:5020
       - OMLX_BASE_URL=http://host.docker.internal:8080/v1
+      # .env.local sets TTS_PYTHON to a host-machine absolute path
+      # (/Library/Frameworks/...) that doesn't exist inside the container;
+      # the worker would then `spawn python3.11 ENOENT` for every chapter.
+      # The container installs python3 in the runner stage (Dockerfile:107)
+      # so `python3` on PATH is the right binary here.
+      - TTS_PYTHON=python3
       - NODE_ENV=production
       # Next.js standalone server.js binds to process.env.HOSTNAME if set,
       # which Docker defaults to the container's hostname / bridge IP, causing
@@ -97,6 +103,8 @@ services:
       - UNIFIED_TTS_URL=http://host.docker.internal:5020
       - TTS_SERVICE_URL=http://host.docker.internal:5020
       - OMLX_BASE_URL=http://host.docker.internal:8080/v1
+      # Same TTS_PYTHON override as the app service — see comment there.
+      - TTS_PYTHON=python3
       - NODE_ENV=production
     extra_hosts:
       - 'host.docker.internal:host-gateway'

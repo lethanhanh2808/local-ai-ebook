@@ -154,7 +154,7 @@ export function CharacterMergeSplitPanel({ bookId }: Props) {
         <SkeletonRows />
       ) : characters.length === 0 ? (
         <p className="text-xs text-muted-foreground py-6 text-center">
-          Chưa có nhân vật nào trong roster. Hãy chạy "Gán giọng tự động" trong tab Voice trước.
+          Chưa có nhân vật nào trong roster. Hãy chạy “Gán giọng tự động” trong tab Voice trước.
         </p>
       ) : (
         <Tabs defaultValue="merge">
@@ -382,7 +382,7 @@ function MergeTab({ bookId, characters, onMerged, onToast }: MergeTabProps) {
             <li>• {absorbed?.aliasDetails.length ?? 0} biệt danh sẽ được xử lý</li>
             <li>• Lượt xuất hiện theo chương sẽ được cộng dồn</li>
             <li>• Quan hệ sẽ được chuyển sang nhân vật được giữ lại</li>
-            <li>• Nhân vật "{absorbed?.name ?? ''}" sẽ bị xoá</li>
+            <li>• Nhân vật “{absorbed?.name ?? ''}” sẽ bị xoá</li>
           </ul>
         </DialogBody>
         <DialogFooter>
@@ -486,7 +486,7 @@ function SplitTab({ bookId, characters, onSplit, onToast }: SplitTabProps) {
 
       {source && (
         <div className="rounded-md border border-border p-3 space-y-2">
-          <p className="text-xs font-medium">Biệt danh của "{source.name}":</p>
+          <p className="text-xs font-medium">Biệt danh của “{source.name}”:</p>
           {source.aliasDetails.length === 0 ? (
             <p className="text-xs text-muted-foreground">Chưa có biệt danh nào.</p>
           ) : (
