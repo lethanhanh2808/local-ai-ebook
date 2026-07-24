@@ -77,6 +77,13 @@ COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 
+# Prisma CLI (devDependency) for the entrypoint's `prisma migrate deploy`.
+# We need this in the runner so a fresh image can migrate an existing
+# volume-attached SQLite DB without operator intervention. The full
+# `prisma` package is ~12 MB compressed; the CLI itself is what we need.
+# (engines are already copied above as part of node_modules/@prisma.)
+COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
+
 # Bundled worker (self-contained except for .prisma native binary above)
 COPY --from=builder --chown=nextjs:nodejs /app/dist/worker.js ./worker.js
 
