@@ -395,6 +395,25 @@ export async function runConversionPipeline(opts: PipelineOptions): Promise<Pipe
     if (fs.existsSync(fp)) fontPaths[f] = fp;
   }
 
+  // ── Step 6.5: source cover pass-through ──────────────────────────────
+  // The builder has a complete cover branch (manifest + spine + cover.xhtml
+  // + EPUB2/3 metadata), but the conversion flow never wired it up — the
+  // previous behaviour was to silently drop the source cover, leaving
+  // the output EPUB with no first-page image. We now extract the source
+  // cover from the parsed OPF and pass its file path through to buildEpub.
+  //
+  // Three resolution strategies (in order), matching extractCoverFromEpub:
+  //   1. <meta name="cover" content="<id>"> → manifest item → href
+  //   2. <item ... properties="cover-image" ...> → href
+  //   3. Any file named cover.<ext> in the ZIP
+  // Falls through to "no cover" (and the builder emits no cover branch)
+  // when none match — the AI cover generator's own route handles that
+  // case later via epub-cover.ts.
+  const coverInfo = resolveSourceCover(epub);
+  if (coverInfo) {
+    await progress(88, 'Embedding source cover…');
+  }
+
   // ── Step 7: build final EPUB ──────────────────────────────────────────
   await progress(90, 'Building EPUB…');
   // Reader-friendly mode swaps in a minimal, e-ink-safe stylesheet so the
@@ -413,9 +432,17 @@ export async function runConversionPipeline(opts: PipelineOptions): Promise<Pipe
       chapters,
       fontPaths: readerFriendly ? undefined : fontPaths,
       customCss:   readerFriendly ? READER_FRIENDLY_CSS : undefined,
+      coverImagePath: coverInfo?.path,
     },
     outputPath,
   );
+
+  // Best-effort cleanup of the sidecar cover file (we never want stray
+  // .jpg / .png in the output dir). A failure here is non-fatal — the
+  // build has already succeeded and the user has a working EPUB.
+  if (coverInfo) {
+    try { fs.unlinkSync(coverInfo.path); } catch { /* best effort */ }
+  }
 
   await progress(100, 'Done!');
 
@@ -487,9 +514,87 @@ function makeChapter(i: number, tocTitle: string, rawHtml: string, lang: string)
   };
 }
 
-/** Remove img elements from body content (images aren't embedded in output EPUB) */
+/** Remove img elements from body content. The cover image is preserved
+ *  separately by `resolveSourceCover` + `buildEpub`'s cover branch; only
+ *  interior content images are dropped for now. (A follow-up will
+ *  rewrite interior `<img src>` against an `EPUB/images/` collection
+ *  and add a manifest loop for non-cover images.) */
 function stripImages(body: string): string {
   return body.replace(/<img\b[^>]*\/?>/gi, '').trim();
+}
+
+interface ResolvedCover {
+  /** Absolute path to a sidecar file holding the cover bytes. Builder
+   *  reads from this path; we delete the file after the build. */
+  path: string;
+  /** Extension (without the dot), used by the builder for media-type
+   *  detection. Mirrored in the output `EPUB/images/cover.<ext>`. */
+  ext: string;
+}
+
+/** Locate the cover image in a parsed source EPUB and write its bytes
+ *  to a sidecar file next to the output EPUB. Returns `null` when the
+ *  source has no cover (in which case the builder emits no cover
+ *  branch and the AI cover generator's own route can fill the gap).
+ *
+ *  Three resolution strategies, in order (matches `extractCoverFromEpub`
+ *  in `epub-cover.ts`):
+ *   1. `<meta name="cover" content="<id>">` → manifest `<item id="<id>">` → href
+ *   2. `<item ... properties="cover-image" ... href="<href>">` → href
+ *   3. Any file named `cover.<ext>` in the ZIP (case-insensitive)
+ *
+ *  The OPF-relative href is resolved against `path.dirname(opfPath)`,
+ *  which is the same rule the parser uses for spine HTML. */
+function resolveSourceCover(epub: import('./epub-parser').ParsedEpub): ResolvedCover | null {
+  const opfDir = path.dirname(epub.opfPath);
+  const resolveOpfRelative = (href: string): string =>
+    (opfDir && opfDir !== '.' ? `${opfDir}/${href}` : href).replace(/^\/+/, '');
+
+  let coverEntryName: string | null = null;
+
+  // Strategy 1: <meta name="cover" content="<id>">
+  const metaM = epub.opfContent.match(/<meta[^>]+name="cover"[^>]+content="([^"]+)"/i);
+  if (metaM) {
+    const coverId = metaM[1];
+    const itemRe = new RegExp(`<item[^>]+id="${coverId}"[^>]+href="([^"]+)"`, 'i');
+    const itemM = epub.opfContent.match(itemRe);
+    if (itemM) coverEntryName = resolveOpfRelative(itemM[1]);
+  }
+
+  // Strategy 2: <item ... properties="cover-image" ...>
+  if (!coverEntryName) {
+    const propM = epub.opfContent.match(/<item[^>]+properties="cover-image"[^>]+href="([^"]+)"/i)
+      ?? epub.opfContent.match(/<item[^>]+href="([^"]+)"[^>]*properties="cover-image"/i);
+    if (propM) coverEntryName = resolveOpfRelative(propM[1]);
+  }
+
+  // Strategy 3: scan for a file named cover.<ext> in the ZIP
+  if (!coverEntryName) {
+    for (const name of epub.entries.keys()) {
+      if (/\/cover\.(jpg|jpeg|png|gif|webp)$/i.test(name) || /^cover\.(jpg|jpeg|png|gif|webp)$/i.test(name)) {
+        coverEntryName = name;
+        break;
+      }
+    }
+  }
+
+  if (!coverEntryName) return null;
+
+  const buf = epub.entries.get(coverEntryName)?.data;
+  if (!buf || buf.length === 0) return null;
+
+  const ext = (path.extname(coverEntryName).slice(1) || 'jpg').toLowerCase();
+  // We don't know the output dir until buildEpub gets the path. Use the
+  // OS temp dir; the caller is responsible for the post-build cleanup.
+  const sidecarPath = path.join(require('os').tmpdir(), `ebook-converter-source-cover-${process.pid}-${Date.now()}.${ext}`);
+  try {
+    fs.writeFileSync(sidecarPath, buf);
+  } catch (err) {
+    // Non-fatal: a sidecar write failure should not abort the conversion.
+    console.warn('[pipeline] Failed to stage source cover for pass-through:', err);
+    return null;
+  }
+  return { path: sidecarPath, ext };
 }
 
 function extractBody(html: string): string {

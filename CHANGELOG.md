@@ -5,6 +5,13 @@ documented here.
 
 ## [Unreleased] - 2026-07-24
 
+### Conversion pipeline
+
+- **Source cover now survives conversion.** The builder had a complete cover branch (manifest `properties="cover-image"`, spine `itemref`, EPUB2/3 `<meta name="cover">`, generated `cover.xhtml`, media-type detection) but the conversion flow never passed `coverImagePath` through — every converted book was silently shipped without a cover even when the source had one. New `resolveSourceCover` helper inside `conversion-pipeline.ts` extracts the cover bytes from the parsed source EPUB (three strategies: `<meta name="cover">` → manifest item, `properties="cover-image"`, then `cover.*` filename scan) and writes them to a sidecar file that the builder consumes. The sidecar is unlinked after the build.
+  - Pinned by a new end-to-end regression test (`conversion-cover-pass-through.test.ts`) that builds a source EPUB with a real PNG cover, runs the full pipeline, and asserts the cover bytes + manifest + cover.xhtml all survive in the output.
+  - Negative case: when the source has no cover, the output also has no cover (no spurious cover branch).
+  - Next step (not in this push): carry *interior* content images through the same path. Requires rewriting `<img src>` against an `EPUB/images/` collection and adding a manifest loop for non-cover images in `epub-builder.ts`. Currently the pipeline still strips all `<img>` from chapter HTML (see the comment on `stripImages`).
+
 ### Watermark cleanup unification
 
 - **Single source of truth for watermark detection.** New `src/lib/pipeline/watermark-detect.ts` exposes `splitChapterIntoPhrases` + `detectFromChaptersHtml`. The conversion pipeline and the per-book Detect UI now share this engine — the manual Detect button no longer uses a worse punctuation-splitter that silently missed DTV-style `<div class="header">…</div>` watermarks.
