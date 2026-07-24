@@ -116,8 +116,14 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   }
 
   const created = await upsertCharacters(params.id, resolved);
+  // Phase 4.4: re-list so the response includes the enriched alias
+  // wire shape (aliasDetails with confidence/source) instead of just the
+  // raw Character rows.
+  const enriched = await listCharacters(params.id);
+  const createdIds = new Set(created.map((c) => c.id));
+  const responseCharacters = enriched.filter((c) => createdIds.has(c.id));
   await setBookAudiobookStatus(params.id, 'none'); // invalidate cache → regenerate
-  return NextResponse.json({ characters: created }, { status: 201 });
+  return NextResponse.json({ characters: responseCharacters }, { status: 201 });
 }
 
 export async function DELETE(req: NextRequest, props: { params: Promise<{ id: string }> }) {

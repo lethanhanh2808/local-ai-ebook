@@ -13,6 +13,7 @@ import { pickBestBuiltInVoice, VIENEU_PROFILES } from '@/lib/ai/voice-selector';
 import { g2pMatch } from '@/lib/vi-text-qa';
 import { resolveBookPath } from '@/lib/storage';
 import { BUILTIN_VIENEU_NAMES } from '@/lib/tts/vieneu-voices';
+import { computeAliasConfidence, type FoldMethod } from '@/lib/ai/character-alias-confidence';
 
 const BUILTIN_VIENEU = new Set(BUILTIN_VIENEU_NAMES);
 
@@ -340,6 +341,12 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
         age?: string | null;
         gender?: string | null;
         tone?: string | null;
+        aliasDetails?: Array<{
+          alias: string;
+          confidence: number;
+          source: 'llm';
+          detectedInChapter: number | null;
+        }>;
       }> = [];
       for (const s of suggestions) {
         if (s.already_in_db) continue;  // skip dupes
@@ -362,14 +369,40 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
           }
           voiceId = v.id;
         }
+        // Phase 4.4 — compute per-alias confidence scores from the detector
+        // signals. The Python detector doesn't expose the fold method per
+        // alias, so we infer it from the alias shape: identical to the
+        // primary name → 'normalized' (high), contained in primary → 'llm'
+        // (low). This is a heuristic; future work could surface the actual
+        // fold method via the detector.
+        const primaryName = s.name.trim();
+        const rawAliases: string[] = (s.aliases ?? []).slice(0, 30);
+        const aliasDetails = rawAliases.map((alias: string) => {
+          const trimmed = alias.trim();
+          const foldMethod: FoldMethod = trimmed.toLowerCase() === primaryName.toLowerCase()
+            ? 'normalized'
+            : 'llm';
+          const confidence = computeAliasConfidence(primaryName, trimmed, {
+            aliasCount: rawAliases.length,
+            foldMethod,
+            sampleLinesCount: Array.isArray(s.sample_lines) ? s.sample_lines.length : 0,
+          });
+          return {
+            alias: trimmed,
+            confidence,
+            source: 'llm' as const,
+            detectedInChapter: null,
+          };
+        });
         toUpsert.push({
           name: s.name.slice(0, 120),
-          aliases: (s.aliases ?? []).slice(0, 30),
+          aliases: rawAliases,
           voiceId,
           role: s.role ?? 'supporting',
           age: s.age ?? null,
           gender: s.gender ?? null,
           tone: s.tone ?? null,
+          aliasDetails,
         });
       }
       if (toUpsert.length > 0) {

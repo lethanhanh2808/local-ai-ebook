@@ -435,7 +435,13 @@ export async function recordAppearances(args: {
 // ── Character upsert ──────────────────────────────────────────────────────
 
 /** Insert (or update aliases) a character by canonical name. Returns its
- *  id. Composite-unique (bookId, name) means duplicate inserts are safe. */
+ *  id. Composite-unique (bookId, name) means duplicate inserts are safe.
+ *
+ *  Phase 4.4: aliases now live in the CharacterAlias side table, not on
+ *  a JSON column. The character upsert here still takes a `string[]` for
+ *  backwards compatibility — we just sync the CharacterAlias rows
+ *  transactionally alongside the Character upsert.
+ */
 export async function ensureCharacter(args: {
   bookId: string;
   name: string;
@@ -443,51 +449,81 @@ export async function ensureCharacter(args: {
   gender?: 'male' | 'female' | null;
   role?: 'main' | 'supporting' | 'minor' | 'crowd';
 }): Promise<{ id: string; created: boolean }> {
-  const existing = await prisma.character.findUnique({
-    where: { bookId_name: { bookId: args.bookId, name: args.name } },
-  });
-  if (existing) {
-    // Only update fields that the LLM provided AND the existing row has no
-    // user-locked value for. We treat the existing 'gender' / 'role' as
-    // authoritative; merge new aliases though.
-    const mergedAliases = mergeAliasLists(existing.aliases, args.aliases);
-    const data: { aliases?: string; gender?: string; role?: string } = {};
-    if (mergedAliases.changed) data.aliases = mergedAliases.value ?? undefined;
-    if (args.gender && !existing.gender) data.gender = args.gender;
-    if (args.role && existing.role === 'supporting') data.role = args.role;
-    if (Object.keys(data).length > 0) {
-      await prisma.character.update({ where: { id: existing.id }, data });
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.character.findUnique({
+      where: { bookId_name: { bookId: args.bookId, name: args.name } },
+      include: { aliases: true },
+    });
+    if (existing) {
+      // Only update fields that the LLM provided AND the existing row has no
+      // user-locked value for. We treat the existing 'gender' / 'role' as
+      // authoritative; merge new aliases though.
+      const existingAliasNames = existing.aliases.map((a) => a.alias);
+      const incoming = args.aliases ?? [];
+      const toAdd = mergeAliasLists(existingAliasNames, incoming);
+      if (toAdd.length > 0) {
+        for (const alias of toAdd) {
+          await tx.characterAlias.upsert({
+            where: { characterId_alias: { characterId: existing.id, alias } },
+            update: {},
+            create: {
+              characterId: existing.id,
+              alias,
+              confidence: 1.0,
+              source: 'user',
+            },
+          });
+        }
+      }
+      const data: { gender?: string; role?: string } = {};
+      if (args.gender && !existing.gender) data.gender = args.gender;
+      if (args.role && existing.role === 'supporting') data.role = args.role;
+      if (Object.keys(data).length > 0) {
+        await tx.character.update({ where: { id: existing.id }, data });
+      }
+      return { id: existing.id, created: false };
     }
-    return { id: existing.id, created: false };
-  }
-  const row = await prisma.character.create({
-    data: {
-      bookId: args.bookId,
-      name: args.name,
-      aliases: args.aliases ? JSON.stringify(args.aliases) : null,
-      gender: args.gender ?? null,
-      role: args.role ?? 'supporting',
-    },
+    const row = await tx.character.create({
+      data: {
+        bookId: args.bookId,
+        name: args.name,
+        gender: args.gender ?? null,
+        role: args.role ?? 'supporting',
+      },
+    });
+    if (args.aliases && args.aliases.length > 0) {
+      for (const alias of args.aliases) {
+        const trimmed = alias.trim();
+        if (!trimmed) continue;
+        await tx.characterAlias.create({
+          data: {
+            characterId: row.id,
+            alias: trimmed,
+            confidence: 1.0,
+            source: 'user',
+          },
+        });
+      }
+    }
+    return { id: row.id, created: true };
   });
-  return { id: row.id, created: true };
 }
 
-/** Merge two JSON-string alias lists into a deduplicated, order-preserving
- *  string array. Returns the JSON string + a `changed` flag. */
-function mergeAliasLists(existing: string | null, incoming: string[] | undefined) {
-  const ex = parseAliases(existing);
-  const inc = incoming ?? [];
-  if (inc.length === 0) return { value: existing ?? null, changed: false };
-  const seen = new Set(ex);
-  const merged = [...ex];
-  for (const a of inc) {
+/** Phase 4.4 — return the deduped subset of `incoming` aliases that
+ *  aren't already on the character. The caller uses this to write only
+ *  new CharacterAlias rows (existing ones are preserved with their
+ *  confidence + source). Order is preserved. */
+function mergeAliasLists(existing: string[], incoming: string[] | undefined): string[] {
+  if (!incoming || incoming.length === 0) return [];
+  const seen = new Set(existing);
+  const out: string[] = [];
+  for (const a of incoming) {
     const t = a.trim();
     if (!t || seen.has(t)) continue;
     seen.add(t);
-    merged.push(t);
+    out.push(t);
   }
-  const newJson = JSON.stringify(merged);
-  return { value: newJson, changed: newJson !== (existing ?? '') };
+  return out;
 }
 
 function parseAliases(s: string | null | undefined): string[] {
@@ -514,13 +550,13 @@ export async function resolveCharacterIds(
   // why we can't rely on `mode: 'insensitive'`. Do it in app code instead.
   const characters = await prisma.character.findMany({
     where: { bookId },
-    select: { id: true, name: true, aliases: true },
+    select: { id: true, name: true, aliases: { select: { alias: true } } },
   });
   const byName = new Map<string, string>();
   const byAlias = new Map<string, string>();
   for (const c of characters) {
     byName.set(normKey(c.name), c.id);
-    for (const a of parseAliases(c.aliases)) byAlias.set(normKey(a), c.id);
+    for (const a of c.aliases) byAlias.set(normKey(a.alias), c.id);
   }
   const out: Record<string, string | null> = {};
   for (const n of names) {
@@ -699,7 +735,7 @@ export async function getCharacterBible(bookId: string): Promise<CharacterBibleV
   return {
     bookId,
     characters: characters.map((c) => ({
-      id: c.id, name: c.name, aliases: parseAliases(c.aliases),
+      id: c.id, name: c.name, aliases: c.aliases.map((a) => a.alias),
     })),
     profiles: Object.fromEntries(
       profiles.map((p) => [p.characterId, {

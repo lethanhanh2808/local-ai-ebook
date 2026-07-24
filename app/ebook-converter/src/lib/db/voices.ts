@@ -96,25 +96,30 @@ export interface CreateCharacterInput {
 export async function listCharacters(bookId: string) {
   const chars = await prisma.character.findMany({
     where: { bookId },
-    include: { voice: true },
+    include: {
+      voice: true,
+      aliases: { orderBy: { alias: 'asc' } },
+    },
     orderBy: { name: 'asc' },
   });
   return chars.map((c) => ({
     ...c,
-    aliases: parseAliases(c.aliases),
+    // Phase 4.4: aliases are now a structured array of rows from
+    // CharacterAlias. Wire shape (preserved for existing consumers):
+    //   aliases: string[]                      — just the strings
+    //   aliasDetails: { alias, confidence, source, detectedInChapter? }[]
+    // Existing callers that iterate `c.aliases` (CharacterDetection,
+    // VoicePanel) keep working unchanged. New code (CharacterMergeSplitPanel)
+    // reads `aliasDetails` for confidence badges.
+    aliases: c.aliases.map((a) => a.alias),
+    aliasDetails: c.aliases.map((a) => ({
+      id: a.id,
+      alias: a.alias,
+      confidence: a.confidence,
+      source: a.source,
+      detectedInChapter: a.detectedInChapter ?? null,
+    })),
   }));
-}
-
-function parseAliases(raw: string | null): string[] {
-  if (!raw) return [];
-  try {
-    const value: unknown = JSON.parse(raw);
-    return Array.isArray(value)
-      ? value.filter((alias): alias is string => typeof alias === 'string' && alias.trim().length > 0)
-      : [];
-  } catch {
-    return [];
-  }
 }
 
 export async function upsertCharacters(
@@ -131,6 +136,16 @@ export async function upsertCharacters(
     /** Detected tone (e.g. calm|cheerful|cold|mysterious|warm). Persisted
      * so the picker stays consistent across sessions. */
     tone?: string | null;
+    /** Per-alias confidence + source. Phase 4.4 — optional. When provided,
+     *  each entry writes a CharacterAlias row with the given confidence &
+     *  source instead of the default (1.0 / 'user'). The string-array
+     *  `aliases` is still required for back-compat. */
+    aliasDetails?: Array<{
+      alias: string;
+      confidence?: number;
+      source?: 'user' | 'llm' | 'merge' | 'legacy';
+      detectedInChapter?: number | null;
+    }>;
   }>,
 ) {
   const requestedVoiceIds = [...new Set(
@@ -145,30 +160,89 @@ export async function upsertCharacters(
       throw new Error('One or more character voices do not belong to this book');
     }
   }
-  // Use upsert pattern; idempotent.
+  // Phase 4.4 — alias write-through. For each character, write/update the
+  // matching CharacterAlias rows in addition to the Character row itself.
+  // The transaction wrapper ensures the alias rows land atomically with
+  // the roster change.
   const ops = characters.map((c) =>
-    prisma.character.upsert({
-      where: { bookId_name: { bookId, name: c.name } },
-      create: {
-        bookId,
-        name: c.name,
-        aliases: c.aliases ? JSON.stringify(c.aliases) : null,
-        voiceId: c.voiceId ?? null,
-        role: c.role ?? 'supporting',
-        age: c.age ?? null,
-        gender: c.gender ?? null,
-        tone: c.tone ?? null,
-      },
-      update: {
-        ...(c.aliases ? { aliases: JSON.stringify(c.aliases) } : {}),
-        ...(c.voiceId !== undefined ? { voiceId: c.voiceId } : {}),
-        ...(c.role ? { role: c.role } : {}),
-        ...(c.age ? { age: c.age } : {}),
-        // For gender/tone, only overwrite when an actual value is provided
-        // (not 'unknown'/null) so re-runs don't blank out earlier detections.
-        ...(c.gender && c.gender !== 'unknown' ? { gender: c.gender } : {}),
-        ...(c.tone && c.tone !== 'unknown' ? { tone: c.tone } : {}),
-      },
+    prisma.$transaction(async (tx) => {
+      const character = await tx.character.upsert({
+        where: { bookId_name: { bookId, name: c.name } },
+        create: {
+          bookId,
+          name: c.name,
+          voiceId: c.voiceId ?? null,
+          role: c.role ?? 'supporting',
+          age: c.age ?? null,
+          gender: c.gender ?? null,
+          tone: c.tone ?? null,
+        },
+        update: {
+          ...(c.voiceId !== undefined ? { voiceId: c.voiceId } : {}),
+          ...(c.role ? { role: c.role } : {}),
+          ...(c.age ? { age: c.age } : {}),
+          // For gender/tone, only overwrite when an actual value is provided
+          // (not 'unknown'/null) so re-runs don't blank out earlier detections.
+          ...(c.gender && c.gender !== 'unknown' ? { gender: c.gender } : {}),
+          ...(c.tone && c.tone !== 'unknown' ? { tone: c.tone } : {}),
+        },
+      });
+
+      // Sync CharacterAlias rows.
+      if (c.aliases && c.aliases.length > 0) {
+        // Build a per-alias map of caller-provided confidence + source
+        // (from aliasDetails) so we can write per-row scores. Falls back
+        // to (1.0, 'user') for aliases not present in aliasDetails.
+        const detailMap = new Map(
+          (c.aliasDetails ?? []).map((d) => [d.alias.trim().toLowerCase(), d]),
+        );
+        for (const alias of c.aliases) {
+          const trimmed = alias.trim();
+          if (!trimmed) continue;
+          const lower = trimmed.toLowerCase();
+          const detail = detailMap.get(lower);
+          const confidence = typeof detail?.confidence === 'number'
+            ? Math.max(0, Math.min(1, detail.confidence))
+            : 1.0;
+          const source = detail?.source ?? 'user';
+          const detectedInChapter = detail?.detectedInChapter ?? null;
+
+          // Upsert by (characterId, alias) — uses the unique index.
+          // delete + create pattern is needed because upsert needs a where
+          // on a unique field, and the upsert shortcut with raw SQL would
+          // duplicate the index logic.
+          const existing = await tx.characterAlias.findUnique({
+            where: { characterId_alias: { characterId: character.id, alias: trimmed } },
+          });
+          if (existing) {
+            // Only update confidence + source if the caller actually
+            // provided them — never overwrite a user-locked alias with a
+            // blank/default entry.
+            if (detail) {
+              await tx.characterAlias.update({
+                where: { id: existing.id },
+                data: {
+                  confidence,
+                  source,
+                  ...(detectedInChapter != null ? { detectedInChapter } : {}),
+                },
+              });
+            }
+          } else {
+            await tx.characterAlias.create({
+              data: {
+                characterId: character.id,
+                alias: trimmed,
+                confidence,
+                source,
+                detectedInChapter,
+              },
+            });
+          }
+        }
+      }
+
+      return character;
     }),
   );
   return Promise.all(ops);

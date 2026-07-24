@@ -144,7 +144,6 @@ model Character {
   id        String   @id @default(uuid())
   bookId    String
   name      String // character name as it appears in the text (e.g. "Linh")
-  aliases   String? // JSON: string[] – alternative names / honorifics the same character uses
   voiceId   String? // null = use book's default voice
   notes     String?
   // ── Character role (for common-voice routing) ──────────────────────────
@@ -172,17 +171,56 @@ model Character {
   book  Book   @relation(fields: [bookId], references: [id], onDelete: Cascade)
   voice Voice? @relation(fields: [voiceId], references: [id], onDelete: SetNull)
   // Inverse relations — Character Bible (see below). Owned by CharacterProfile
-  // (1:1), CharacterChapterAppearance (1:N). CharacterRelationship has its
-  // own (bookId, fromCharId, toCharId) keys and doesn't need Character refs.
+  // (1:1), CharacterChapterAppearance (1:N). CharacterAlias (1:N) holds the
+  // per-alias confidence + source tracking; the legacy JSON `aliases` column
+  // was retired in migration 20260724000000_add_character_alias_confidence.
+  // CharacterRelationship has its own (bookId, fromCharId, toCharId) keys
+  // and doesn't need Character refs.
 
   profile           CharacterProfile?
   appearances       CharacterChapterAppearance[]
+  aliases           CharacterAlias[]
   relationshipsFrom CharacterRelationship[]      @relation("RelationshipFrom")
   relationshipsTo   CharacterRelationship[]      @relation("RelationshipTo")
 
   @@unique([bookId, name])
   @@index([bookId])
   @@index([bookId, role])
+}
+
+// ── Character alias table ────────────────────────────────────────────────────
+// Per-alias row for a Character. Replaces the legacy `Character.aliases`
+// JSON-string column with structured rows so we can track the alias source
+// (user-edited vs LLM-detected vs merged-in) AND a confidence score that
+// drives the "needs review" badge in the merge/split UI.
+//
+// Migration 20260724000000_add_character_alias_confidence created this
+// table, backfilled the existing JSON aliases as `source='legacy'`,
+// `confidence=1.0`, then dropped the legacy JSON column.
+model CharacterAlias {
+  id                String   @id @default(uuid())
+  characterId       String
+  alias             String
+  // 0..1. LLM-detected aliases arrive lower than user-edited ones; the
+  // alias-confidence helper scores based on the detector's fold method
+  // (exact > substring > levenshtein > llm-only) plus a sampleLines bonus.
+  confidence        Float    @default(1.0)
+  // 'user' (manually added or split-confirmed) | 'llm' (detected by Python
+  // character_detector.py) | 'merge' (absorbed from another character via
+  // /api/library/[id]/characters/merge) | 'legacy' (backfilled from the
+  // retired JSON column).
+  source            String   @default("user")
+  // Optional chapter index where the alias was first detected. Drives the
+  // "introduced in chapter N" tooltip in the UI.
+  detectedInChapter Int?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@unique([characterId, alias])
+  @@index([characterId])
+  @@index([source, confidence])
 }
 
 // ── Character Bible (LLM-driven character knowledge base) ──────────────────

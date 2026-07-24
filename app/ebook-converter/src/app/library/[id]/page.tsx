@@ -13,6 +13,7 @@ import { getBook } from '@/lib/db/books';
 import { IllustrationsPanel } from '@/components/library/IllustrationsPanel';
 import { WatermarksPanel } from '@/components/library/WatermarksPanel';
 import { TitleViEditor } from '@/components/library/TitleViEditor';
+import { CharacterMergeSplitPanel } from '@/components/library/CharacterMergeSplitPanel';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Card } from '@/components/ui/card';
 import { buttonClasses } from '@/components/ui/button';
@@ -124,6 +125,8 @@ export default async function BookDetailPage(props: { params: Promise<{ id: stri
       </div>
 
       <WatermarksPanel bookId={book.id} />
+
+      <CharacterMergeSplitPanel bookId={book.id} />
     </div>
   );
 }

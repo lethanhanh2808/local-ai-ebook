@@ -257,18 +257,52 @@ Wrap Calibre's `ebook-convert` for PDF/DOCX/MOBI/AZW3 → EPUB. New route; new S
 
 ### 4.4 Character merge/split UI with confidence review
 
-> **Status:** ⬜ Pending
+> **Status:** ✅ Done (Phase 4.4, 2026-07-24)
 > **Effort:** 1-2 days
-> **Files:** `app/ebook-converter/src/components/library/CharacterMergePanel.tsx` (new), 2 new API routes
+> **Files:** see file list below
 
-The Character Bible already tracks per-character confidence. Add a UI:
+The Character Bible now has per-alias confidence. The UI exposes all three operations (merge / split / alias edit) behind a single panel with three tabs, driven by a new `CharacterAlias` Prisma side table that replaces the legacy `Character.aliases` JSON column.
 
-- A "needs review" badge for low-confidence aliases.
-- A merge flow: select two characters, see the unified preview, confirm.
-- A split flow: select a character, see its aliases, mark which are wrong.
-- Persist via existing `BookCharacterBible` Prisma model.
+**Implementation details:**
 
-**Acceptance:** Two new API routes (`/api/library/[id]/characters/merge`, `/api/library/[id]/characters/split`); new UI panel; existing 195/195 JS tests still pass.
+- **Schema migration** — `prisma/migrations/20260724000000_add_character_alias_confidence/migration.sql` creates the `CharacterAlias` side table, backfills from the legacy JSON column via `json_each()`, then drops the JSON column in the same migration. UUIDs are synthesised in SQL via `lower(hex(randomblob(...)))` since SQLite has no native UUID type.
+- **Confidence helper** — `src/lib/ai/character-alias-confidence.ts` computes per-alias scores. Bases: `exact/normalized → 0.95`, `substring → 0.85`, `levenshtein → 0.75`, `llm → 0.6`. Modifiers: sample-lines bonus capped at +0.20, crowding decay ×0.85 per alias beyond the third. Self-alias short-circuits to 1.0 (bypasses bonus + decay). Output is clamped to [0, 1] and rounded to 2dp. Threshold constants `LOW_CONFIDENCE_THRESHOLD=0.6`, `HIGH_CONFIDENCE_THRESHOLD=0.8` drive the badge tiers via `classifyAliasScore()`.
+- **DB helpers** — `src/lib/db/characters.ts` exports `mergeCharacters()` (alias reassignment with confidence-based dedup + caller overrides, appearance summing, relationship rewiring, profile absorption on conflict) and `splitCharacter()` (name-collision check, alias move with `source='user'`). Both return a discriminated `CharacterMutationResult<T>` for clean HTTP error mapping.
+- **Write-through** — `src/lib/db/voices.ts` `upsertCharacters` and `src/app/api/library/[id]/characters/detect/route.ts` now persist `CharacterAlias` rows (with confidence + source + detectedInChapter) instead of JSON-stringifying into the deleted column. The read path (`listCharacters`) aggregates aliases into both `aliases: string[]` (for legacy consumers) and `aliasDetails: {id, alias, confidence, source, detectedInChapter}[]` (for the new UI).
+- **API routes** —
+  - `POST /api/library/[id]/characters/merge` — `{survivorId, absorbedId, aliasResolutions?}`
+  - `POST /api/library/[id]/characters/split` — `{characterId, aliasesToMove[], newName, newRole?, newVoiceName?}`
+  - `PATCH /api/library/[id]/characters/[characterId]/aliases/[aliasId]` — `{confidence?, source?, alias?}` (used by the "Đánh dấu sai" button)
+  All three invalidate the audiobook cache via `setBookAudiobookStatus(..., 'none')` after a successful write.
+- **UI panel** — `src/components/library/CharacterMergeSplitPanel.tsx` mounted on `/library/[id]/page.tsx` below `<WatermarksPanel />`. Card header carries the "needs review" badge summing `pendingCount + lowConfidenceCount`. Three tabs (`<Tabs>` primitive):
+  - **Gộp (Merge)** — two `<CharacterSelect>` dropdowns, side-by-side `<CharacterSummary>`, per-shared-alias radio ("Giữ ở {survivor}" / "Giữ ở {absorbed}") defaulting to higher-confidence, `<Dialog>` confirm.
+  - **Tách (Split)** — `<CharacterSelect>` for source, per-alias checkboxes with `<ConfidenceBadge>` (green/amber/red by tier), `newName` input, role `<Select>`, `<Dialog>` confirm.
+  - **Aliases (review)** — collapsible `<details>` per character; per-alias confidence badge + "Đánh dấu sai" button → PATCH to `confidence=0, source='user'`.
+  All three tabs share a `refetchAll()` that re-pulls the character list + bible endpoint so badges update after each write.
+- **Tests** — 3 new vitest files. `character-alias-confidence.test.ts` (15 cases) covers each fold method, sample-lines bonus cap, crowding decay, self-alias short-circuit, clamping, rounding, tier classification. `character-merge-api.test.ts` (14 cases) covers merge happy path + every error branch (self-merge, survivor/absorbed not-found, profile-conflict, shared-alias default vs override) plus split (happy path, empty-aliases, name-collision, source-not-found) plus `patchCharacterAlias` (mark wrong, clamp confidence, alias-not-found). Total: **240/240 JS tests pass** (`npx tsc --noEmit` clean).
+
+**File list (new):**
+
+- `app/ebook-converter/prisma/migrations/20260724000000_add_character_alias_confidence/migration.sql`
+- `app/ebook-converter/src/lib/ai/character-alias-confidence.ts`
+- `app/ebook-converter/src/lib/db/characters.ts`
+- `app/ebook-converter/src/app/api/library/[id]/characters/merge/route.ts`
+- `app/ebook-converter/src/app/api/library/[id]/characters/split/route.ts`
+- `app/ebook-converter/src/app/api/library/[id]/characters/[characterId]/aliases/[aliasId]/route.ts`
+- `app/ebook-converter/src/components/library/CharacterMergeSplitPanel.tsx`
+- `app/ebook-converter/src/tests/character-alias-confidence.test.ts`
+- `app/ebook-converter/src/tests/character-merge-api.test.ts`
+
+**File list (modified):**
+
+- `app/ebook-converter/prisma/schema.prisma` — add `CharacterAlias` + back-relation; drop `Character.aliases` JSON
+- `app/ebook-converter/src/app/api/library/[id]/characters/route.ts` — enriched wire shape (`aliasDetails`)
+- `app/ebook-converter/src/app/api/library/[id]/characters/detect/route.ts` — write-through with computed confidence
+- `app/ebook-converter/src/lib/db/voices.ts` — `upsertCharacters` syncs `CharacterAlias` rows
+- `app/ebook-converter/src/lib/db/character-bible.ts` — `ensureCharacter` / `mergeAliasLists` / `resolveCharacterIds` use the side table
+- `app/ebook-converter/src/app/library/[id]/page.tsx` — mount `<CharacterMergeSplitPanel />`
+
+**Acceptance:** ✅ Two new API routes (`/merge`, `/split`) + a third (`/aliases/[aliasId]`) for per-alias edits; new UI panel; **240/240 JS tests pass** (vs. the 195/195 baseline in the original plan).
 
 ### 4.5 M4B audiobook export
 
