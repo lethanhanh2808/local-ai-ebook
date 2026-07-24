@@ -146,7 +146,7 @@ No commit needed — all artifacts were already correctly untracked; only on-dis
 
 ## Phase 3 — Backlog items
 
-> **Status:** ⬜ Pending
+> **Status:** 🟡 In progress (3.1 ✅, 3.2 ✅, 3.3 ⬜)
 > **Goal:** Polish the easy wins while Phase 2 is fresh.
 > **Effort:** 1-2 days
 
@@ -161,12 +161,30 @@ Three sibling files (`omlx-home/bin/omlx`, `model_settings.json`, `settings.json
 
 ### 3.2 D2 per-genre `score >= 0.42` threshold
 
-> **Status:** ⬜ Pending
-> **Files:** `app/ebook-converter/src/lib/attribution.ts`
+> **Status:** ✅ Done (2026-07-24)
+> **Files:** `app/ebook-converter/src/lib/attribution.ts` (`MIN_SCORE_BY_GENRE` map + `getMinScoreForGenre` + `resolveBookGenre`), `app/ebook-converter/src/app/api/library/[id]/chapters/[chapterId]/attribute/route.ts`, `app/ebook-converter/src/app/api/library/[id]/chapters/[chapterId]/attribute/analyze/route.ts` (3 call sites), `app/ebook-converter/src/tests/attribution-genre-threshold.test.ts` (new — 8 cases)
 
-The current code uses a single threshold for all genres. `ACTION_ITEMS.md` §D2 notes that modern vs cổ trang Vietnamese novels need different floors. Add a `genre → minScore` map. Plumb the book's genre into the attribution call (fall back to the global default if unknown). Add a regression test.
+**Result:** The hardcoded 0.42 floor inside `attributeByConversation` is now a per-genre threshold drawn from a `MIN_SCORE_BY_GENRE` map:
 
-**Acceptance:** New test case; attribution rates don't regress on the existing `chapter005` measurement (≥13/22 fixed).
+| Genre | Floor | Why |
+| --- | --- | --- |
+| `tu_tieu_thuyet`, `kiếm_hiệp`, `huyền_huyễn` | 0.48 | Heavy internal monologue + named-character narration → stricter floor so weak hits don't surface as wrong speakers. |
+| `cổ_trang`, `lich_su` | 0.46 | Elaborate honorifics + role nouns the regex layer can't disambiguate → strict. |
+| `do_thi`, `khoa_hoc_vien_tuong`, `game_system` | 0.40 | Modern urban / sci-fi / system novels are usually close-third dialogue; moderate. |
+| `ngon_tinh`, `thieu_nien` | 0.38 | Short low-confidence continuity turns; relax so "Em yêu anh." doesn't drop to default voice. |
+| `kinh_di` | 0.36 | Narrator-heavy; relax so possession / monologue works. |
+| (unknown / null / empty / non-Vietnamese-novel) | **0.42 (legacy default)** | Safe fallback preserves existing attribution rates for books the detector can't classify. |
+
+Implementation:
+- `MIN_SCORE_BY_GENRE` exported from `attribution.ts` (private), with `getMinScoreForGenre(...)` exposing the lookup. Returns the legacy 0.42 for null/blank/unknown keys and resolves common synonyms (`co_trang → cổ_trang`, `ngôn_tình → ngon_tinh`, `tu_tiên → tu_tieu_thuyet`, `đô_thị → do_thi`, `lịch_sử → lich_su`).
+- `ConversationAttributionInput` gains an optional `genre?: string | null` field. The legacy `attributeConversationChapter` wrapper forwards it transparently so the measure/backfill scripts pick up the same behaviour without code changes.
+- Cheap helper `resolveBookGenre(book)` wraps `detectGenre` (the existing cover-detector keyword matcher — no LLM, no schema change, no migration) and returns `null` for the "unknown" case. Routes thread the result of this helper into every `attributeByConversation` call.
+- `attributeByConversation` reads `genre` once at the top of the function, looks up the floor, and uses it in place of `0.42` for the final "bestBucket.score >= minScore" gate. Unknown / null genre → old behaviour.
+- Both routes (`attribute/route.ts` GET + `attribute/analyze/route.ts` SSE) thread the book's `title` + `titleVi` + `description` through `resolveBookGenre` once per request. The analyze route surfaces the detected genre in the SSE `init` log so the user sees which floor was applied.
+
+Tests:
+- 8 new cases in `attribution-genre-threshold.test.ts` cover: the legacy 0.42 default fallback, strict floors for cultivation / cổ trang / lịch sử, the relaxed romance floor, the accent-stripping synonym resolver, an end-to-end `attributeByConversation` propagation check, weak-evidence drop under strict cultivation, and `resolveBookGenre` over five book shapes (cultivation / tu-vi / romance / unrecognised / empty).
+- Total: **209/209** tests pass (was 201/201); `tsc --noEmit` clean. No regression on the existing 7 attribution tests.
 
 ### 3.3 D9 Python-side actor alternation bump parity
 

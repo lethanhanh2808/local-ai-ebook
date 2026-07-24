@@ -58,6 +58,7 @@ import {
   attributeByLLMWholeChapter,
   attributeByRegex,
   computeStats,
+  resolveBookGenre,
   sliceParagraphs,
 } from '@/lib/attribution';
 
@@ -244,6 +245,20 @@ export async function POST(
         let mtime = 0;
         try { mtime = Math.floor(fs.statSync(filePath).mtimeMs); } catch { /* keep 0 */ }
 
+        // Per-genre attribution floor (ACTION_ITEMS D2) — threaded from
+        // the book's title + description via the cheap `resolveBookGenre`
+        // keyword matcher. Falls back to the legacy 0.42 global default
+        // when the genre is undetectable (covers most existing books).
+        const genre = resolveBookGenre({
+          title: book.title,
+          titleVi: book.titleVi,
+          description: book.description,
+        });
+        if (genre) {
+          log(controller, `Genre: ${genre} (per-genre floor applied)`, 'init',
+            { meta: { genre } });
+        }
+
         let chars = await listCharacters(params.id);
         let knownNames = chars.flatMap((c) => [c.name, ...(c.aliases ?? [])]);
         const paragraphs = sliceParagraphs(html);
@@ -277,6 +292,7 @@ export async function POST(
         // ── Phase 5: local baseline fusion ──────────────────────────────
         const localBaseline = attributeByConversation({
           paragraphs, characters: characterContext, regexOut,
+          genre,
         });
         const localResolved = Object.values(localBaseline).filter((a) => a.speaker).length;
         log(controller, `Local fusion: ${localResolved} đoạn gán (regex + stateful)`, 'local');
@@ -461,7 +477,7 @@ export async function POST(
         // ── Phase 7: fuse + cache + stats ───────────────────────────────
         const merged = attributeByConversation({
           paragraphs, characters: characterContext,
-          regexOut, llmOut,
+          regexOut, llmOut, genre,
         });
         const mergedResolved = Object.values(merged).filter((a) => a.speaker).length;
         log(controller, `Fuse: ${mergedResolved}/${paragraphs.length} đoạn gán hợp nhất (regex + local + LLM)`, 'fuse');

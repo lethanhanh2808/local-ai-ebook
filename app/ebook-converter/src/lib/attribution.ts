@@ -24,6 +24,7 @@
 //
 import { chatJSON } from '@/lib/ai';
 import { nameCanonical, g2pMatch } from '@/lib/vi-text-qa';
+import { detectGenre } from '@/lib/covers/genre-detector';
 import type {
   AttributionEvidence,
   ChapterAttributionMap,
@@ -805,9 +806,122 @@ export interface ConversationAttributionInput {
   characters: CharacterLite[];
   regexOut?: ChapterAttributionMap;
   llmOut?: ChapterAttributionMap;
+  /**
+   * Optional Vietnamese-novel genre tag (see `VietnameseGenre` in
+   * `@/lib/covers/genre-detector`). Used to pick a per-genre minimum
+   * score floor so action-heavy books don't over-collapse matches
+   * while dialogue-heavy books get a more permissive threshold.
+   * Unknown / missing values fall back to the global default.
+   * Accepted loosely so callers can pass any string without losing
+   * the attribution to runtime errors.
+   */
+  genre?: string | null;
   /** Final state from an earlier chapter. The caller is responsible for
    * rejecting future/stale or parser-version-mismatched snapshots. */
   seedState?: ConversationStateSnapshot;
+}
+
+// ── Per-genre minimum-score floor (ACTION_ITEMS D2) ─────────────────────
+//
+// The previous code used a single 0.42 floor regardless of genre. In
+// practice different Vietnamese-novel genres need different floors:
+//   • Cultivation / tu tiểu thuyết uses long internal monologues and
+//     named-character voice narration — matches need to clear a higher
+//     bar so we don't surface weak regex hits as wrong-speaker lines.
+//   • Modern romance / ngôn tình packs short, low-confidence
+//     continuity turns ("Em yêu anh.") into rapid ping-pong dialogue.
+//     A high floor would drop real turns to "default voice" and lose
+//     speaker attribution rate; a slightly lower floor is safer.
+//   • Cổ trang / lịch sử has elaborate honorifics + role nouns that
+//     the regex layer can't always disambiguate, so we want a stricter
+//     floor.
+//
+// Callers pass `genre` as a freeform string (we don't import the
+// VietnameseGenre type to keep attribution.ts independent of the cover
+// stack). Lookup keys are normalised to lowercase; missing / unknown
+// keys fall back to DEFAULT_MIN_SCORE so a database row without a genre
+// column can't silently crash attribution.
+const DEFAULT_MIN_SCORE = 0.42;
+const MIN_SCORE_BY_GENRE: Record<string, number> = {
+  // Cultivation / wuxia / xianxia — heavy internal monologue and named-
+  // character narration → stricter floor so weak hits don't surface.
+  tu_tieu_thuyet: 0.48,
+  kiếm_hiệp: 0.48,
+  huyền_huyễn: 0.48,
+  // Historical / cổ trang / cung đấu — elaborate honorifics, strict.
+  cổ_trang: 0.46,
+  lich_su: 0.46,
+  // Romance — short low-confidence continuity turns; relax floor.
+  ngon_tinh: 0.38,
+  // Modern urban / đô thị — usually close-third dialogue; moderate.
+  do_thi: 0.4,
+  // Lit-RPG / system — narration is sparse, dialogue direct.
+  game_system: 0.4,
+  // Horror — narrator heavy; relax so possession / monologue works.
+  kinh_di: 0.36,
+  // Sci-fi / mecha — direct speech; modest.
+  khoa_hoc_vien_tuong: 0.4,
+  // School / coming-of-age; dialogue-heavy; relax slightly.
+  thieu_nien: 0.38,
+};
+
+function normaliseGenreKey(genre: string | null | undefined): string | null {
+  if (!genre) return null;
+  const trimmed = genre.trim();
+  if (!trimmed) return null;
+  return trimmed.toLowerCase();
+}
+
+export function getMinScoreForGenre(
+  genre: string | null | undefined,
+): number {
+  const key = normaliseGenreKey(genre);
+  if (!key) return DEFAULT_MIN_SCORE;
+  if (key in MIN_SCORE_BY_GENRE) return MIN_SCORE_BY_GENRE[key]!;
+  // Try a few obvious synonyms that don't appear in the map verbatim.
+  if (key === 'tu_tien' || key === 'tu_tiên') return MIN_SCORE_BY_GENRE.tu_tieu_thuyet ?? DEFAULT_MIN_SCORE;
+  if (key === 'co_trang' || key === 'co_trạng') return MIN_SCORE_BY_GENRE.cổ_trang ?? DEFAULT_MIN_SCORE;
+  if (key === 'ngon_tinh' || key === 'ngôn_tình') return MIN_SCORE_BY_GENRE.ngon_tinh ?? DEFAULT_MIN_SCORE;
+  if (key === 'do_thi' || key === 'đô_thị') return MIN_SCORE_BY_GENRE.do_thi ?? DEFAULT_MIN_SCORE;
+  if (key === 'lich_su' || key === 'lịch_sử') return MIN_SCORE_BY_GENRE.lich_su ?? DEFAULT_MIN_SCORE;
+  return DEFAULT_MIN_SCORE;
+}
+
+export const ATTRIBUTION_MIN_SCORE_DEFAULT = DEFAULT_MIN_SCORE;
+
+/**
+ * Resolve the per-genre attribution floor for a book row. Routes thread the
+ * result of this helper into `attributeByConversation` so the global
+ * 0.42 default is replaced by a genre-specific threshold when the book's
+ * title/description actually carries a meaningful Vietnamese-novel signal.
+ *
+ * Cheap: it's a regex keyword pass (no LLM). Safe to call once per
+ * attribution request — the routing layer doesn't cache the result because
+ * the cost is <1ms and chapter attribution is gated by an mtime cache one
+ * layer up.
+ *
+ * The argument shape is intentionally narrow so callers (route handlers)
+ * can pass a hydrated `Book` row without dragging in the DB types.
+ */
+export function resolveBookGenre(book: {
+  title: string;
+  titleVi?: string | null;
+  description?: string | null;
+}): string | null {
+  if (!book || !book.title) return null;
+  try {
+    const detection = detectGenre({
+      title: book.title,
+      titleVi: book.titleVi ?? null,
+      description: book.description ?? null,
+    });
+    if (!detection || detection.genre === 'unknown') return null;
+    return detection.genre;
+  } catch {
+    // Detection is best-effort: any failure (missing keyword table,
+    // malformed description, etc.) defaults to the global floor.
+    return null;
+  }
 }
 
 export interface ConversationChapterResult {
@@ -1282,9 +1396,15 @@ export function attributeByConversation(
     characters,
     regexOut = {},
     llmOut = {},
+    genre,
   } = input;
   const ctx = buildConversationContext(characters);
   if (ctx.profiles.length === 0) return mergeAttribution(regexOut, llmOut);
+  // Per-genre minimum-score floor (ACTION_ITEMS D2). Callers pass the
+  // book's VietnameseGenre tag; unknown / missing falls back to the
+  // global default so the legacy behaviour is preserved when no genre
+  // is wired in.
+  const minScore = getMinScoreForGenre(genre);
 
   const state = createConversationState();
   const out: ChapterAttributionMap = {};
@@ -1444,7 +1564,7 @@ export function attributeByConversation(
       }
     }
 
-    if (bestName && bestBucket && bestBucket.score >= 0.42) {
+    if (bestName && bestBucket && bestBucket.score >= minScore) {
       const source = sourceForBucket(bestBucket);
       const evidence = bestBucket.evidence
         .sort((a, b) => b.weight - a.weight)
@@ -1488,6 +1608,10 @@ export function attributeConversationChapter(input: {
   characters: CharacterLite[];
   regexOut?: ChapterAttributionMap;
   llmOut?: ChapterAttributionMap;
+  /** Optional per-genre floor lookup key (ACTION_ITEMS D2). Forwarded
+   *  to `attributeByConversation` so the legacy wrapper shape picks up
+   *  the new behaviour transparently. */
+  genre?: string | null;
   /** Legacy parameter — accepted but ignored. Conversation-state carry-over
    *  happens through the BookConversationState row in the route handler. */
   seedState?: unknown;
@@ -1497,6 +1621,7 @@ export function attributeConversationChapter(input: {
     characters: input.characters,
     regexOut: input.regexOut ?? {},
     llmOut: input.llmOut ?? {},
+    genre: input.genre,
   });
   // Synthesize an empty snapshot — the measure script only persists when
   // --seed is set, and the real backfill logic lives in src/lib/db/

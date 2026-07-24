@@ -43,6 +43,7 @@ import {
   attributeByConversation,
   attributeByRegex,
   computeStats,
+  resolveBookGenre,
   sliceParagraphs,
 } from '@/lib/attribution';
 
@@ -115,6 +116,15 @@ export async function GET(
 
   // 6. Read-through cache. The computeFn runs the regex pipeline
   //    (no LLM — that's the /analyze route).
+  //    Per-genre floor (ACTION_ITEMS D2) — threaded from the book's title
+  //    + description via the cheap `resolveBookGenre` keyword matcher so
+  //    the legacy 0.42 default is now per-genre when the genre is
+  //    detectable from metadata.
+  const genre = resolveBookGenre({
+    title: book.title,
+    titleVi: book.titleVi,
+    description: book.description,
+  });
   const { payload, fromCache } = await getOrComputeAttribution(
     params.id,
     chapterIndex,
@@ -125,6 +135,7 @@ export async function GET(
         paragraphs,
         characters: characterContext,
         regexOut,
+        genre,
       });
     },
     ATTRIBUTION_VERSION,
