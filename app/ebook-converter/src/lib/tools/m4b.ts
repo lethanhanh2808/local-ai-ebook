@@ -152,9 +152,11 @@ export function buildFfMetadata(opts: {
 // ── Path validation ─────────────────────────────────────────────────────────
 
 /** Validate inputs and return a sanitized copy of opts with coverPath
- *  cleared if the cover file is missing or its path is outside the
- *  allowed roots (the cover is optional, so we silently fall back to
- *  an audio-only M4B rather than failing). */
+ *  cleared if the cover FILE is missing on disk (the cover is optional,
+ *  so a missing file silently falls back to an audio-only M4B). A
+ *  cover path that escapes the allowed roots is NOT silently dropped
+ *  — that would mask the same security event `ESAFEPATH` exists to
+ *  surface for audio paths. */
 function validateInputs(opts: M4BExportOptions): M4BExportOptions {
   const roots = pathRoots();
   const audioRoots = [roots.audiobooks];
@@ -185,12 +187,19 @@ function validateInputs(opts: M4BExportOptions): M4BExportOptions {
 
   let coverPath = opts.coverPath;
   if (coverPath) {
+    let safe: string;
     try {
-      const safe = assertWithinRoots(coverPath, coverRoots);
-      if (!existsSync(safe)) coverPath = undefined;
-    } catch {
-      coverPath = undefined;
+      safe = assertWithinRoots(coverPath, coverRoots);
+    } catch (err) {
+      if (err instanceof M4BExportError) throw err;
+      throw new M4BExportError(
+        `Cover path outside uploads/library root: ${coverPath}`,
+        'ESAFEPATH',
+      );
     }
+    // Path is in-root; only a missing FILE is silent-stripped (the cover
+    // is optional — audio still exports successfully).
+    if (!existsSync(safe)) coverPath = undefined;
   }
 
   return { ...opts, coverPath };
@@ -208,38 +217,40 @@ export async function exportM4B(opts: M4BExportOptions): Promise<M4BExportResult
     throw new M4BExportError('exportM4B: tmpDir is required', 'EUNKNOWN');
   }
 
-  // validateInputs may strip coverPath if missing or outside allowed roots.
-  // Use the returned sanitized copy from here on.
-  // eslint-disable-next-line no-param-reassign
-  opts = validateInputs(opts);
+  // validateInputs may strip coverPath if the cover file is missing on
+  // disk (a path-traversal rejection for the cover now throws ESAFEPATH
+  // synchronously rather than silently stripping — see validateInputs).
+  // Use the returned sanitized copy from here on; do NOT mutate the
+  // caller's opts (the route passes the same object elsewhere).
+  const safe = validateInputs(opts);
 
-  const binary = opts.binaryPath ?? 'ffmpeg';
-  const timeoutMs = opts.timeoutMs ?? 300_000;
+  const binary = safe.binaryPath ?? 'ffmpeg';
+  const timeoutMs = safe.timeoutMs ?? 300_000;
 
   // Use the override durations when provided (drift correction); otherwise
   // fall back to the per-chapter durationMs hints.
-  const durations = opts.durations ?? opts.chapters.map((c) => c.durationMs);
+  const durations = safe.durations ?? safe.chapters.map((c) => c.durationMs);
 
   const metaBody = buildFfMetadata({
-    title: opts.bookTitle,
-    artist: opts.author,
-    chapters: opts.chapters.map((ch, i) => ({
+    title: safe.bookTitle,
+    artist: safe.author,
+    chapters: safe.chapters.map((ch, i) => ({
       title: ch.title || `Chương ${i + 1}`,
       durationMs: durations[i] ?? ch.durationMs,
     })),
   });
-  const metaPath = `${opts.tmpDir}/metadata.txt`;
+  const metaPath = `${safe.tmpDir}/metadata.txt`;
   writeFileSync(metaPath, metaBody, 'utf8');
 
   // Build concat demuxer filelist. Lines are `file 'absolute/path'`.
   // We escape single quotes per the concat demuxer spec.
-  const fileLines = opts.chapters
+  const fileLines = safe.chapters
     .map((ch) => {
-      const safe = ch.audioPath.replace(/'/g, "'\\''");
-      return `file '${safe}'`;
+      const esc = ch.audioPath.replace(/'/g, "'\\''");
+      return `file '${esc}'`;
     })
     .join('\n');
-  const listPath = `${opts.tmpDir}/filelist.txt`;
+  const listPath = `${safe.tmpDir}/filelist.txt`;
   writeFileSync(listPath, fileLines + '\n', 'utf8');
 
   // Build the ffmpeg arg set. The cover presence shifts the input indices
@@ -253,12 +264,12 @@ export async function exportM4B(opts: M4BExportOptions): Promise<M4BExportResult
     '-i', listPath,                  // index 0: chapter audio
     '-i', metaPath,                  // index 1: chapter + global metadata
   ];
-  if (opts.coverPath) {
-    args.push('-i', opts.coverPath); // index 2: cover image
+  if (safe.coverPath) {
+    args.push('-i', safe.coverPath); // index 2: cover image
   }
   args.push('-map', '0:a');
   args.push('-map_metadata', '1');
-  if (opts.coverPath) {
+  if (safe.coverPath) {
     args.push('-map', '2:v');
     args.push('-c:v', 'copy');
     args.push('-disposition:v:0', 'attached_pic');
@@ -268,7 +279,7 @@ export async function exportM4B(opts: M4BExportOptions): Promise<M4BExportResult
   args.push('-ac', '1');
   args.push('-ar', '24000');
   args.push('-movflags', '+faststart');
-  args.push(opts.outputPath);
+  args.push(safe.outputPath);
 
   return new Promise<M4BExportResult>((resolve, reject) => {
     const proc = spawn(binary, args, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -307,10 +318,10 @@ export async function exportM4B(opts: M4BExportOptions): Promise<M4BExportResult
         stderrTail = (stderrTail + text).slice(-1024);
       }
       const now = Date.now();
-      if (opts.onLog && now - lastLogTs > 250) {
+      if (safe.onLog && now - lastLogTs > 250) {
         lastLogTs = now;
         const lastLine = text.split('\n').filter(Boolean).pop() ?? text;
-        opts.onLog(lastLine.slice(-200));
+        safe.onLog(lastLine.slice(-200));
       }
     });
 
@@ -327,10 +338,10 @@ export async function exportM4B(opts: M4BExportOptions): Promise<M4BExportResult
         return;
       }
       try {
-        const stat = statSync(opts.outputPath);
+        const stat = statSync(safe.outputPath);
         const totalDurMs = durations.reduce((s, d) => s + d, 0);
         resolve({
-          outputPath: opts.outputPath,
+          outputPath: safe.outputPath,
           bytes: stat.size,
           durationMs: totalDurMs,
         });

@@ -328,7 +328,8 @@ The Character Bible now has per-alias confidence. The UI exposes all three opera
 > - `app/ebook-converter/src/lib/tools/m4b.ts` (new — `buildFfMetadata`, `exportM4B`, `getActualDurations`, `exportM4BOnce`, `M4BExportError`)
 > - `app/ebook-converter/src/app/api/library/[id]/audiobook/m4b/route.ts` (new — GET handler)
 > - `app/ebook-converter/src/components/library/AudiobookPanel.tsx` (add `<Download>` button after "▶ Nghe audiobook")
-> - `app/ebook-converter/src/tests/m4b-export.test.ts` (new — 10 cases: 6 buildFfMetadata + 4 exportM4B)
+> - `app/ebook-converter/src/tests/m4b-export.test.ts` (new — 15 cases: 6 buildFfMetadata + 5 exportM4B + 3 getActualDurations + 1 boundary ordering)
+> - `app/ebook-converter/src/tests/m4b-route.test.ts` (new — 11 cases covering 404/409×4/200×2/error-mapping×4)
 
 Replace the "stream MP3" audiobook output with a single `.m4b` file that has chapter markers and embedded cover art. Requires `ffmpeg` (already in the project per `convertToMp3` in `src/worker/audiobook.ts`).
 
@@ -345,7 +346,12 @@ Replace the "stream MP3" audiobook output with a single `.m4b` file that has cha
 - **`-movflags +faststart`** — required for iOS progressive streaming in Apple Books.
 - **Filename sanitization** matches the per-chapter route at `src/app/api/library/[id]/audiobook/[chapterFile]/route.ts:55-57`: `[^\x20-\x7E]` → `_`, slice 80. UTF-8 preserved in FFMETADATA1 `title=` for in-player display.
 
-**Acceptance:** ✅ "Tải .m4b" button on the audiobook panel (rendered only when `summary.ready === summary.total && summary.total > 0`); the resulting `.m4b` opens in Apple Books / Voice / etc. with chapter markers visible and cover art embedded. 263/263 vitest + tsc clean. Smoke test verified end-to-end with real ffmpeg: AAC-LC stream + chapter markers with exact cumulative boundaries + `DISPOSITION:attached_pic=1` cover (Apple Books `covr` atom).
+**Acceptance:** ✅ "Tải .m4b" button on the audiobook panel (rendered only when `summary.ready === summary.total && summary.total > 0`); the resulting `.m4b` opens in Apple Books / Voice / etc. with chapter markers visible and cover art embedded. 278/278 vitest + tsc clean. Smoke test verified end-to-end with real ffmpeg: AAC-LC stream + chapter markers with exact cumulative boundaries + `DISPOSITION:attached_pic=1` cover (Apple Books `covr` atom).
+
+**Review fixes (2026-07-24):**
+- Cover `ESAFEPATH` no longer silently swallowed (now matches audio-path security posture: outside-root → throw, in-root-but-missing → silent strip).
+- `validateInputs` no longer mutates the caller's `opts` — internal hardening to prevent future caller-observation regressions.
+- `getActualDurations()` now has direct unit-test coverage (was only exercised indirectly via the route).
 
 ---
 

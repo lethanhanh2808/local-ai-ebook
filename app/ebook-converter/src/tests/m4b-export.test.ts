@@ -2,7 +2,7 @@
 //
 // Phase 4.5 of docs/NEXT_UP_PLAN.md — unit tests for the M4B export helper.
 //
-// Test plan (11 cases):
+// Test plan (12 cases):
 //   1. buildFfMetadata with empty chapters throws
 //   2. buildFfMetadata with one chapter emits ;FFMETADATA1 magic + START=0/END
 //   3. buildFfMetadata with three chapters uses cumulative START/END math
@@ -13,8 +13,10 @@
 //   7. exportM4B spawns ffmpeg with the correct arg set WITH cover
 //   8. exportM4B spawns ffmpeg with the correct arg set WITHOUT cover
 //   9. exportM4B throws M4BExportError{code:'ENOENT'} when spawn ENOENT fires
-//  10. exportM4B silently strips a missing cover (audio still exports)
-//  11. exportM4B throws M4BExportError{code:'EUNKNOWN'} when chapter missing
+//  10. exportM4B throws M4BExportError{code:'ESAFEPATH'} when cover path
+//      escapes uploads/library roots (security gate, not silent-strip)
+//  11. exportM4B silently strips a missing in-root cover (audio still exports)
+//  12. exportM4B throws M4BExportError{code:'EUNKNOWN'} when chapter missing
 //
 // The mocking pattern mirrors src/tests/calibre-probe.test.ts:36-61 — we
 // override node:fs.existsSync and node:child_process.spawn so the helper
@@ -144,7 +146,7 @@ vi.mock('node:child_process', async () => {
 //
 // Import AFTER the mocks so the helper sees them at module-init time.
 
-import { buildFfMetadata, exportM4B, M4BExportError } from '@/lib/tools/m4b';
+import { buildFfMetadata, exportM4B, getActualDurations, M4BExportError } from '@/lib/tools/m4b';
 
 beforeEach(() => {
   state.exists.truthy.clear();
@@ -318,13 +320,26 @@ describe('exportM4B', () => {
     await expect(exportM4B(baseOpts())).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('silently strips coverPath when the file does not exist (audio still exports)', async () => {
+  it('throws M4BExportError{code:"ESAFEPATH"} when coverPath escapes uploads/library roots', async () => {
+    // Path-traversal for the cover must surface as ESAFEPATH — same
+    // security event as for audio paths. Cover-strip is reserved for the
+    // cosmetic "file moved" case (in-root, just missing).
     state.exists.truthy.add(path.join(AUDIOBOOKS, 'foo', '001.mp3'));
     state.exists.truthy.add(path.join(AUDIOBOOKS, 'foo', '002.mp3'));
-    // Cover path is OUTSIDE the uploads/library roots so it would fail
-    // assertWithinRoots — we expect the helper to silently fall back to
-    // the no-cover branch rather than throwing ESAFEPATH.
-    await exportM4B({ ...baseOpts(), coverPath: '/nonexistent/cover.jpg' });
+    await expect(
+      exportM4B({ ...baseOpts(), coverPath: '/nonexistent/cover.jpg' }),
+    ).rejects.toMatchObject({ code: 'ESAFEPATH' });
+    // ffmpeg must NOT have been spawned — ESAFEPATH is a synchronous gate.
+    expect(state.spawn.calls).toBe(0);
+  });
+
+  it('silently strips coverPath when the in-root file is missing (audio still exports)', async () => {
+    state.exists.truthy.add(path.join(AUDIOBOOKS, 'foo', '001.mp3'));
+    state.exists.truthy.add(path.join(AUDIOBOOKS, 'foo', '002.mp3'));
+    // Cover path is INSIDE uploads root (passes assertWithinRoots) but
+    // the file does not exist on disk — we expect the silent-strip
+    // fallback (audio still exports) rather than throwing.
+    await exportM4B({ ...baseOpts(), coverPath: path.join(UPLOADS, 'missing.jpg') });
 
     expect(state.spawn.calls).toBe(1);
     const args = state.spawn.lastArgs!;
@@ -342,5 +357,45 @@ describe('exportM4B', () => {
     state.exists.truthy.add(path.join(AUDIOBOOKS, 'foo', '001.mp3'));
     // 002 is intentionally absent from existsState.
     await expect(exportM4B(baseOpts())).rejects.toMatchObject({ code: 'EUNKNOWN' });
+  });
+});
+
+// ── Drift correction: getActualDurations ──────────────────────────────────────
+//
+// getActualDurations() shells out to ffprobe per file, so the chapter
+// durationMs drift that accumulates over a long audiobook (+/-50 ms per
+// chapter) gets corrected immediately before export. The function is
+// best-effort: missing-binary or per-file failure returns 0, and the
+// route falls back to the DB hint.
+
+describe('getActualDurations', () => {
+  it('spawns ffprobe once per audioPath and parses seconds → ms', async () => {
+    // Mock spawn returns the same stdoutBody to every ffprobe call. With
+    // "12.345\n" set, every probed path resolves to 12345 ms.
+    state.spawn.stdoutBody = '12.345\n';
+    const paths = [
+      path.join(AUDIOBOOKS, 'a', '001.mp3'),
+      path.join(AUDIOBOOKS, 'a', '002.mp3'),
+      path.join(AUDIOBOOKS, 'a', '003.mp3'),
+    ];
+    const out = await getActualDurations(paths);
+    // 3 probes, each returns the parsed ms value.
+    expect(state.spawn.calls).toBe(3);
+    expect(state.spawn.lastCmd).toBe('ffprobe');
+    expect(out).toEqual([12_345, 12_345, 12_345]);
+  });
+
+  it('returns 0 when ffprobe output is unparseable (route falls back to hint)', async () => {
+    // Empty / NaN stdout body — parseFloat → NaN, function resolves 0 so
+    // the caller can fall back to chapter.durationMs instead of throwing.
+    state.spawn.stdoutBody = '   \n';
+    const out = await getActualDurations([path.join(AUDIOBOOKS, 'a', '001.mp3')]);
+    expect(out).toEqual([0]);
+  });
+
+  it('returns 0 when ffprobe spawn errors out (best-effort, never throws)', async () => {
+    state.spawn.errorOut = true;
+    const out = await getActualDurations([path.join(AUDIOBOOKS, 'a', '001.mp3')]);
+    expect(out).toEqual([0]);
   });
 });
