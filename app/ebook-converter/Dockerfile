@@ -102,14 +102,29 @@ ENV FONTCONFIG_PATH=/app
 # (docker-entrypoint.sh) can run PRAGMA integrity_check at boot.
 # Without this, a corrupt DB would only be discovered when Prisma
 # throws — by which point traffic has already hit it.
+#
+# ffmpeg is required by:
+#   1. src/worker/audiobook.ts:convertToMp3 — per-chapter WAV → MP3 for the
+#      audiobook worker. Without ffmpeg in-container, every chapter silently
+#      stays as WAV (the worker logs "ffmpeg not available (spawn ffmpeg
+#      ENOENT); keeping WAV"). The host has ffmpeg; the container doesn't.
+#   2. src/lib/tools/m4b.ts:exportM4B — concatenates chapter audio + embeds
+#      chapter markers + cover art into the .m4b. Phase 4.5. The route
+#      surfaces `M4BExportError{code:'ENOENT'}` → 503 install hint when this
+#      binary is missing; user shouldn't hit that path in production.
+#   3. scripts/ffmpeg_* (not present, future-proofing).
+#
+# All three require the same binary so install once in the runner stage.
 RUN set -eux; \
   apt-get update; \
-  apt-get install -y --no-install-recommends python3 python3-pip sqlite3; \
+  apt-get install -y --no-install-recommends python3 python3-pip sqlite3 ffmpeg; \
   pip3 install --no-cache-dir --break-system-packages httpx; \
   apt-get purge -y --auto-remove pip; \
   rm -rf /var/lib/apt/lists/*; \
   python3 -c "import httpx; print('httpx', httpx.__version__)"; \
-  sqlite3 --version
+  sqlite3 --version; \
+  ffmpeg -version | head -1; \
+  ffprobe -version | head -1
 
 # Container entrypoint runs SQLite integrity check + enables WAL journal
 # mode before either server.js or worker.js starts. See
