@@ -207,10 +207,10 @@ Acceptance: bump mechanic cross-validated on both engines; behaviour outside alt
 
 ## Phase 4 — Roadmap items
 
-> **Status:** ⬜ Pending (pick one per session)
+> **Status:** 4.1 ✅ Done (2026-07-24), 4.2 ⬜, 4.3 ✅ Done (MOBI only, 2026-07-24), 4.4 ✅ Done (characters merge/split, 2026-07-24), 4.5 ✅ Done (M4B single-file export, 2026-07-24)
 > **Goal:** Bigger features from `PROJECT_REVIEW_AND_RECOMMENDATIONS.md`.
 
-These are independent of each other and of Phases 1-3. Pick one when there's bandwidth.
+These are independent of each other and of Phases 1-3. Pick one when there's bandwidth. 4.2 (additional Calibre formats) is the only remaining item in this phase.
 
 ### 4.1 Deterministic Playwright fixture EPUB for E2E
 
