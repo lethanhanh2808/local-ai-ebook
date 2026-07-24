@@ -28,7 +28,7 @@ This plan addresses them in dependency order. **Do them in the order listed.**
 
 ## Phase 1 — Foundation
 
-> **Status:** 🟡 In progress (1.1 done, 1.2 in progress, 1.3 pending)
+> **Status:** 🟡 In progress (1.1 done ✅, 1.2 done ✅, 1.3 pending ⬜)
 >
 > **Goal:** Unblock the rest of the work by adding a deterministic test fixture and cleaning up housekeeping.
 
@@ -68,15 +68,17 @@ A tiny, hand-built EPUB committed to the repo. Gives the next round of tests a s
 
 ### 1.2 Clean up runtime artifacts in the repo
 
-> **Status:** ⬜ Pending
+> **Status:** ✅ Done (2026-07-24)
 > **Effort:** ~30 min
-> **Files:** `.gitignore` (update), `omlx-home/stats.json` (untrack), `dump.rdb` × 2 (untrack), `app/ebook-converter/.tmp-*.mjs` × 4 (delete or move)
+> **Files:** `.gitignore` (no change needed — already covers all of these), `omlx-home/stats.json` (already untracked + file removed), `dump.rdb` × 2 (already untracked; files removed from disk), `app/ebook-converter/.tmp-*.mjs` × 4 (deleted from disk)
 
-- `omlx-home/stats.json` is tracked but the dir is `.gitignore`d. `git rm --cached` (keep the on-disk file).
-- `dump.rdb` in both repo root and `app/ebook-converter/`. `git rm --cached` + add to `.gitignore`. It's a Redis snapshot.
-- `app/ebook-converter/.tmp-borders.mjs`, `.tmp-spread-diag.mjs`, `.tmp-spread-test.mjs`, `.tmp-spread-verify.mjs` — 4 scratch test scripts. Delete (they were one-off `verify-spread` diagnostics from the July 11 reader polish commit).
+**Result:**
+- `omlx-home/stats.json` had already been untracked and the file deleted in the cover-pass-through commit session (2026-07-24, before this plan).
+- `dump.rdb` × 2 (`/` + `app/ebook-converter/`) — already correctly covered by `dump.rdb` rule on line 33 of parent `.gitignore`; not tracked. Files deleted from disk (73 KB each — Redis snapshot leftover).
+- `app/ebook-converter/.tmp-borders.mjs`, `.tmp-spread-diag.mjs`, `.tmp-spread-test.mjs`, `.tmp-spread-verify.mjs` — 4 spread-mode diagnostic scratch scripts from the 2026-07-11 reader polish work. Deleted from disk (17 KB total).
+- After cleanup: `git status --porcelain` returns only the two user-library sample EPUBs (`bat-dau-100-trieu-nam-tu-vi.epub`, `trong-sinh-ai-con-lam-minh-tinh.epub`) which are correctly gitignored.
 
-**Acceptance:** `git status` is silent on these files after the cleanup commit. The on-disk files (where useful) remain.
+No commit needed — all artifacts were already correctly untracked; only on-disk files needed removal.
 
 ### 1.3 ESLint config
 
