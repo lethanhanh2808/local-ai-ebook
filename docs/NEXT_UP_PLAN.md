@@ -328,7 +328,7 @@ The Character Bible now has per-alias confidence. The UI exposes all three opera
 > - `app/ebook-converter/src/lib/tools/m4b.ts` (new — `buildFfMetadata`, `exportM4B`, `getActualDurations`, `exportM4BOnce`, `M4BExportError`)
 > - `app/ebook-converter/src/app/api/library/[id]/audiobook/m4b/route.ts` (new — GET handler)
 > - `app/ebook-converter/src/components/library/AudiobookPanel.tsx` (add `<Download>` button after "▶ Nghe audiobook")
-> - `app/ebook-converter/src/tests/m4b-export.test.ts` (new — 7 cases)
+> - `app/ebook-converter/src/tests/m4b-export.test.ts` (new — 10 cases: 6 buildFfMetadata + 4 exportM4B)
 
 Replace the "stream MP3" audiobook output with a single `.m4b` file that has chapter markers and embedded cover art. Requires `ffmpeg` (already in the project per `convertToMp3` in `src/worker/audiobook.ts`).
 
