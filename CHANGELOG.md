@@ -153,6 +153,39 @@ documented here.
 - **`validateInputs` no longer mutates the caller's `opts`.** Replaced the `opts = validateInputs(opts)` reassignment (which worked but confused the lint rules + the route passes the same object elsewhere) with a separate `safe` local. The exported `exportM4B` contract is unchanged; this is purely an internal hardening to prevent future regressions where a caller observes different behaviour depending on whether they re-use the opts object.
 - **`getActualDurations()` now has direct unit-test coverage.** The drift-correction helper runs on every production M4B build but previously had zero direct tests — the route tests only exercised it indirectly via the mock's default 10 000 ms-per-file fallback. Added 3 cases: parses ffprobe seconds → ms (rounded), returns 0 on unparseable stdout (route falls back to DB hint), returns 0 on `proc.on('error')` (best-effort contract — never throws).
 
+### Container fix — entrypoint now runs `prisma migrate deploy`
+
+**User-reported symptom:** "Audio / Read aloud / Audiobook / Giọng / Nhân vật / Có lỗi xảy ra / The string did not match the expected pattern." Across *all four* audiobook / character / voice surfaces, immediately after commit 2d0f66e1 (characters: merge/split UI + per-alias confidence) shipped to the container image.
+
+**Root cause.** Prisma error `P2021: The table main.CharacterAlias does not exist in the current database` was being caught by the Prisma client wrapper and re-thrown as a generic "string did not match the expected pattern" message — the regex catch for unknown model references. The DB schema fell behind the image because the previous `scripts/docker-entrypoint.sh` was a no-op `exec "$@"` that never applied pending Prisma migrations. The volume-attached `ebook-converter.db` outlives the container, so every fresh image with new migrations arrived to a stale DB.
+
+**Fix (commit 977f363a):**
+- **Ship the `prisma` CLI in the runner stage.** `COPY --from=builder /app/node_modules/prisma ./node_modules/prisma` in `Dockerfile`. The full `prisma` package is ~12 MB; only the CLI is needed by the entrypoint, but the package also includes the engine binaries already in use by `@prisma/client`.
+- **Update `scripts/docker-entrypoint.sh`** to run `node ./node_modules/prisma/build/index.js migrate deploy --schema ./prisma/schema.prisma` before `exec "$@"`. The `prisma` binary isn't on PATH (and `npx prisma` would race against the install layer), so we invoke the JS entrypoint directly. The step is idempotent — on a fresh DB it runs every un-applied migration in order; on an up-to-date DB it logs "No pending migrations to apply." and moves on in <100 ms.
+- **Comment block at the top of `docker-entrypoint.sh`** documents the 2026-07-24 root cause so the next reader understands *why* the step exists (not just *what* it does). This is the comment Prisma's own migration CLI lacks and is what bit us on 2026-07-24.
+
+**Why now and not earlier:** the previous commit 2d0f66e1 (characters: merge/split) was the first Phase-4 migration to ship in a container while old volumes still existed in the wild. The `watermark-detect` work in Phase 3.x and earlier didn't add new models, so the schema drift went unnoticed. From 2026-07-24 onward, every new migration that adds tables will be applied at boot, automatically, with no operator intervention.
+
+**Manual recovery for the existing volume (one-time, 2026-07-24):** `docker exec ebook-converter-app-1 sqlite3 /app/data/ebook-converter.db < prisma/migrations/20260724000000_add_character_alias_confidence/migration.sql` then `npx prisma migrate resolve --applied 20260724000000_add_character_alias_confidence` then a manual `DELETE FROM _prisma_migrations WHERE migration_name='...' AND finished_at IS NULL` to clear the failed-migration marker. After that, the entrypoint's `migrate deploy` is a no-op on every subsequent boot. Documented in the entrypoint comment so future operators can follow the same recipe if a migration is applied out-of-band.
+
+**Verified end-to-end after rebuild + restart:**
+```
+[entrypoint] Applying pending Prisma migrations…
+Prisma schema loaded from prisma/schema.prisma
+2 migrations found in prisma/migrations
+No pending migrations to apply.
+[entrypoint] Migrations up to date.
+✓ Ready in 45ms
+```
+
+And the four endpoints that were 500ing:
+- `/api/library/[id]/characters` → 200 (17 028 bytes, 23 characters with structured aliasDetails)
+- `/api/library/[id]/voices`     → 200 (6 094 bytes)
+- `/api/library/[id]/audiobook`  → 200 (1 956 bytes)
+- `/api/library/[id]/audiobook/m4b` → 409 `{"error":"Chưa đủ chương để xuất M4B","ready":0,"failed":0,"total":0,"missing":0}` (correct Vietnamese gate, no Prisma crash)
+
+No new tests added — this is container infrastructure, not application logic. The existing 278/278 JS test suite + `tsc --noEmit` already cover the application code paths; the entrypoint is a one-line CLI invocation that Prisma's own test suite covers internally. We add a *smoke check* (the next reviewer should see "✓ Ready in 45ms" + the migrations line in the boot log) rather than a unit test.
+
 ## [Unreleased] - 2026-07-11
 
 ### Reader and playback experience
