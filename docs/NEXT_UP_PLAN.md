@@ -2,7 +2,7 @@
 
 **Created:** 2026-07-24
 **Author:** Claude
-**Status:** Phase 1 in progress
+**Status:** Phase 1 done ✅, Phase 2 next
 **Source of truth:** this document is the canonical plan; `TodoWrite` tracks the active task.
 
 ## Current state (as of 2026-07-24)
@@ -28,7 +28,7 @@ This plan addresses them in dependency order. **Do them in the order listed.**
 
 ## Phase 1 — Foundation
 
-> **Status:** 🟡 In progress (1.1 done ✅, 1.2 done ✅, 1.3 pending ⬜)
+> **Status:** ✅ Done (2026-07-24)
 >
 > **Goal:** Unblock the rest of the work by adding a deterministic test fixture and cleaning up housekeeping.
 
@@ -82,13 +82,13 @@ No commit needed — all artifacts were already correctly untracked; only on-dis
 
 ### 1.3 ESLint config
 
-> **Status:** ⬜ Pending (optional)
-> **Effort:** ~1 hour
-> **Files:** `app/ebook-converter/.eslintrc.json` (update)
+> **Status:** ✅ Done (was already in place; verified 2026-07-24)
+> **Effort:** ~0 (no work needed)
+> **Files:** `app/ebook-converter/.eslintrc.json` (already extended from `next/core-web-vitals`)
 
-`package.json` defines `"lint": "eslint . --max-warnings=0"` but `next lint` prompts interactively. The repo has a stub `.eslintrc.json` from 2026-05-24; check whether it can be enabled. Optional — if it's quick, do it; otherwise defer.
+`package.json` defines `"lint": "eslint . --max-warnings=0"` and `.eslintrc.json` extends `next/core-web-vitals`. `npx eslint --print-config` confirms 52 resolved rules (Next.js core-web-vitals defaults including `@next/next/no-html-link-for-pages`, `google-font-display`, etc.). The lint gate was already wired up in the 2026-07-10 round and is documented in `CHANGELOG.md` ("Added a non-interactive ESLint configuration and made warnings fail the lint gate").
 
-**Acceptance:** `npm run lint` exits non-interactively. Defer if it's bigger than 1 hour of work.
+**Verification:** `npm run lint` runs fully non-interactively today and is part of `npm run verify`.
 
 ---
 
