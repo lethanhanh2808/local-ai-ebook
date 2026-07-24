@@ -3,6 +3,25 @@
 All notable changes to the Local-AI ebook conversion, reader, and TTS stack are
 documented here.
 
+## [Unreleased] - 2026-07-24
+
+### Watermark cleanup unification
+
+- **Single source of truth for watermark detection.** New `src/lib/pipeline/watermark-detect.ts` exposes `splitChapterIntoPhrases` + `detectFromChaptersHtml`. The conversion pipeline and the per-book Detect UI now share this engine — the manual Detect button no longer uses a worse punctuation-splitter that silently missed DTV-style `<div class="header">…</div>` watermarks.
+- **Wrapper-aware strip pass.** `stripWatermarks` now drops any block-level element (`<p>`, `<div>`, `<span>`, `<h1>..<h6>`) whose plain text contains a saved phrase. The previous `<p>`-only pass left empty `<div class="header">` envelopes behind. Three-pass longest-first; legacy `p`-only and bare-text fallbacks preserved for backwards compatibility.
+- **Lower detection threshold (0.6 → 0.4).** A 0.6 threshold silently missed books where the watermark footer was missing on a handful of interlude chapters (e.g. author's-note). 0.4 still leaves headroom for "real" book text while catching the standard DTV footer.
+- **Removed hardcoded Chiếm Đoạt / Tiểu Ngôn / dtv-ebook whitelist.** The previous implementation only kept `<h*>Chương N</h*>` lines if they happened to contain one of those three substrings, dropping every other publisher's metadata footer. Now any `<h*>` whose text starts with `Chương N` is filtered; other recurring headings (e.g. "Giới thiệu tác giả") surface for the user to decide.
+- **Retroactive cleanup endpoints.**
+  - `POST /api/library/[id]/watermarks/rerun` — runs auto-detect against an existing book, persists newly-found phrases to per-book + cross-book memory, then atomically rewrites the on-disk EPUB with the merged phrase list. Useful for books uploaded before watermark cleanup was enabled.
+  - `POST /api/watermarks/rerun-all` — sequential library-wide batch with `onlyMissingWatermarks` filter and per-book error reporting.
+  - `WatermarksPanel` UI exposes both as a "Rerun on this book" button and a destructive "Apply cho cả thư viện" confirm flow.
+- **Memory-read errors now log at error level.** `listWatermarkPhrases` previously warned and silently produced unwatermarked output when the `WatermarkMemory` table was missing. Now logs at `error` so a misconfigured DB surfaces in the worker log; pass `{ silent: true }` for batch callers that have already handled the failure.
+- **32 new unit tests** covering the splitter (DTV-style `<div>` envelopes, `<h*>` filtering, dedupe, length bounds), the strip pass (wrapper-aware across all 9 phase tags, longest-first substring bleed protection, idempotency), and an integration case reconstructed from the real `Chiem Doat Vo Yeu - Tieu Ngon.epub` chapter shape.
+
+### TTS and Vietnamese speech
+
+- **Two stale emotion tests updated.** `detect-emotion.test.ts` previously asserted that two-or-more `…` ellipsis should map to `căng thẳng`, but the production code intentionally removed that density fallback on 2026-07-11 (VieNeu already reads `…` as a natural short pause; the trigger made every trailing-thought paragraph sound tense). Tests now assert the intentional `neutral` fallback and reference the source header comment.
+
 ## [Unreleased] - 2026-07-11
 
 ### Reader and playback experience

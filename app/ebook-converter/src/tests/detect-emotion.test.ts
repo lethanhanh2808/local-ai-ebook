@@ -85,12 +85,20 @@ describe('detectEmotion — punctuation density fallbacks', () => {
     expect(r.emotion).toBe('angry');
   });
 
-  it('two or more "…" → căng thẳng', () => {
-    expect(full('Anh ta lặng lẽ… rồi bước đi… không ai biết điều gì sắp xảy ra…').label).toBe('căng thẳng');
+  it('two or more "…" stays neutral (density fallback removed 2026-07-11)', () => {
+    // Regression guard: the old "ellipsis density → căng thẳng" branch was
+    // removed because VieNeu already reads `…` as a natural short pause,
+    // and the trigger made every trailing-thought paragraph sound tense.
+    // See detect-emotion.ts header comment.
+    const r = full('Anh ta lặng lẽ… rồi bước đi… không ai biết điều gì sắp xảy ra…');
+    expect(r.label).toBe('');
+    expect(r.emotion).toBe('neutral');
   });
 
-  it('mixed "..." and "…" both count', () => {
-    expect(full('Chờ đợi... rồi lại chờ đợi…').label).toBe('căng thẳng');
+  it('mixed "..." and "…" stays neutral (density fallback removed 2026-07-11)', () => {
+    const r = full('Chờ đợi... rồi lại chờ đợi…');
+    expect(r.label).toBe('');
+    expect(r.emotion).toBe('neutral');
   });
 
   it('fewer than 3 "!" with sad words → sad (not angry)', () => {

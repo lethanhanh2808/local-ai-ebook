@@ -46,17 +46,29 @@ export async function listWatermarkMemory(): Promise<WatermarkMemoryRow[]> {
 }
 
 /** Read just the phrase strings — used by the conversion pipeline to seed
- *  its strip list. Returns empty list on any failure (we never want a
- *  memory-read error to abort a conversion). */
-export async function listWatermarkPhrases(): Promise<string[]> {
+ *  its strip list.
+ *
+ *  Returns empty list on any failure (we never want a memory-read error
+ *  to abort a conversion). However, the failure IS logged at `error`
+ *  level now so a misconfigured / un-migrated DB surfaces in the worker's
+ *  log file rather than silently producing unwatermarked output.
+ *  Pass `{ silent: true }` to suppress the log for callers that have
+ *  already handled the failure (e.g. batch scanners). */
+export async function listWatermarkPhrases(opts?: { silent?: boolean }): Promise<string[]> {
   try {
     const rows = await prisma.watermarkMemory.findMany({
       select: { phrase: true },
     });
     return rows.map((r) => r.phrase);
   } catch (err) {
-    // Table not yet migrated? Fall back gracefully.
-    console.warn('[watermark-memory] read failed; falling back to no memory:', err);
+    if (!opts?.silent) {
+      // Table not yet migrated? Surface that loudly — a silent fallback
+      // here was producing unwatermarked output with no diagnostic trail.
+      console.error(
+        '[watermark-memory] read failed; falling back to no memory:',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
     return [];
   }
 }

@@ -17,6 +17,7 @@ import { enhanceChaptersParallel } from '../ai/chapter-enhancer';
 import { formatChapters as formatChaptersDeep } from '../ai/chapter-formatter';
 import { buildChapterHtml, extractChapterBodyFragment, READER_FRIENDLY_CSS } from './epub-styler';
 import { listWatermarkPhrases, rememberWatermark, touchWatermark } from '../db/watermark-memory';
+import { detectFromChaptersHtml } from './watermark-detect';
 
 export interface PipelineOptions {
   inputPath: string;
@@ -335,17 +336,24 @@ export async function runConversionPipeline(opts: PipelineOptions): Promise<Pipe
   //   (a) Memory read — phrases from previous conversions that we can
   //       strip straight away, no scan needed. Sub-millisecond for
   //       O(10–50) typical catalog size.
-  //   (b) Fresh detection — runs the frequency scan only against the
-  //       phrases we haven't seen before. Whatever it finds joins the
-  //       strip list AND gets persisted to memory so the next book skips
-  //       this work entirely.
-  // The result: book #2 with the same publisher footer is detected in a
-  // single regex pass; book #100 is detected in zero passes.
+  //   (b) Fresh detection — runs the shared tag-aware frequency scan
+  //       against the new chapters. Whatever it finds joins the strip
+  //       list AND gets persisted to memory so the next book skips this
+  //       work entirely.
+  //
+  // The detector (watermark-detect.ts) is shared with the per-book Detect
+  // endpoint so a user who notices leftover watermarks can re-trigger the
+  // same scan from /library/[id] without a full re-conversion.
   if (aiWatermarkClean && chapters.length > 1) {
     await progress(85, 'Detecting watermarks…');
     const memoryPhrases = await listWatermarkPhrases();
     const memorySet = new Set(memoryPhrases);
-    const detectedPhrases = detectWatermarkPhrases(chapters);
+    // Auto-detect uses a 40% chapter threshold (down from the legacy 60%).
+    // The legacy threshold was conservative but missed books where the
+    // watermark footer was missing on a handful of interlude chapters. A
+    // 40% threshold still leaves plenty of headroom for "real" book text
+    // (which rarely reappears verbatim across that share of chapters).
+    const detectedPhrases = detectFromChaptersHtml(chapters, { threshold: 0.4 });
     // Anything from memory is always kept (cheap, already-known to be junk).
     // Anything new that detection picked up is kept too — but only if it's
     // *not* already in memory to avoid double-stripping (the strip regex
@@ -521,68 +529,19 @@ async function buildMinimalEpubFromFile(
 }
 
 /**
- * Detect phrases that appear in the majority of chapters — likely watermarks.
- * Returns phrases that appear in > 60% of chapters and are < 200 chars.
- *
- * Phrases are extracted from each chapter by:
- *   1. Converting the HTML to plain text (stripping tags).
- *   2. Splitting on paragraph / heading boundaries — anything that
- *      puts text on its own line: <p>, <h1>..<h6>, <div>, <li>,
- *      <br/>, or literal newlines. This is critical because Calibre-built
- *      Vietnamese EPUBs from dtv-ebook.com put book-level metadata
- *      (title / author / URL) inside <div class="header"> / <div class="author">
- *      elements at the very top of every chapter file, with no surrounding
- *      whitespace. We need those divs to register as their own "lines"
- *      for the frequency count to work.
- *   3. Trimming and deduping — phrases are short, distinct, and consistent
- *      (≤ 200 chars).
- */
-function detectWatermarkPhrases(chapters: ChapterEntry[]): string[] {
-  const total = chapters.length;
-  if (total < 2) return [];
-
-  // Split-block regex: a paragraph OR heading OR content-div OR a literal
-  // newline, OR a <br/> tag. We use this as the *separator* so each
-  // block of text becomes one item in the resulting array.
-  const splitRe = /<\/(?:p|h[1-6]|div|li|blockquote|pre|tr)>|<\s*br\s*\/?\s*>|\r?\n/i;
-
-  const lineFreq = new Map<string, number>();
-  for (const ch of chapters) {
-    const blocks = ch.html.split(splitRe);
-    const seen = new Set<string>();
-    for (const block of blocks) {
-      // Strip any remaining inline tags and squash whitespace
-      const text = block
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-      if (text.length < 4 || text.length > 200) continue;
-      // Skip "Chương N" chapter titles (vary per chapter, noisy for freq).
-      // Keep entries that include known-watermark substrings (book title,
-      // author, URL) even if they happen to start with "Chương N".
-      if (/^Chương\s+\d+/i.test(text) && !/Chiếm Đoạt|Tiểu Ngôn|dtv-ebook/i.test(text)) {
-        continue;
-      }
-      seen.add(text);
-    }
-    for (const phrase of seen) {
-      lineFreq.set(phrase, (lineFreq.get(phrase) ?? 0) + 1);
-    }
-  }
-
-  const threshold = Math.ceil(total * 0.6);
-  return Array.from(lineFreq.entries())
-    .filter(([, count]) => count >= threshold)
-    .map(([phrase]) => phrase);
-}
-
-/**
  * Strip watermark phrases from HTML content. Three complementary passes:
  *   1. Remove <div>/<p>/<span>/<h*> elements whose ONLY text content
  *      equals one of the watermark phrases (whole-element removal).
  *   2. Remove any <div>/<p>/<span>/<h*> that contains a watermark phrase
  *      and at most 60 chars of "other" text (a thin wrapper).
  *   3. Strip bare occurrences inside other tags.
+ *
+ * Detection (which phrases to strip) is handled by watermark-detect.ts.
+ * This is the conversion-pipeline's own strip pass; watermark-strip.ts
+ * has a parallel implementation used by the live reader + on-demand
+ * /api/library/[id]/watermarks/apply endpoint. We keep both: this one
+ * is tag-agnostic and works against the converted chapter shape, the
+ * other is paragraph-aware and works against raw `<p>`-heavy source HTML.
  */
 function stripPhrasesFromHtml(html: string, phrases: string[]): string {
   if (phrases.length === 0) return html;
