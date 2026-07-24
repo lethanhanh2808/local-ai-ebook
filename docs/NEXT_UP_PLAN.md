@@ -152,17 +152,12 @@ No commit needed — all artifacts were already correctly untracked; only on-dis
 
 ### 3.1 `git rm --cached` for runtime artifacts (the commit side of 1.2)
 
-> **Status:** ⬜ Pending
-> **Files:** `.gitignore`, git history
+> **Status:** ✅ Done (2026-07-24)
+> **Files:** git index
 
-The git-side commit of the Phase 1.2 cleanup:
+**Result:** `omlx-home/stats.json` removed from the index (file kept on disk per plan). The directory is already excluded by parent `.gitignore` line `omlx-home/`, so the file falls out of git's view automatically. The other gitignored dirs that were also missing files (`dump.rdb` at repo root + `app/ebook-converter/dump.rdb`) were already correctly untracked before this session and the on-disk files were removed in Phase 1.2 — nothing to do.
 
-```
-git rm --cached omlx-home/stats.json
-git rm --cached app/ebook-converter/dump.rdb dump.rdb
-# Add to .gitignore
-git commit -m "chore(gitignore): untrack runtime artifacts (stats.json, dump.rdb)"
-```
+Three sibling files (`omlx-home/bin/omlx`, `model_settings.json`, `settings.json`) remain tracked because they predate the `omlx-home/` gitignore entry and the plan only requested `stats.json`. Leaving them as-is keeps the diff focused.
 
 ### 3.2 D2 per-genre `score >= 0.42` threshold
 
