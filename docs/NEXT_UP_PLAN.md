@@ -322,15 +322,30 @@ The Character Bible now has per-alias confidence. The UI exposes all three opera
 
 ### 4.5 M4B audiobook export
 
-> **Status:** ⬜ Pending
+> **Status:** ✅ Done (v1 = synchronous on-request, no caching)
 > **Effort:** 1-2 days
-> **Files:** `app/ebook-converter/src/app/api/library/[id]/audiobook/m4b/route.ts` (new), `app/ebook-converter/src/components/library/AudiobookPlayer.tsx` (update)
+> **Files:**
+> - `app/ebook-converter/src/lib/tools/m4b.ts` (new — `buildFfMetadata`, `exportM4B`, `getActualDurations`, `exportM4BOnce`, `M4BExportError`)
+> - `app/ebook-converter/src/app/api/library/[id]/audiobook/m4b/route.ts` (new — GET handler)
+> - `app/ebook-converter/src/components/library/AudiobookPanel.tsx` (add `<Download>` button after "▶ Nghe audiobook")
+> - `app/ebook-converter/src/tests/m4b-export.test.ts` (new — 7 cases)
 
-Replace the "stream MP3" audiobook output with a single `.m4b` file that has chapter markers and embedded cover art. Requires `ffmpeg` (already in the project per `audiobook_generator.py`).
+Replace the "stream MP3" audiobook output with a single `.m4b` file that has chapter markers and embedded cover art. Requires `ffmpeg` (already in the project per `convertToMp3` in `src/worker/audiobook.ts`).
 
 **Why:** Most podcast/audiobook apps prefer M4B (single file, chapter-aware, cover art). Users currently get a folder of MP3s.
 
-**Acceptance:** "Export as M4B" button on the audiobook player; the resulting `.m4b` opens in Apple Books / Voice / etc. with chapter markers visible.
+**Implementation notes (v1):**
+- **Synchronous on-request** — a typical 15-30 chapter Vietnamese novel encodes in 30-90 s. The user is already waiting on the click; adding BullMQ here would be premature. Deferred v2: `Book.m4bPath String?` + `Book.m4bGeneratedAt DateTime?` cache columns with invalidation tied to `configHash`.
+- **Status gating** — 404 book / 409 generating / 409 not-all-chapters-ready / 503 ffmpeg-missing / 200 stream. Vietnamese error strings.
+- **Per-book mutex** — `exportM4BOnce(bookId, opts)` piggybacks concurrent builds (module-scoped `Map<string, Promise>`). Double-click waste prevention.
+- **Drift correction** — `getActualDurations()` batch ffprobe immediately before export, fed to `exportM4B({ durations })`. ±50 ms × 30 ch cumulative drift would otherwise misalign Apple Books chapter boundaries.
+- **Cover embedding** uses `-map 2:v -c:v copy -disposition:v:0 attached_pic` (NOT `-attach` — generic attachment atom is ignored by Apple Books). Cover presence branches the entire input + `-map` chain.
+- **Defense-in-depth path validation** — `exportM4B` calls `assertWithinRoots` on every chapter audioPath and coverPath even though the upstream route validates them.
+- **No `assertWithinRoots` on the tmpdir** — `os.tmpdir()` is system-supplied (often symlinked `/var/folders/...` or `/private/tmp`), not under `pathRoots().tmp`.
+- **`-movflags +faststart`** — required for iOS progressive streaming in Apple Books.
+- **Filename sanitization** matches the per-chapter route at `src/app/api/library/[id]/audiobook/[chapterFile]/route.ts:55-57`: `[^\x20-\x7E]` → `_`, slice 80. UTF-8 preserved in FFMETADATA1 `title=` for in-player display.
+
+**Acceptance:** ✅ "Tải .m4b" button on the audiobook panel (rendered only when `summary.ready === summary.total && summary.total > 0`); the resulting `.m4b` opens in Apple Books / Voice / etc. with chapter markers visible and cover art embedded. 259/259 vitest + tsc clean.
 
 ---
 

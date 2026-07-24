@@ -113,6 +113,39 @@ documented here.
 - **12 new unit tests** (8 in `calibre-probe.test.ts`: env override + 4 candidate paths + missing-all + cache hit + convert happy path + convert missing; 4 in `calibre-worker-integration.test.ts`: MOBI fires pre-step + EPUB skips + defensive guard + missing-Calibre throws `UnrecoverableError`). Drops a real POSIX shim into a tempdir + prepends tempdir to `PATH` to drive probe + conversion organically. Total: **252/252 JS** tests pass (was 240/240 after Phase 4.4; +12 from Phase 4.3); `tsc --noEmit` clean. Python tests untouched.
 - **Phase 4.3 of `docs/NEXT_UP_PLAN.md` complete.** Scoped to MOBI only for v1; PDF/DOCX/AZW3 deferred to a follow-up phase via append-only additions to `CALIBRE_FORMATS`.
 
+### M4B audiobook export (Phase 4.5)
+
+**Background.** The audiobook pipeline pre-generates per-chapter MP3 files; users currently receive a folder served one-at-a-time. Podcast / audiobook apps (Apple Books, Voice, Smart AudioBook Player) prefer M4B — single file with chapter markers and embedded cover art that the OS recognises natively.
+
+**v1 scope.** Synchronous on-request — a typical 15-30 chapter Vietnamese novel encodes in 30-90 s. Adding BullMQ here would be premature; a future v2 can add `Book.m4bPath String?` + `Book.m4bGeneratedAt DateTime?` cache columns with invalidation tied to `configHash`.
+
+**New files:**
+- `src/lib/tools/m4b.ts` — helper. Pure `buildFfMetadata({ title, artist?, chapters }) → string` emits `;FFMETADATA1` magic header + `TIMEBASE=1/1000` chapter blocks with cumulative START/END. `exportM4B(opts)` spawns ffmpeg with the canonical arg set (branches on `coverPath` for the `-map 2:v -c:v copy -disposition:v:0 attached_pic` chain). `getActualDurations(audioPaths)` batch ffprobe for drift correction. `exportM4BOnce(bookId, opts)` per-book mutex from a module-scoped `Map<string, Promise>` — double-click waste prevention. Typed `M4BExportError` with code variants `ENOENT | ETIMEOUT | ENONZERO | ESAFEPATH | EUNKNOWN` mirroring `CalibreConvertError`.
+- `src/app/api/library/[id]/audiobook/m4b/route.ts` — `GET` handler with status gating: 404 book → 409 generating → 409 not-all-chapters-ready → 503 ffmpeg-missing → 200 stream with `Content-Type: audio/mp4` + `Content-Disposition: attachment`. Vietnamese error strings. Tmpdir cleanup on stream close.
+- `src/tests/m4b-export.test.ts` — 7 new unit tests covering: `buildFfMetadata` empty-chapters throw, single chapter block (magic header + TIMEBASE), three-chapter cumulative START/END math, UTF-8 Vietnamese + special-character escaping, `exportM4B` arg set with cover (verifies input index 2 + `-map 2:v -attached_pic`), arg set without cover (exactly 2 `-i` flags, no `2:v`), `proc.on('error') ENOENT` graceful degradation.
+
+**Modified:**
+- `src/components/library/AudiobookPanel.tsx` — `<Download>` added to `lucide-react` imports. New "Tải .m4b" button rendered inside the action row when `summary.ready === summary.total && summary.total > 0` (no gaps in the concat). Direct anchor-style navigation triggers the browser's native download UI via `Content-Disposition: attachment`.
+
+**Critical implementation details:**
+- **Cover embedding flag** is `-map 2:v -c:v copy -disposition:v:0 attached_pic`, NOT `-attach`. The `-attach` flag creates a generic `attachment` atom that most players ignore; Apple Books / Voice look for `covr` (a video stream with `attached_pic` disposition).
+- **`-movflags +faststart`** is required for iOS progressive streaming — without it Apple Books shows a 30 s "Preparing…" spinner on every chapter tap.
+- **`TIMEBASE=1/1000`** in the FFMETADATA1 chapter blocks makes START/END bare integer milliseconds — much harder to off-by-one than `HH:MM:SS.SSS` strings. The `;FFMETADATA1` magic header on line 1 is mandatory (without it ffmpeg falls back to its old INI-parser and chapter markers silently disappear).
+- **Drift correction** (`getActualDurations()`) probes each chapter MP3 immediately before export so the FFMETADATA1 cumulative START/END math is accurate. ±50 ms × 30 ch cumulative drift would otherwise misalign Apple Books chapter boundaries.
+- **Defense-in-depth path validation** — `exportM4B` calls `assertWithinRoots` on every chapter `audioPath` (against `pathRoots().audiobooks`) and on `coverPath` (against uploads + library), even though the route also validates them. ffmpeg will open any readable file via the `-i` argument, so the second layer prevents a path-traversal DB row pointing at `/etc/passwd` from becoming a read primitive.
+- **`os.tmpdir()` is NOT validated** — it returns `/var/folders/...` or symlinked `/tmp`, neither under `pathRoots().tmp`. The tmpdir is system-supplied, not DB-supplied; only DB-derived paths get defense-in-depth.
+- **Filename sanitization** mirrors the per-chapter route at `src/app/api/library/[id]/audiobook/[chapterFile]/route.ts:55-57` — `[^\x20-\x7E]` → `_`, slice 80. UTF-8 preserved in FFMETADATA1 `title=` for in-player display.
+- **No-cover fallback** — when `coverPath` is absent, the helper skips the `-i cover -map 2:v -disposition:v:0 attached_pic` chain entirely; the M4B still exports with chapter markers.
+- **Worker concurrency interaction** — the route returns 409 (Vietnamese hint: "Đang tạo audio, thử lại sau khi hoàn thành") when `audiobookStatus === 'generating'`, preventing ffmpeg encode from competing with TTS synthesis for the same cores (worker has `concurrency: 1` at `src/worker/audiobook.ts:596`).
+
+**Deferred to v2 (out of scope for this phase):**
+- `Book.m4bPath` + `Book.m4bGeneratedAt` cache columns.
+- Range request support on the M4B stream.
+- Per-book cache invalidation tied to `configHash`.
+- PNG → JPEG conversion (most source covers are already JPEG; PNG is supported via `-c:v copy`).
+
+**Test totals:** **259/259 JS** tests pass (was 252/252 after Phase 4.3; +7 from Phase 4.5). `tsc --noEmit` clean. Python tests untouched.
+
 ## [Unreleased] - 2026-07-11
 
 ### Reader and playback experience

@@ -5,7 +5,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Headphones, Loader2, RefreshCw, Trash2, Play, Pause, ChevronLeft, ChevronRight,
-  CheckCircle2, AlertTriangle, Wand2, Square, Volume2, ListMusic,
+  CheckCircle2, AlertTriangle, Wand2, Square, Volume2, ListMusic, Download,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -257,6 +257,24 @@ export function AudiobookPanel({ bookId, onChapterAudioReady }: Props) {
             >
               <ListMusic className="h-3.5 w-3.5 mr-1" />
               ▶ Nghe audiobook ({summary.ready})
+            </Button>
+          )}
+          {/* Download .m4b — only when ALL chapters are ready (no gaps in the concat).
+              Apple Books / Voice / Smart AudioBook Player recognise .m4b natively
+              with chapter markers + cover art. */}
+          {summary && summary.ready === summary.total && summary.total > 0 && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                // Anchor-style navigation triggers the browser's native download UI
+                // via the route's Content-Disposition: attachment header.
+                window.location.href = `/api/library/${bookId}/audiobook/m4b`;
+              }}
+              title="Tải file .m4b (Apple Books / Voice / podcast app)"
+            >
+              <Download className="h-3.5 w-3.5 mr-1" />
+              Tải .m4b
             </Button>
           )}
           {summary && summary.ready > 0 && (
