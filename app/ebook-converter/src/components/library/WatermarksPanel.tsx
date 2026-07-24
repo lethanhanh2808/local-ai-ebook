@@ -55,6 +55,24 @@ interface WatermarksPanelProps {
   bookId: string;
 }
 
+interface RerunResult {
+  ok: true;
+  bookId: string;
+  phrases: PhraseHit[];
+  totalHits: number;
+  chaptersStripped: number;
+  chaptersUnchanged: number;
+  bytesChanged: number;
+  durationMs: number;
+  oldSize: number;
+  newSize: number;
+  detectionSummary: {
+    memory: number;
+    autoDetected: number;
+    manuallyProvided: number;
+  };
+}
+
 export function WatermarksPanel({ bookId }: WatermarksPanelProps) {
   const toast = useToast();
   const newPhraseId = useId();
@@ -67,10 +85,20 @@ export function WatermarksPanel({ bookId }: WatermarksPanelProps) {
   const [detecting, setDetecting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [rerunning, setRerunning] = useState(false);
+  const [rerunningAll, setRerunningAll] = useState(false);
 
   const [newPhrase, setNewPhrase] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<ApplyResult | null>(null);
+  const [lastRerun, setLastRerun] = useState<RerunResult | null>(null);
+  const [rerunAllResult, setRerunAllResult] = useState<{
+    booksScanned: number;
+    booksStripped: number;
+    totalHits: number;
+    totalBytesChanged: number;
+    durationMs: number;
+  } | null>(null);
 
   // ── Load saved phrases ──────────────────────────────────────────────────
   const reload = useCallback(async () => {
@@ -95,6 +123,7 @@ export function WatermarksPanel({ bookId }: WatermarksPanelProps) {
     setDetecting(true);
     setError(null);
     setLastResult(null);
+    setLastRerun(null);
     try {
       const r = await fetch(`/api/library/${bookId}/watermarks?ai=${useAI}`);
       const data = await r.json() as { candidates?: WatermarkCandidate[]; saved?: string[] };
@@ -113,6 +142,94 @@ export function WatermarksPanel({ bookId }: WatermarksPanelProps) {
     } finally {
       setDetecting(false);
     }
+  };
+
+  /** Auto-detect + strip in one go. Hits the per-book /watermarks/rerun
+   *  endpoint which runs the shared scanner, writes the cleaned EPUB, and
+   *  persists new phrases. Useful when a book was uploaded before the
+   *  watermark-cleanup setting was enabled (or when a user just wants the
+   *  "magic button" experience without manually picking candidates). */
+  const rerunDetection = async () => {
+    setRerunning(true);
+    setError(null);
+    setLastResult(null);
+    setLastRerun(null);
+    try {
+      const r = await fetch(`/api/library/${bookId}/watermarks/rerun`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ autoDetect: true, persistToMemory: true }),
+      });
+      const data = await r.json() as RerunResult & { error?: string };
+      if (!r.ok) throw new Error(data.error ?? `HTTP ${r.status}`);
+      setLastRerun(data);
+      toast.success(
+        `Rerun xong: ${data.totalHits} hits / ${data.chaptersStripped} chapters ` +
+        `trong ${(data.durationMs / 1000).toFixed(1)}s`,
+      );
+      // Refresh the saved list — newly-detected phrases got persisted
+      // server-side.
+      await reload();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      toast.error(`Rerun failed: ${msg}`);
+    } finally {
+      setRerunning(false);
+    }
+  };
+
+  /** Library-wide: rerun detection on every book in the library. Use this
+   *  after toggling defaultAiWatermarkClean on, or after adopting a new
+   *  catalog of shared phrases. Sequential; large libraries may take a
+   *  few minutes. */
+  const rerunAll = () => {
+    toast.confirm({
+      title: 'Áp dụng cho tất cả sách trong thư viện?',
+      description:
+        'Sẽ scan + rewrite tất cả EPUBs hiện có. Tốn ~1–5s mỗi sách. ' +
+        'Hành động này KHÔNG thể undo tự động — bạn nên backup thư mục library.',
+      confirmLabel: 'Apply cho cả thư viện',
+      destructive: true,
+      onConfirm: async () => {
+        setRerunningAll(true);
+        setError(null);
+        try {
+          const r = await fetch('/api/watermarks/rerun-all', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ autoDetect: true, persistToMemory: true }),
+          });
+          const data = await r.json() as {
+            ok: boolean;
+            booksScanned: number;
+            booksStripped: number;
+            totalHits: number;
+            totalBytesChanged: number;
+            durationMs: number;
+            error?: string;
+          };
+          if (!r.ok) throw new Error(data.error ?? `HTTP ${r.status}`);
+          setRerunAllResult({
+            booksScanned: data.booksScanned,
+            booksStripped: data.booksStripped,
+            totalHits: data.totalHits,
+            totalBytesChanged: data.totalBytesChanged,
+            durationMs: data.durationMs,
+          });
+          toast.success(
+            `Đã xử lý ${data.booksStripped}/${data.booksScanned} sách trong ` +
+            `${(data.durationMs / 1000).toFixed(1)}s`,
+          );
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          setError(msg);
+          toast.error(`Apply-all failed: ${msg}`);
+        } finally {
+          setRerunningAll(false);
+        }
+      },
+    });
   };
 
   const saveDetected = async () => {
@@ -379,7 +496,100 @@ export function WatermarksPanel({ bookId }: WatermarksPanelProps) {
         )}
       </div>
 
-      {/* Section 3 — apply to file */}
+      {/* Section 3a — auto-detect + strip (the "magic" button) */}
+      <div className="space-y-2 pt-2 border-t border-border">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <p className="text-xs font-medium flex items-center gap-1.5">
+              <Sparkles className="h-3.5 w-3.5" /> Auto-detect + strip
+            </p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">
+              Chạy detector, lưu phrase mới vào memory, rồi rewrite file EPUB.
+              Useful cho sách upload trước khi bật watermark cleanup.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant="default"
+            onClick={() => void rerunDetection()}
+            disabled={rerunning || rerunningAll}
+            className="shrink-0"
+            title="Scan lại toàn bộ sách, persist phrase mới và rewrite file"
+          >
+            {rerunning
+              ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+              : <Sparkles className="h-3.5 w-3.5 mr-1" />}
+            {rerunning ? 'Đang scan…' : 'Rerun on this book'}
+          </Button>
+        </div>
+
+        {lastRerun && (
+          <div className="rounded-md border border-emerald-500/40 bg-emerald-500/5 p-3 text-xs space-y-1.5">
+            <p className="font-semibold flex items-center gap-1.5 text-emerald-700 dark:text-emerald-300">
+              <ShieldCheck className="h-3.5 w-3.5" />
+              Rerun xong: {lastRerun.totalHits} hits / {lastRerun.chaptersStripped} chapters
+              {' '}trong {(lastRerun.durationMs / 1000).toFixed(1)}s
+            </p>
+            <p className="text-[10px] text-muted-foreground">
+              {lastRerun.detectionSummary.memory} từ memory · {lastRerun.detectionSummary.autoDetected} mới detect ·{' '}
+              {(lastRerun.oldSize - lastRerun.newSize).toLocaleString()} bytes đã bỏ.
+            </p>
+            <button
+              onClick={() => setLastRerun(null)}
+              className="text-[10px] underline opacity-70 hover:opacity-100"
+            >
+              đóng
+            </button>
+          </div>
+        )}
+
+        {/* Library-wide batch action */}
+        <div className="flex items-center justify-between gap-2 pt-2 border-t border-border/40">
+          <div>
+            <p className="text-xs font-medium flex items-center gap-1.5">
+              <RefreshCw className="h-3.5 w-3.5" /> Apply cho cả thư viện
+            </p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">
+              Scan + rewrite tất cả sách hiện có trong thư viện (sequential).
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={rerunAll}
+            disabled={rerunning || rerunningAll}
+            className="shrink-0"
+            title="Áp dụng cho toàn bộ library"
+          >
+            {rerunningAll
+              ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+              : <RefreshCw className="h-3.5 w-3.5 mr-1" />}
+            {rerunningAll ? 'Đang xử lý…' : 'Apply cho cả thư viện'}
+          </Button>
+        </div>
+
+        {rerunAllResult && (
+          <div className="rounded-md border border-emerald-500/40 bg-emerald-500/5 p-3 text-xs space-y-1">
+            <p className="font-semibold flex items-center gap-1.5 text-emerald-700 dark:text-emerald-300">
+              <ShieldCheck className="h-3.5 w-3.5" />
+              Đã xử lý {rerunAllResult.booksStripped}/{rerunAllResult.booksScanned} sách ·{' '}
+              {rerunAllResult.totalHits} hits ·{' '}
+              {(rerunAllResult.durationMs / 1000).toFixed(1)}s
+            </p>
+            <p className="text-[10px] text-muted-foreground">
+              {(rerunAllResult.totalBytesChanged / 1024).toFixed(1)} KB đã bỏ khỏi EPUBs.
+            </p>
+            <button
+              onClick={() => setRerunAllResult(null)}
+              className="text-[10px] underline opacity-70 hover:opacity-100"
+            >
+              đóng
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Section 3b — apply to file (manual re-strip on saved phrases) */}
       <div className="space-y-2 pt-2 border-t border-border">
         <div className="flex items-center justify-between gap-2">
           <div>
