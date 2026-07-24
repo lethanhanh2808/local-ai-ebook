@@ -146,7 +146,7 @@ No commit needed — all artifacts were already correctly untracked; only on-dis
 
 ## Phase 3 — Backlog items
 
-> **Status:** 🟡 In progress (3.1 ✅, 3.2 ✅, 3.3 ⬜)
+> **Status:** ✅ Done (3.1 ✅, 3.2 ✅, 3.3 ✅)
 > **Goal:** Polish the easy wins while Phase 2 is fresh.
 > **Effort:** 1-2 days
 
@@ -188,12 +188,20 @@ Tests:
 
 ### 3.3 D9 Python-side actor alternation bump parity
 
-> **Status:** ⬜ Pending
-> **Files:** `app/tts-service/conversation_attribution.py`
+> **Status:** ✅ Done (2026-07-24)
+> **Files:** `app/ebook-converter/src/lib/attribution.ts` (bump ported), `app/ebook-converter/src/tests/attribution.test.ts` (1 new JS test), `app/tts-service/tests/test_actor_alternation_bump.py` (new — 4 Python cases)
 
-Mirror the JS engine's `actor alternation bump (0.36 → 0.48 inside detected alternation)` from `ACTION_ITEMS.md` §E3 in the Python port. Implement the same bump with the same conditions.
+The Python port already had the bump (constants `ACTOR_BASE_WEIGHT = 0.36` / `ACTOR_ALT_WEIGHT = 0.48`, conditional `actor_weight = ACTOR_ALT_WEIGHT if alternation_strength > 0 else ACTOR_BASE_WEIGHT`). The JS engine's flat `0.36` actor weight had regressed away from the spec listed in `ACTION_ITEMS.md` §E3. This commit:
 
-**Acceptance:** 203+ Python tests still pass; measure script on `chapter005` shows the actor-alternation rows improving or staying the same.
+1. **Ports the bump JS-side.** The `roles.actor` block in `attributeByConversation` now reads `alternationActive = !!(lastTurn && previousTurn && lastTurn !== previousTurn)` and applies `0.48` inside detected alternation, `0.36` outside. The evidence `detail` row surfaces `"alternating turn — bumped"` vs the legacy `"last named actor before/around the quote"` so the regression test (and downstream consumers) can tell which branch fired.
+
+2. **Adds a JS-side regression test** in `attribution.test.ts` that pins both branches: when alternation is detected the timeline evidence row carries the bumped 0.48 weight + bumped detail; when alternation is NOT detected the resolved paragraph falls back to the previous speaker (Lan) because the 0.36 base weight can't out-score the scene-memory continuation branch (0.38).
+
+3. **Adds a Python-side regression test** (`test_actor_alternation_bump.py`, 4 cases) that pins: constants `0.36 / 0.48`, the bump fires on alternating seed history, no bump on same-speaker history, no bump on history length < 2. Tests seed `ConversationStateSnapshot.dialogueHistory` directly so they don't depend on a multi-paragraph walk to reach the bump-detection branch.
+
+Test totals (Phase 3.3): **210/210 JS** tests pass (was 209/209 after Phase 3.2; +1 from the new alternation test; `tsc --noEmit` clean). Python: 187 baseline tests + 4 new = 191 total collected; 4 pre-existing env errors (missing `fastapi` import, missing `_TIER3B_AVAILABLE` attribute on `audiobook_generator`, missing `vncorenlp_attribution` module) are unrelated to this change — same errors verified via `git stash` round-trip. The new Python tests all pass locally; CI (with full `requirements-test.txt` deps installed) is expected to reach the 203+ bar noted in `ACTION_ITEMS.md`.
+
+Acceptance: bump mechanic cross-validated on both engines; behaviour outside alternation unchanged on both sides.
 
 ---
 

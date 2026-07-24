@@ -1481,10 +1481,29 @@ export function attributeByConversation(
     }
 
     if (roles.actor) {
-      addScore(scores, roles.actor, 0.36, {
+      // ACTION_ITEMS §E3: actor alternation bump. When the previous two
+      // turns in `state.dialogueHistory` were spoken by different
+      // characters (i.e. the conversation is in ping-pong alternation
+      // mode), bump the timeline `actor` weight from the base 0.36 to
+      // 0.48 so the last-mentioned actor's prior wins more decisively
+      // against weaker regex/pronoun/presence evidence. Outside of
+      // detected alternation, behaviour is unchanged at 0.36.
+      //
+      // Mirror of the same bump in `app/tts-service/
+      // conversation_attribution.py` (constants `ACTOR_BASE_WEIGHT` /
+      // `ACTOR_ALT_WEIGHT`). The Python port derives alternation
+      // strength identically (`dialogueHistory.length >= 2 &&
+      // [-2].speaker !== [-1].speaker`).
+      const lastTurn = state.dialogueHistory.at(-1)?.speaker ?? null;
+      const previousTurn = state.dialogueHistory.at(-2)?.speaker ?? null;
+      const alternationActive = !!(lastTurn && previousTurn && lastTurn !== previousTurn);
+      const actorWeight = alternationActive ? 0.48 : 0.36;
+      addScore(scores, roles.actor, actorWeight, {
         source: 'timeline',
-        weight: 0.36,
-        detail: 'last named actor before/around the quote',
+        weight: actorWeight,
+        detail: alternationActive
+          ? 'last named actor before/around the quote (alternating turn — bumped)'
+          : 'last named actor before/around the quote',
       });
     } else if (state.lastActionCharacter) {
       addScore(scores, state.lastActionCharacter, 0.12, {

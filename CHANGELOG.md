@@ -58,6 +58,13 @@ documented here.
 - **End-to-end route plumbing.** Both `/api/library/[id]/chapters/[chapterId]/attribute` (GET, cheap) and `/api/library/[id]/chapters/[chapterId]/attribute/analyze` (SSE, full) pass the resolved genre through three call sites (local baseline + final fuse + the leftover spot that had been missed earlier). The analyze route surfaces the detected genre in the `init` SSE log so the user can see which floor was applied.
 - **Tests + docs.** New `attribution-genre-threshold.test.ts` (8 cases) pins the default fallback, strict and permissive floors, accent-stripping synonyms, `attributeByConversation` propagation, weak-evidence drop under strict cultivation, and `resolveBookGenre` over five book shapes. Total: **209/209** tests pass (was 201/201 after Phase 2.4); `tsc --noEmit` clean. Phase 3.2 of `docs/NEXT_UP_PLAN.md`.
 
+### Attribution — actor alternation bump parity (Phase 3.3)
+
+- **The 0.36 → 0.48 alternation bump is now mirrored on the JS engine.** `roles.actor` in `attributeByConversation` previously used a flat `0.36` timeline weight regardless of scene shape. The Python port already had the bump (constants `ACTOR_BASE_WEIGHT = 0.36` / `ACTOR_ALT_WEIGHT = 0.48`, conditional `actor_weight = ACTOR_ALT_WEIGHT if alternation_strength > 0 else ACTOR_BASE_WEIGHT`). The JS-side implementation now derives `alternationActive = !!(lastTurn && previousTurn && lastTurn !== previousTurn)` from `state.dialogueHistory` and uses `alternationActive ? 0.48 : 0.36`. The bump fires only when the previous two turns were spoken by different characters — exactly the same condition the Python port uses. The evidence `detail` row surfaces `"alternating turn — bumped"` vs the legacy `"last named actor before/around the quote"` so downstream consumers can tell which branch fired.
+- **JS regression test** (`attribution.test.ts`, new case) proves both branches: when alternation is detected, the timeline evidence row carries the bumped 0.48 weight + bumped detail; when alternation is NOT detected, the actor weight stays at 0.36 and the resolved paragraph falls back to the previous speaker (Lan) because 0.36 cannot out-score the scene-memory continuation branch (0.38). Total: **210/210 JS** tests pass.
+- **Python regression test** (`test_actor_alternation_bump.py`, 4 cases) pins: constants `0.36 / 0.48`, the bump fires on alternating seed history, no bump on same-speaker history, no bump on history length < 2. Tests seed `ConversationStateSnapshot.dialogueHistory` directly so they don't depend on a multi-paragraph walk.
+- **Phase 3.3 of `docs/NEXT_UP_PLAN.md` complete** — Phase 3 backlog (3.1 gitignore, 3.2 per-genre floor, 3.3 alternation parity) all done.
+
 ## [Unreleased] - 2026-07-11
 
 ### Reader and playback experience
