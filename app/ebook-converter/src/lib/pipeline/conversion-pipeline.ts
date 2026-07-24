@@ -11,7 +11,7 @@ import fs from 'fs';
 import { parseEpub, TocEntry } from './epub-parser';
 import { validateEpub, ValidationResult } from './epub-validator';
 import { repairEpub, repairEpubHeuristic, RepairResult } from './epub-repairer';
-import { buildEpub, ChapterEntry } from './epub-builder';
+import { buildEpub, ChapterEntry, EpubImage } from './epub-builder';
 import { generateEpubMetadata, detectChapters } from '../ai/epub-analyzer';
 import { enhanceChaptersParallel } from '../ai/chapter-enhancer';
 import { formatChapters as formatChaptersDeep } from '../ai/chapter-formatter';
@@ -155,18 +155,42 @@ export async function runConversionPipeline(opts: PipelineOptions): Promise<Pipe
   await progress(75, 'Building chapter list…');
   let chapters: ChapterEntry[] = [];
 
+  // Filter cover pages out of the spine before chapter construction.
+  // EPUBs vary in how they mark the cover: `<body class="cover-page">`
+  // (EPUB2) or `<body epub:type="cover">` (EPUB3) or `epub:type="frontmatter"`.
+  // Without this filter the cover slips through as a 1-page Chapter 1
+  // — it has enough whitespace and the alt text to pass the 20-char
+  // floor in the `Skip cover-only chapters` filter below. Filename-only
+  // checks (`/cover\.xhtml$/i`) miss the half of real EPUBs that name
+  // the cover `title.xhtml` / `Cover001.xhtml`, so we match the body
+  // metadata instead. The cover branch in buildEpub is unaffected.
+  const chapterHtmlFiles = epub.htmlFiles.filter(
+    (f) => !looksLikeCoverPage(epub.entries.get(f)?.data.toString('utf8') ?? ''),
+  );
+
+  // Shared sink for data-URI images decoded out of any chapter body.
+  // Phase 2.3: data: URIs are extracted to disk-as-buffer entries
+  // (filename pattern `inline-N.<ext>`) and rewritten to a `../images/`
+  // src just like the source-resolver-mapped images. The build reads it
+  // back at Step 6.7 to merge into the images[] collection. Both chapter
+  // branches (AI-detect + spine-order fallback) write into this sink.
+  const dataUriImages: EpubImage[] = [];
+
   const hasToc = epub.tocEntries.length > 0;
   if (!hasToc) {
     // No TOC at all — ask AI to figure out chapter structure
     aiUsed.chapters = true;
     await progress(75, 'Ordering chapters with AI…');
     try {
-      const detected = await detectChapters(epub.tocEntries, epub.htmlFiles);
+      const detected = await detectChapters(epub.tocEntries, chapterHtmlFiles);
       chapters = detected.chapters.map((ch, i) => {
-        const file = epub.htmlFiles.find((f) => f.endsWith(ch.file)) ?? epub.htmlFiles[i];
+        const file = chapterHtmlFiles.find((f) => f.endsWith(ch.file)) ?? chapterHtmlFiles[i];
         const rawHtml = repairResult?.repairedHtml.get(file ?? '') ??
           (file ? epub.entries.get(file)?.data.toString('utf8') : '') ?? '';
-        return makeChapter(i, ch.title, rawHtml, finalMeta.language);
+        // AI-detect branch can also produce interior images, so populate
+        // the same imageResolver + sink as the spine-order branch.
+        const imageResolver = file ? buildImageResolver(epub, file) : undefined;
+        return makeChapter(i, ch.title, rawHtml, finalMeta.language, imageResolver, dataUriImages);
       });
     } catch {
       // Fall through to spine-order fallback below
@@ -182,7 +206,7 @@ export async function runConversionPipeline(opts: PipelineOptions): Promise<Pipe
       tocByBasename.set(path.basename(entry.src), entry.title);
     }
 
-    chapters = epub.htmlFiles.map((file, i) => {
+    chapters = chapterHtmlFiles.map((file, i) => {
       const rawHtml = repairResult?.repairedHtml.get(file) ??
         epub.entries.get(file)?.data.toString('utf8') ?? '';
 
@@ -192,7 +216,11 @@ export async function runConversionPipeline(opts: PipelineOptions): Promise<Pipe
         tocByBasename.get(path.basename(file)) ??
         `Chapter ${i + 1}`;
 
-      return makeChapter(i, tocTitle, rawHtml, finalMeta.language);
+      // Build a per-chapter image resolver so `<img src="...">` inside the
+      // body can be rewritten against `../images/<basename>` for the output
+      // (chapters live at `EPUB/chapterN.xhtml`; images at `EPUB/images/…`).
+      const imageResolver = buildImageResolver(epub, file);
+      return makeChapter(i, tocTitle, rawHtml, finalMeta.language, imageResolver, dataUriImages);
     }).filter((ch) => {
       // Skip cover-only chapters: body has no readable text after stripping tags
       const textContent = ch.html.replace(/<[^>]+>/g, '').trim();
@@ -414,6 +442,18 @@ export async function runConversionPipeline(opts: PipelineOptions): Promise<Pipe
     await progress(88, 'Embedding source cover…');
   }
 
+  // Phase 2.2 / 2.3: build the interior-image collection for buildEpub. We
+  // do this AFTER cover resolution so the cover's source entry can be
+  // filtered out — the cover branch in buildEpub will write its own
+  // `<item properties="cover-image">` row plus the cover bytes, and we'd
+  // otherwise double-emit the same file. The collection is the source-EPUB
+  // images PLUS any data-URI images extracted out of chapter bodies (the
+  // latter is populated by the chapter loop above; we read it back here).
+  const interiorImages: EpubImage[] = [
+    ...collectInteriorImages(epub, coverInfo?.sourceEntry ?? null),
+    ...(dataUriImages ?? []),
+  ];
+
   // ── Step 7: build final EPUB ──────────────────────────────────────────
   await progress(90, 'Building EPUB…');
   // Reader-friendly mode swaps in a minimal, e-ink-safe stylesheet so the
@@ -433,6 +473,7 @@ export async function runConversionPipeline(opts: PipelineOptions): Promise<Pipe
       fontPaths: readerFriendly ? undefined : fontPaths,
       customCss:   readerFriendly ? READER_FRIENDLY_CSS : undefined,
       coverImagePath: coverInfo?.path,
+      images:      interiorImages.length > 0 ? interiorImages : undefined,
     },
     outputPath,
   );
@@ -470,6 +511,29 @@ function extractTitleFromBody(body: string): string | null {
   return m[1].replace(/<[^>]+>/g, '').trim() || null;
 }
 
+/** Heuristic: returns true when the supplied source HTML looks like a
+ *  cover page rather than a real chapter. EPUB2 typically marks cover
+ *  pages via `class="cover-page"` on `<body>`; EPUB3 uses
+ *  `epub:type="cover"` or `epub:type="frontmatter"` on `<body>`. Some
+ *  exporters wrap the cover in a `<section epub:type="cover">` inside a
+ *  normal `<body>` — the body-level metadata is the most reliable
+ *  signal we have without re-parsing the OPF. The function is
+ *  deliberately permissive: a false positive (skipping a real chapter)
+ *  is the same failure mode the old code had with cover xhtmls that
+ *  happened to have > 20 chars of text. A false negative lets the old
+ *  bug surface again, which the test in image-preservation.test.ts
+ *  pins so we notice. */
+function looksLikeCoverPage(html: string): boolean {
+  if (!html) return false;
+  const bodyMatch = html.match(/<body\b([^>]*)>/i);
+  if (!bodyMatch) return false;
+  const attrs = bodyMatch[1];
+  if (/\bclass\s*=\s*["'][^"']*\bcover-page\b/i.test(attrs)) return true;
+  if (/\bepub:type\s*=\s*["'][^"']*\bcover\b/i.test(attrs)) return true;
+  if (/\bepub:type\s*=\s*["'][^"']*\bfrontmatter\b/i.test(attrs)) return true;
+  return false;
+}
+
 /**
  * Remove ALL consecutive heading elements from the very start of the body.
  * We inject our own clean <h1> via buildChapterHtml, so originals are redundant.
@@ -494,7 +558,14 @@ function stripLeadingHeadings(body: string, title?: string): string {
   return result;
 }
 
-function makeChapter(i: number, tocTitle: string, rawHtml: string, lang: string): ChapterEntry {
+function makeChapter(
+  i: number,
+  tocTitle: string,
+  rawHtml: string,
+  lang: string,
+  imageResolver?: (src: string) => string | null,
+  dataUriSink?: EpubImage[],
+): ChapterEntry {
   const rawBody = extractBody(rawHtml);
 
   // Prefer title from the actual HTML heading (canonical source of truth)
@@ -502,8 +573,29 @@ function makeChapter(i: number, tocTitle: string, rawHtml: string, lang: string)
   const title = bodyTitle || tocTitle;
 
   // Strip the heading from body — buildChapterHtml injects its own clean <h1>
-  // Also strip all <img> tags — images can't be resolved from the output EPUB
-  const body = stripImages(stripLeadingHeadings(rawBody, title));
+  let body = stripLeadingHeadings(rawBody, title);
+
+  // Phase 2.3: data-URI images → extract to files first, so the resolver
+  // (Phase 2.2) sees a clean body with no inline data URIs. This pass is
+  // idempotent: if no `<img src="data:...">` is present, the body is
+  // returned unchanged. The sink (when present) is a shared list across
+  // chapters so duplicate `inline-N.<ext>` filenames can't happen — the
+  // extractor picks a fresh `N` per insertion.
+  if (dataUriSink) {
+    body = extractDataUriImages(body, dataUriSink);
+  }
+
+  // Phase 2.2: rewrite interior `<img src>` against the source image map
+  // when we have a resolver. The resolver is `undefined` for the
+  // buildMinimalEpubFromFile() path (no real source EPUB), so we fall
+  // back to the legacy strip pass there. For real EPUB conversions, an
+  // unresolvable `src` is left untouched — the reader will show a broken
+  // image, which is preferable to silently dropping content.
+  if (imageResolver) {
+    body = rewriteImageSources(body, imageResolver);
+  } else {
+    body = stripImages(body);
+  }
 
   const n = String(i + 1).padStart(3, '0');
   return {
@@ -514,13 +606,226 @@ function makeChapter(i: number, tocTitle: string, rawHtml: string, lang: string)
   };
 }
 
-/** Remove img elements from body content. The cover image is preserved
- *  separately by `resolveSourceCover` + `buildEpub`'s cover branch; only
- *  interior content images are dropped for now. (A follow-up will
- *  rewrite interior `<img src>` against an `EPUB/images/` collection
- *  and add a manifest loop for non-cover images.) */
+/** Phase 2.3 — decode any `<img src="data:image/<ext>;base64,<payload>">`
+ *  out of the body and into the shared `sink` as a regular `EpubImage`.
+ *  Returns the rewritten HTML with the inline payload replaced by a
+ *  `../images/inline-N.<ext>` src that the reader can resolve the same
+ *  way it resolves file-backed figures.
+ *
+ *  Notes:
+ *  - Operates only on quoted `data:image/...` srcs; bare-word forms are
+ *    too rare to bother with and would complicate the regex.
+ *  - Non-image data URIs (e.g. `data:application/octet-stream`) are
+ *    passed through untouched.
+ *  - Bad payloads (decode fails, buffer is empty) are passed through
+ *    untouched, so a malformed inline image doesn't break the build.
+ *  - The deterministic filename pattern `inline-N.<ext>` keeps the
+ *    rewritten HTML readable in the output for debugging.
+ */
+function extractDataUriImages(body: string, sink: EpubImage[]): string {
+  return body.replace(
+    /<img\b([^>]*?)\ssrc=(["'])data:image\/([A-Za-z0-9+.-]+)(?:;base64)?,([^"']+)\2([^>]*?)\/?>/gi,
+    (match, pre, quote, rawExt, payload, post) => {
+      const ext = normalizeImageExt(rawExt);
+      if (!ext) return match;
+      let buf: Buffer;
+      try {
+        buf = Buffer.from(payload, 'base64');
+      } catch {
+        return match;
+      }
+      if (buf.length === 0) return match;
+
+      // Pick a non-colliding inline-N.<ext>.
+      const used = new Set(sink.map((i) => i.href));
+      let n = 1;
+      while (used.has(`inline-${n}.${ext}`)) n++;
+      const basename = `inline-${n}.${ext}`;
+      const mediaType = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+      sink.push({
+        id: `img-inline-${sink.length + 1}`,
+        href: basename,
+        data: buf,
+        mediaType,
+      });
+
+      const newSrc = `../images/${basename}`;
+      const isSelfClosing = match.endsWith('/>');
+      return `<img${pre} src=${quote}${newSrc}${quote}${post}${isSelfClosing ? ' /' : ''}>`;
+    },
+  );
+}
+
+/** Normalize a `data:image/<ext>` segment to a safe filename extension.
+ *  Returns `''` for extensions we don't know how to write safely. */
+function normalizeImageExt(raw: string): string {
+  const e = raw.toLowerCase();
+  switch (e) {
+    case 'png':
+    case 'gif':
+    case 'svg':
+    case 'svg+xml':
+    case 'webp':
+    case 'jpg':
+    case 'jpeg':
+      return e === 'jpeg' ? 'jpg' : e === 'svg+xml' ? 'svg' : e;
+    default:
+      return '';
+  }
+}
+
+/** Remove img elements from body content. This is the LEGACY path —
+ *  only used when we don't have a source EPUB to resolve images against
+ *  (the `buildMinimalEpubFromFile()` branch for non-EPUB inputs like
+ *  raw `.txt`/`.html`). For real EPUB conversions, `makeChapter` now
+ *  rewrites `<img src>` via `rewriteImageSources` instead. Kept here
+ *  so the helper signatures stay simple. */
 function stripImages(body: string): string {
   return body.replace(/<img\b[^>]*\/?>/gi, '').trim();
+}
+
+/** Build the non-cover image collection to hand to buildEpub. Skips:
+ *    - the cover entry (the cover branch owns that filename + bytes);
+ *    - any entry whose buffer is missing or zero-length.
+ *  Order follows the source `epub.imageFiles` order so the manifest
+ *  rows are stable across re-runs. The `id` is derived from the
+ *  basename with a `-N` suffix on collision, which avoids id collisions
+ *  when two different directories happen to contain figures named the
+ *  same. The builder's own sanitizer may further rename the `href` if
+ *  the manifest already has a cover-named row; that's expected. */
+function collectInteriorImages(
+  epub: import('./epub-parser').ParsedEpub,
+  coverEntryName: string | null,
+): EpubImage[] {
+  const out: EpubImage[] = [];
+  const usedIds = new Set<string>();
+  for (const entryName of epub.imageFiles) {
+    if (coverEntryName && entryName === coverEntryName) continue;
+    const entry = epub.entries.get(entryName);
+    if (!entry || !entry.data || entry.data.length === 0) continue;
+    const basename = path.posix.basename(entryName);
+    const dot = basename.lastIndexOf('.');
+    const ext = dot > 0 ? basename.slice(dot + 1).toLowerCase() : 'jpg';
+    const mediaType = imageMediaType(ext);
+    // Derive a deterministic id from the basename; sanitize to
+    // [a-z0-9_-] and prefix to avoid clashing with reserved names.
+    let baseId = basename
+      .replace(/\.[^.]+$/, '')                  // strip ext
+      .replace(/[^A-Za-z0-9_-]+/g, '-')         // collapse illegal chars
+      .replace(/^-+|-+$/g, '')
+      .toLowerCase();
+    if (!baseId) baseId = 'image';
+    let id = `img-${baseId}`;
+    let n = 2;
+    while (usedIds.has(id)) id = `img-${baseId}-${n++}`;
+    usedIds.add(id);
+    out.push({ id, href: basename, data: entry.data, mediaType });
+  }
+  return out;
+}
+
+function imageMediaType(ext: string): string {
+  switch (ext.toLowerCase()) {
+    case 'png': return 'image/png';
+    case 'gif': return 'image/gif';
+    case 'svg': return 'image/svg+xml';
+    case 'webp': return 'image/webp';
+    case 'jpg':
+    case 'jpeg':
+    default:
+      return 'image/jpeg';
+  }
+}
+
+/** Rewrite every `<img src="...">` whose src the resolver can map to a
+ *  source-EPUB image entry. Unresolvable srcs are left in place so the
+ *  user sees a broken-image marker rather than silently dropped content.
+ *  The replacement is always `../images/<basename>` so the converter
+ *  emits a uniform path regardless of the source's directory layout. */
+function rewriteImageSources(body: string, resolve: (src: string) => string | null): string {
+  return body.replace(/<img\b([^>]*?)\/?>/gi, (match, attrs) => {
+    // Pull out the quoted-or-bare src value.
+    const m = attrs.match(/\ssrc=(?:"([^"]+)"|'([^']+)'|(\S+))/i);
+    if (!m) return match;
+    const src = m[1] ?? m[2] ?? m[3] ?? '';
+    const resolved = resolve(src);
+    if (!resolved) return match;
+
+    // Preserve original quote style: which capture group matched tells
+    // us which delimiter to emit on rewrite.
+    let quote: '"' | "'" | '' = '';
+    if (m[1] !== undefined) quote = '"';
+    else if (m[2] !== undefined) quote = "'";
+    else if (m[3] !== undefined) quote = '';
+
+    // Strip the old src attribute and append the rewritten one.
+    // Doing it as a string replace (rather than re-emitting the whole
+    // tag from `attrs`) keeps any other attributes untouched.
+    const newAttrs = attrs.replace(/\ssrc=(?:"[^"]+"|'[^']+'|\S+)/i, '')
+      + ` src=${quote}../images/${resolved}${quote}`;
+    const isSelfClosing = match.endsWith('/>');
+    return `<img${newAttrs}${isSelfClosing ? ' /' : ''}>`;
+  });
+}
+
+/** Build a per-chapter image resolver. The resolver takes the value of
+ *  an `<img src="...">` attribute from the chapter HTML and returns the
+ *  basename of the matching source-EPUB image (the form we need in the
+ *  output), or `null` if nothing matched (caller leaves the src alone).
+ *
+ *  Source paths are typically expressed relative to the chapter's
+ *  directory (e.g. `<img src="../Images/figure-1.png">` from a chapter
+ *  at `OEBPS/Text/ch1.xhtml` resolving to `OEBPS/Images/figure-1.png`).
+ *  We try that first, plus a couple of fallbacks:
+ *    • bare src (treated as ZIP root)
+ *    • backslash form (`../Images\\figure-1.png` from sloppy exporters)
+ *    • case-insensitive match (EPUB readers tolerate this; some
+ *      exporters do too)
+ *
+ *  External URLs (`http:`, `mailto:`) and data URIs are skipped — the
+ *  latter is handled by Phase 2.3 separately.
+ */
+function buildImageResolver(
+  epub: import('./epub-parser').ParsedEpub,
+  chapterFile: string,
+): (src: string) => string | null {
+  const chapterDir = path.posix.dirname(chapterFile);
+  // Snapshot entry keys once so the loop is O(n) instead of O(n²).
+  const entryKeys = Array.from(epub.entries.keys());
+  return (src: string): string | null => {
+    if (!src) return null;
+    // Strip fragment / query before doing any IO.
+    const cleanSrc = src.split('#')[0].split('?')[0].trim();
+    if (!cleanSrc) return null;
+    if (/^(?:https?:|data:|mailto:)/i.test(cleanSrc)) return null;
+
+    // Build candidate resolved paths.
+    const candidates = new Set<string>();
+    if (chapterDir && chapterDir !== '.') {
+      const normalized = path.posix
+        .normalize(`${chapterDir}/${cleanSrc}`)
+        .replace(/^\/+/, '');
+      candidates.add(normalized);
+    }
+    candidates.add(cleanSrc.replace(/^\/+/, ''));
+    if (cleanSrc.includes('\\')) {
+      candidates.add(cleanSrc.replace(/\\/g, '/').replace(/^\/+/, ''));
+    }
+
+    for (const cand of candidates) {
+      if (epub.entries.has(cand)) return path.posix.basename(cand);
+      // EPUB readers tolerate case-mismatched filenames; some sloppy
+      // exporters do too. Walk the entry key list looking for a
+      // case-insensitive match. Cost is O(imageFiles × chapters) per
+      // missing src, but typical books have <100 images so this is
+      // fine.
+      const wanted = cand.toLowerCase();
+      for (const key of entryKeys) {
+        if (key.toLowerCase() === wanted) return path.posix.basename(key);
+      }
+    }
+    return null;
+  };
 }
 
 interface ResolvedCover {
@@ -530,6 +835,10 @@ interface ResolvedCover {
   /** Extension (without the dot), used by the builder for media-type
    *  detection. Mirrored in the output `EPUB/images/cover.<ext>`. */
   ext: string;
+  /** The source-EPUB entry name (e.g. `OEBPS/Images/cover.png`).
+   *  Used by `collectInteriorImages` to skip the cover row, so we don't
+   *  double-emit the cover file. */
+  sourceEntry: string;
 }
 
 /** Locate the cover image in a parsed source EPUB and write its bytes
@@ -594,7 +903,7 @@ function resolveSourceCover(epub: import('./epub-parser').ParsedEpub): ResolvedC
     console.warn('[pipeline] Failed to stage source cover for pass-through:', err);
     return null;
   }
-  return { path: sidecarPath, ext };
+  return { path: sidecarPath, ext, sourceEntry: coverEntryName };
 }
 
 function extractBody(html: string): string {

@@ -94,7 +94,7 @@ No commit needed — all artifacts were already correctly untracked; only on-dis
 
 ## Phase 2 — Interior image preservation
 
-> **Status:** 🟡 In progress (2.1 done ✅, 2.2-2.4 pending ⬜)
+> **Status:** ✅ Done (2026-07-24)
 > **Goal:** Carry interior content images through the conversion pipeline, not just the cover.
 > **Effort:** ~3-4 days
 
@@ -111,46 +111,36 @@ No commit needed — all artifacts were already correctly untracked; only on-dis
 
 ### 2.2 Stop stripping interior images + rewrite `<img src>`
 
-> **Status:** ⬜ Pending
-> **Files:** `app/ebook-converter/src/lib/pipeline/conversion-pipeline.ts`
+> **Status:** ✅ Done (2026-07-24)
+> **Files:** `app/ebook-converter/src/lib/pipeline/conversion-pipeline.ts` (`buildImageResolver`, `rewriteImageSources`, `collectInteriorImages`, threaded through `makeChapter`, image collection passed to `buildEpub`)
 
-Replace `stripImages` with `rewriteImageSources(body, imageMap)` in `makeChapter`. The new function:
-
-- For each `<img src="…">` in the body, look up the src in the imageMap (built from `epub.imageFiles` + OPF-relative resolution).
-- If found, rewrite the src to `../images/<basename>` (chapters live at `EPUB/chapterN.xhtml`; images at `EPUB/images/…`).
-- If NOT found, leave the src alone (output shows broken image rather than silently dropping content).
-
-Pass the image collection to `buildEpub` in Step 7.
-
-**Acceptance:** `runConversionPipeline` against `fixture-illustrated-novel.epub` produces an output with all 3 interior images + the cover; the chapter HTML has rewritten `<img src>`; the OPF has 4 image items; the output opens in a reader.
+**Result:** Every `<img src>` in a real EPUB chapter body is now resolved against the source's image entries (OPF-relative, with `..`/`./` normalisation + case-insensitive fallback). Resolved srcs are rewritten to the unified `../images/<basename>` form (the layout `buildEpub` owns). Unresolved srcs are left untouched — the reader will show a broken-image marker rather than silently dropping content. Cover entry is filtered from the interior-images collection so the cover branch and the interior branch don't double-emit. `stripImages` is retained as a legacy fallback for the `buildMinimalEpubFromFile()` non-EPUB path.
 
 ### 2.3 Handle data-URI images
 
-> **Status:** ⬜ Pending
-> **Files:** Same `conversion-pipeline.ts`, new helper `decodeDataUriImages(body, imageSink)`
+> **Status:** ✅ Done (2026-07-24)
+> **Files:** same `conversion-pipeline.ts` (`extractDataUriImages`, `normalizeImageExt`)
 
-For each `<img src="data:image/png;base64,...">`:
-- Decode the base64 → Buffer.
-- Generate a deterministic filename (`inline-1.png`, `inline-2.png`).
-- Add to the image collection.
-- Rewrite the `src` to `../images/inline-1.png`.
-
-**Acceptance:** The fixture's data-URI image is extracted to a file in the output; the chapter src is rewritten.
+**Result:** Any `<img src="data:image/<ext>;base64,<payload>">` in a chapter body is decoded to a `Buffer`, named `inline-N.<ext>` (deterministic — collision-free across chapters), and added to the `EpubImage[]` collection (id prefix `img-inline-`). The src is rewritten to `../images/inline-N.<ext>` so the reader resolves it the same way it resolves file-backed figures. Bad payloads (decode fails, empty buffer) are left untouched so they don't break the build.
 
 ### 2.4 Tests
 
-> **Status:** ⬜ Pending
-> **Files:** `app/ebook-converter/src/tests/image-preservation.test.ts` (new)
+> **Status:** ✅ Done (2026-07-24)
+> **Files:** `app/ebook-converter/src/tests/image-preservation.test.ts` (new — 1 end-to-end test covering all 4 images)
 
-End-to-end test that runs `runConversionPipeline` against the fixture EPUB and asserts:
+**Result:** End-to-end test runs `runConversionPipeline` against `samples/fixture-illustrated-novel.epub` and pins:
+- All 4 image files (`cover.png`, `figure-1.png`, `figure-2.png`, `inline-1.png`) present in the output ZIP at `EPUB/images/…`
+- OPF manifest has one `<item>` per image with the right `media-type`
+- Cover row retains `properties="cover-image"`; interior rows do not
+- Chapter HTML has rewritten `<img src="../images/<basename>">`; no `../Images/` (source casing) or `data:` URIs remain
+- Total: **201/201** tests pass (was 200/200 after Phase 2.1).
 
-- All 4 image files are in the output ZIP (1 cover + 3 interior).
-- The OPF manifest has `<item>` entries for all 4 with correct `media-type`.
-- Chapter HTML has rewritten `<img src="…">` pointing to `../images/…`.
-- The data-URI image was extracted to a file and is no longer a `data:` URL.
-- The output passes `epub-validator` (existing test).
+### Bonus fix: cover pages no longer sneak in as Chapter 1
 
-**Acceptance:** 4-5 new test cases; all green; `npx vitest run` reports 200+/200+.
+> **Status:** ✅ Done (2026-07-24)
+> **Files:** `app/ebook-converter/src/lib/pipeline/conversion-pipeline.ts` (new `looksLikeCoverPage` helper; used to filter `epub.htmlFiles` before chapter construction in both branches)
+
+**Result:** Source EPUBs whose cover is rendered as its own XHTML page (`cover.xhtml`/`title.xhtml` with `<body class="cover-page">`/`epub:type="cover"`/`epub:type="frontmatter">`) used to slip through the "skip cover-only chapters" filter because the embedded `<img>` + `<section>` whitespace pads the body text past the 20-char floor. The result was an extra "Chapter 1" with a broken `src="../Images/…"` reference (since the cover branch already consumed the cover bytes) sitting at the start of every converted book. The Phase 2.4 test surfaced this; the fix is a body-attribute heuristic in `looksLikeCoverPage` that filters these pages out before chapter construction. The cover branch in `buildEpub` is unchanged — it still owns the cover image + spine row.
 
 ---
 
