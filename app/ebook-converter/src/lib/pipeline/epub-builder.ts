@@ -13,6 +13,27 @@ export interface ChapterEntry {
   html: string;
 }
 
+/** Interior content image (non-cover). The cover has its own branch
+ *  driven by `coverImagePath`; everything else flows through `images`.
+ *  The builder writes each image under `EPUB/images/<href>` and emits
+ *  one `<item>` per image in the manifest (no `properties="cover-image"`
+ *  is set — that's reserved for the cover branch). */
+export interface EpubImage {
+  /** Manifest id (must be unique within the book). The builder de-dups
+   *  against its own reserved ids (`cover-image`, `cover-page`, `nav`,
+   *  `ncx`, `css`, font rows) and appends a numeric suffix on collision. */
+  id: string;
+  /** Filename relative to `EPUB/images/`, e.g. `figure-1.png`. Must not
+   *  contain any `/` or `..` — paths are sanitized; `cover.<ext>` is
+   *  reserved for the cover branch and would be ignored to avoid
+   *  colliding with the manifest's `properties="cover-image"` item. */
+  href: string;
+  /** Raw image bytes. */
+  data: Buffer;
+  /** MIME type for the manifest, e.g. `image/png`. */
+  mediaType: string;
+}
+
 export interface EpubBuildInput {
   title: string;
   author: string;
@@ -22,6 +43,11 @@ export interface EpubBuildInput {
   coverImagePath?: string;
   chapters: ChapterEntry[];
   fontPaths?: Record<string, string>; // font basename → local fs path
+  /** Non-cover content images (figures, illustrations). The builder
+   *  writes each entry under `EPUB/images/<href>` and emits one
+   *  manifest `<item>` per image, ordered after the cover row (if any)
+   *  and before the chapters. */
+  images?: EpubImage[];
   /** Override the bundled stylesheet. Defaults to STANDARD_CSS. Used by
    *  the `readerFriendly` mode to swap in READER_FRIENDLY_CSS — a minimal
    *  stylesheet that's safe for Onyx Boox / Kobo / older Kindle. */
@@ -94,11 +120,13 @@ export async function buildEpub(input: EpubBuildInput, outputPath: string): Prom
   let coverManifest = '';
   let coverSpine = '';
   let coverMeta = '';
+  let coverImageHref = '';
   if (input.coverImagePath && fs.existsSync(input.coverImagePath)) {
     const ext = (input.coverImagePath.split('.').pop() ?? 'jpg').toLowerCase();
     const mime = imageMediaType(ext);
     zip.addFile(input.coverImagePath, `EPUB/images/cover.${ext}`);
-    coverManifest = `    <item id="cover-image" href="images/cover.${ext}" media-type="${mime}" properties="cover-image"/>
+    coverImageHref = `images/cover.${ext}`;
+    coverManifest = `    <item id="cover-image" href="${coverImageHref}" media-type="${mime}" properties="cover-image"/>
     <item id="cover-page" href="cover.xhtml" media-type="application/xhtml+xml"/>`;
     coverSpine = '\n    <itemref idref="cover-page"/>';
     coverMeta = '\n  <meta name="cover" content="cover-image"/>';
@@ -112,6 +140,54 @@ export async function buildEpub(input: EpubBuildInput, outputPath: string): Prom
 <body class="cover-page" epub:type="frontmatter cover"><section epub:type="cover"><img src="images/cover.${ext}" alt="Cover"/></section></body>
 </html>`,
     );
+  }
+
+  // ── Interior content images (non-cover) ────────────────────────────────
+  // Emit each image under EPUB/images/<href> with a plain manifest `<item>`
+  // (no `properties="cover-image"` — that row is reserved for the cover
+  // branch above). De-dupes ids against the builder's reserved set and
+  // against any other caller-supplied rows; renames a colliding href with
+  // a `-N` suffix rather than skipping it (silently dropping an image
+  // would be the worse failure mode). Anything with a `cover.<ext>` href
+  // is skipped, never overwritten, since the cover branch already owns
+  // that filename.
+  const imageManifestItems: string[] = [];
+  if (input.images && input.images.length > 0) {
+    const usedIds = new Set<string>(['nav', 'ncx', 'css', 'cover-image', 'cover-page']);
+    // Track used hrefs (relative to manifest root, no leading slash).
+    const usedHrefs = new Set<string>(coverImageHref ? [coverImageHref] : []);
+    for (const img of input.images) {
+      if (!img.data || img.data.length === 0) continue;
+      const cleanedHref = sanitizeImageHref(img.href);
+      if (!cleanedHref) continue;
+
+      // Resolve id collisions: <id> → <id>, <id>-2, <id>-3, …
+      let id = img.id;
+      let n = 2;
+      while (usedIds.has(id)) id = `${img.id}-${n++}`;
+      usedIds.add(id);
+
+      // Resolve href collisions. Cover href is excluded from this rename
+      // (would create ambiguity) — drop the entry instead. Caller-side
+      // hrefs that happen to collide with each other get `-N` suffix.
+      let finalHref = cleanedHref;
+      let m = 2;
+      const isCoverCollision = (h: string) =>
+        coverImageHref && `images/${h}` === coverImageHref;
+      if (isCoverCollision(finalHref)) continue;
+      while (usedHrefs.has(`images/${finalHref}`)) {
+        const dot = finalHref.lastIndexOf('.');
+        const base = dot > 0 ? finalHref.slice(0, dot) : finalHref;
+        const ext = dot > 0 ? finalHref.slice(dot) : '';
+        finalHref = `${base}-${m++}${ext}`;
+      }
+      usedHrefs.add(`images/${finalHref}`);
+
+      zip.addBuffer(img.data, `EPUB/images/${finalHref}`);
+      imageManifestItems.push(
+        `    <item id="${id}" href="images/${finalHref}" media-type="${escXml(img.mediaType)}"/>`,
+      );
+    }
   }
 
   // ── Chapters ────────────────────────────────────────────────────────────
@@ -223,6 +299,7 @@ ${ncxPoints}
     <item id="css" href="css/style.css" media-type="text/css"/>
 ${coverManifest}
 ${fontManifestItems.join('\n')}
+${imageManifestItems.join('\n')}
 ${chapterManifest}
   </manifest>
   <spine toc="ncx">${coverSpine}
@@ -387,6 +464,30 @@ ${pad}</navPoint>`;
 function tocDepth(node: TocNode): number {
   if (node.children.length === 0) return 1;
   return 1 + Math.max(...node.children.map(tocDepth));
+}
+
+/** Sanitize an image href into a safe EPUB-images basename.
+ *  Strips any directory prefix (we always emit under `EPUB/images/`),
+ *  neutralizes `..` traversal, and replaces path separators and any
+ *  character that isn't safe in an EPUB ZIP entry name. Returns `null`
+ *  for empty or wholly-illegal inputs so the caller can skip them. */
+function sanitizeImageHref(href: string): string | null {
+  if (typeof href !== 'string' || href.length === 0) return null;
+  // Drop any directory components — paths other than `cover.<ext>` are
+  // not preserved since EPUB/images/ is flat.
+  let base = href;
+  // Replace backslashes (Windows-y inputs).
+  base = base.replace(/\\/g, '/');
+  // Keep only the final segment.
+  base = base.split('/').pop() ?? '';
+  // Forbid ".", "..", and anything starting with "." (hidden / traversal).
+  if (!base || base === '.' || base === '..' || base.startsWith('.')) return null;
+  // Replace anything outside [A-Za-z0-9._-] with `_`. We keep `.` to
+  // preserve file extensions and `-`/`_` for readability.
+  const cleaned = base.replace(/[^A-Za-z0-9._-]/g, '_');
+  // After sanitization, must still have something usable.
+  if (!cleaned || cleaned === '.' || cleaned === '..') return null;
+  return cleaned;
 }
 
 function imageMediaType(ext: string) {

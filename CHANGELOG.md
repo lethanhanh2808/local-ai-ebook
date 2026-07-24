@@ -37,6 +37,12 @@ documented here.
 
 - **Deterministic illustrated fixture EPUB committed.** `samples/fixture-illustrated-novel.epub` (21 KB, 12 entries, SHA256 `5f893ddd179ccab41343ea224862450a7e12bf0d95150cf2f98b006a21469fdc`) ships in the repo so the Phase 2 interior-image-preservation tests have a stable target. Built by `scripts/build-fixture-epub.mjs` (one-off, uses `sharp` + `yazl`); structure is 1 cover (600×900), 2 figures (300×200) plus a base64 data-URI variant, and 4 chapters covering the control / inline / block-level / short cases. A `.sha256` sidecar lets future asserts pin against accidental modifications. Parent `.gitignore` updated with a scoped `!app/ebook-converter/samples/**/*.epub` negation so the blanket `*.epub` rule (which exists to exclude user-library books from version control) doesn't sweep the fixture away.
 
+### Conversion pipeline — interior images (Phase 2.1)
+
+- **Builder now accepts an `images[]` field on `EpubBuildInput`.** New `EpubImage` interface (`{ id, href, data, mediaType }`) lets the conversion pipeline carry non-cover content images (figures, illustrations) through to the output EPUB. For each entry the builder writes the bytes under `EPUB/images/<sanitized-href>` and emits one `<item id="…" href="images/…" media-type="…"/>` per image in the manifest, ordered after the cover branch (when present) and before the chapters. Id collisions get a `-N` suffix; href collisions get the same treatment. `cover.<ext>` is reserved for the cover branch and a caller-supplied collision is skipped (never silently overwritten). Hrefs are sanitized — directory prefixes stripped, `..`/`.foo`/empty rejected, illegal chars replaced with `_` — so a dirty input cannot write outside `EPUB/images/`.
+  - **5 new unit tests** (`epub-builder-images.test.ts`) cover the happy path with byte fidelity, manifest ordering vs chapters, cover-href collision rejection, sanitization rules, and id/href dedupe. Total test count: **200/200** (was 195/195).
+  - Next step (Phase 2.2): the conversion pipeline stops calling `stripImages` and starts rewriting `<img src>` against an image map built from the source EPUB's image entries + OPF-relative resolution. Then passes the collection to the new `images[]` field.
+
 ## [Unreleased] - 2026-07-11
 
 ### Reader and playback experience

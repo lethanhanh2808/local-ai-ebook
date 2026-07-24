@@ -94,21 +94,20 @@ No commit needed — all artifacts were already correctly untracked; only on-dis
 
 ## Phase 2 — Interior image preservation
 
-> **Status:** ⬜ Pending (depends on Phase 1.1)
+> **Status:** 🟡 In progress (2.1 done ✅, 2.2-2.4 pending ⬜)
 > **Goal:** Carry interior content images through the conversion pipeline, not just the cover.
 > **Effort:** ~3-4 days
 
 ### 2.1 Add `images` field to `EpubBuildInput`
 
-> **Status:** ⬜ Pending
-> **Files:** `app/ebook-converter/src/lib/pipeline/epub-builder.ts`
+> **Status:** ✅ Done (2026-07-24)
+> **Files:** `app/ebook-converter/src/lib/pipeline/epub-builder.ts` (new field + emission loop + `sanitizeImageHref` helper), `app/ebook-converter/src/tests/epub-builder-images.test.ts` (new — 5 cases)
 
-Add `images?: Array<{ id: string; href: string; data: Buffer; mediaType: string }>` to `EpubBuildInput`. In `buildEpub`:
-
-- For each image, `zip.addBuffer(image.data, 'EPUB/images/' + image.href)`.
-- Emit `<item id="…" href="images/…" media-type="…"/>` in the manifest (general `<item>` loop, not the cover branch).
-
-**Acceptance:** `EpubBuildInput` accepts an image collection; the manifest has one `<item>` per image; each image is in the output ZIP at the expected path.
+**Result:**
+- `EpubBuildInput.images?: EpubImage[]` with `{ id, href, data, mediaType }`.
+- `buildEpub` emits each image under `EPUB/images/<sanitized-href>` and adds one `<item id=… href="images/…" media-type="…"/>` per image in the manifest, after the cover row but before the chapter rows. De-dupes ids and hrefs against reserved names (`nav`, `ncx`, `css`, `cover-image`, `cover-page`, etc.) — collisions get a `-N` suffix instead of being silently dropped. Image hrefs are sanitized (`subdir/x.png` → `x.png`, `..`/`.hidden.png`/`""` dropped, illegal chars replaced with `_`).
+- 5 new unit tests cover: happy path + byte fidelity, manifest ordering vs chapters, cover-href collision skips the rogue row, sanitization rules, and id/href dedupe. All green; **200/200** total tests now pass (was 195/195).
+- Next step: Phase 2.2 wires the conversion pipeline into this field and starts rewriting `<img src>` against the image map instead of stripping it.
 
 ### 2.2 Stop stripping interior images + rewrite `<img src>`
 
