@@ -285,7 +285,6 @@ async function generateOneChapter(
   });
   const existing = await getChapter(bookId, chapterFile);
   if (!opts.force && existing?.status === 'ready' && existing.configHash === configHash && existing.audioPath && fs.existsSync(existing.audioPath)) {
-    console.log(`[audiobook] ${bookId}/${chapterFile} up-to-date; skipping`);
     return;
   }
   if (existing?.audioPath && (opts.force || existing.configHash !== configHash)) {
@@ -499,8 +498,6 @@ async function generateOneChapter(
       generatedAt: new Date(),
       configHash,
     });
-    const ratio = mp3Converted ? ` (MP3 ${(sizeBytes/1024).toFixed(0)} KB)` : ` (WAV ${(sizeBytes/1024).toFixed(0)} KB)`;
-    console.log(`[audiobook] ${bookId}/${chapterFile} ready (${(sizeBytes/1024).toFixed(0)} KB, ${(durationMs/1000).toFixed(1)}s)${ratio}`);
   } finally {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
   }
@@ -514,7 +511,6 @@ export async function generateEntireBook(bookId: string, backend: string) {
   const epub = await parseEpub(bookPath);
   const chapterFiles = epub.htmlFiles.filter((f) => !/cover\.(x?html?)$/i.test(f));
 
-  console.log(`[audiobook] Book ${bookId}: ${chapterFiles.length} chapters to generate with ${backend}`);
   await setBookAudiobookStatus(bookId, 'generating');
 
   let totalDurMs = 0;
@@ -526,7 +522,6 @@ export async function generateEntireBook(bookId: string, backend: string) {
     // Check stop signal between chapters
     const fresh = await getBook(bookId);
     if (fresh && (fresh as { audiobookStatus?: string }).audiobookStatus === 'none') {
-      console.log(`[audiobook] Book ${bookId}: stopped by user — halting after ${generatedCount} chapters`);
       stoppedByUser = true;
       break;
     }
@@ -560,7 +555,6 @@ export async function generateEntireBook(bookId: string, backend: string) {
   }
 
   await setBookAudiobookStatus(bookId, status, { durationMs: totalDurMs, generatedAt: new Date() });
-  console.log(`[audiobook] Book ${bookId} done: ${generatedCount}/${chapterFiles.length} ready${stoppedByUser ? ' (stopped)' : ''}, ${(totalDurMs/60000).toFixed(1)} min`);
   if (firstError && status === 'failed') console.error(`[audiobook] first error: ${firstError}`);
   if (firstError && !stoppedByUser) {
     throw new Error(`Audiobook generation incomplete: ${firstError}`);
@@ -584,7 +578,9 @@ export async function startAudiobookWorker(): Promise<{ worker: Worker }> {
     { connection: conn, concurrency: 1, limiter: { max: 2, duration: 60_000 } },
   );
 
-  worker.on('completed', (job) => console.log(`[audiobook-worker] ✓ ${job.id}`));
+  worker.on('completed', () => {
+    // The job state is already persisted in the DB and the UI progress stream.
+  });
   worker.on('failed', (job, err) => console.error(`[audiobook-worker] ✗ ${job?.id}: ${err.message}`));
 
   process.on('SIGTERM', async () => {
@@ -596,7 +592,6 @@ export async function startAudiobookWorker(): Promise<{ worker: Worker }> {
     await worker.close();
   });
 
-  console.log('[audiobook-worker] Listening on queue ebook-audiobook (concurrency=1)');
   return { worker };
 }
 

@@ -266,7 +266,6 @@ const worker = new Worker<ConversionJobData>(
         },
       });
 
-      console.log(`[worker] Job ${jobId} completed → ${out} (${tokPerSec} tok/s avg)`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log('error', 'failed', msg);
@@ -310,15 +309,14 @@ setInterval(async () => {
   try {
     const n = await getWorkerConcurrency();
     if (n !== activeConcurrency) {
-      console.log(`[worker] Concurrency changed: ${activeConcurrency} → ${n}`);
       worker.concurrency = n;
       activeConcurrency = n;
     }
   } catch { /* noop */ }
 }, 30_000).unref();
 
-worker.on('completed', (job) => {
-  console.log(`[worker] ✓ ${job.id} done`);
+worker.on('completed', () => {
+  // Completion is already recorded via persistent job metadata/logs.
 });
 
 worker.on('failed', (job, err) => {
@@ -333,7 +331,6 @@ let shuttingDown = false;
 async function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`[worker] ${signal} received; draining active work`);
   const forceTimer = setTimeout(() => {
     console.error('[worker] graceful shutdown timed out; forcing exit');
     process.exit(1);
@@ -353,7 +350,6 @@ process.on('SIGINT', () => { void shutdown('SIGINT'); });
   const n = await getWorkerConcurrency();
   activeConcurrency = n;
   worker.concurrency = n;
-  console.log(`[worker] EPUB conversion worker started (concurrency=${n} from settings)`);
 
   // A hard-killed worker leaves rows in `processing`; no future BullMQ
   // event can complete them. Recover only sufficiently old rows so a
