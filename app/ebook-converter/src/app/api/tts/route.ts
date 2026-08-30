@@ -254,7 +254,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       method: 'POST',
       headers: { 'Content-Type': 'application/json; charset=utf-8' },
       body: bodyBytes,
-      signal: AbortSignal.timeout(60_000),
+      // F5 wall-time scales with paragraph length and steps: cfg=2.0
+      // steps=8 ≈ 36s for a 250-char paragraph on the Mac M4; steps=16
+      // ≈ 77s; steps=32 ≈ 157s. The previous 60s budget caused
+      // mid-chapter 503s for typical web-novel paragraphs — the
+      // 2026-08-31 f5_server.py change drops the *default* steps to 8
+      // so 60s would usually suffice, but callers can still pass steps
+      // explicitly (or fall back to the slow VieNeu path) and we don't
+      // want to 503 those. 180s is the smallest budget that handles the
+      // slowest legitimate config without making the client give up on a
+      // request that's actually close to finishing.
+      signal: AbortSignal.timeout(180_000),
     });
     if (!r.ok) {
       const detail = await r.text().catch(() => '');

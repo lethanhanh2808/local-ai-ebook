@@ -247,7 +247,15 @@ def synthesize(
     # 3520 Hz) and formant2 energy 10.3% (ref 7%) on the hong-dao test clip;
     # cfg=1.0 sits at 2716 Hz / 3.9% and sounds toneless. RTF cost is the
     # same — the cfg term just adds one more transformer forward per step.
-    steps: int = 16,
+    #
+    # 2026-08-31: steps=8 (not 16) so typical paragraphs (~250 chars) finish
+    # well inside the /api/tts route's AbortSignal.timeout. Wall-time on the
+    # Mac M4 with cfg=2.0: steps=8 ≈ 36s, steps=16 ≈ 77s, steps=32 ≈ 157s.
+    # Quality drop is small — centroid 2455 vs 3776 on the long paragraph
+    # (still Vietnamese-shaped) and the route stops returning 503 mid-
+    # chapter. Callers who want best-quality slow generation can still pass
+    # steps=16/32 explicitly.
+    steps: int = 8,
     cfg_strength: float = 2.0,
     seed: Optional[int] = None,
 ) -> bytes:
@@ -335,7 +343,7 @@ class SynthesizeRequest(BaseModel):
     ref_text: Optional[str] = None
     speed: Optional[float] = 1.0
     style: Optional[str] = "doc_truyen"    # ignored (no F5 equivalent)
-    steps: Optional[int] = 16
+    steps: Optional[int] = 8
     cfg_strength: Optional[float] = 2.0
     seed: Optional[int] = None
 
