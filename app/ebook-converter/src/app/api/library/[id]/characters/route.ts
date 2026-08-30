@@ -14,12 +14,10 @@ import {
 } from '@/lib/db/voices';
 import { setBookAudiobookStatus } from '@/lib/db/audiobook';
 import { prisma } from '@/lib/db/client';
-import { BUILTIN_VIENEU_NAMES } from '@/lib/tts/vieneu-voices';
+import { isBuiltinVieNeuVoice } from '@/lib/tts/vieneu-voices';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-const BUILTIN_VIENEU = new Set(BUILTIN_VIENEU_NAMES);
 
 export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
@@ -74,7 +72,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     if (voiceId !== undefined && voiceId !== null && typeof voiceId !== 'string') {
       return NextResponse.json({ error: `Invalid voiceId for character ${c.name}` }, { status: 400 });
     }
-    if (!voiceId && c.voiceName && BUILTIN_VIENEU.has(c.voiceName)) {
+    if (!voiceId && c.voiceName && isBuiltinVieNeuVoice(c.voiceName)) {
       let voice = voiceByName.get(c.voiceName);
       if (!voice) {
         // Auto-create a Voice row for the built-in name (no audio file needed

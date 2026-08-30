@@ -10,7 +10,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveVoiceForCharacter } from '@/lib/ai/voice-selector';
 import { getVoice } from '@/lib/db/voices';
-import { BUILTIN_VIENEU_NAMES } from '@/lib/tts/vieneu-voices';
+import { isBuiltinVieNeuVoice } from '@/lib/tts/vieneu-voices';
 
 const VIENEU_BASE_URL = (
   process.env.VIENEU_BASE_URL ??
@@ -52,7 +52,6 @@ interface SpeakBody {
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const BUILTIN_VIENEU = new Set(BUILTIN_VIENEU_NAMES);
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
   const n = typeof value === 'number' ? value : Number(value);
@@ -162,7 +161,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     if (UUID_RE.test(body.voice)) {
       const voice = await getVoice(body.voice);
       if (voice && (!body.bookId || voice.bookId === body.bookId)) {
-        const builtin = voice.builtinName ?? (BUILTIN_VIENEU.has(voice.name) ? voice.name : null);
+        const builtin = voice.builtinName ?? (isBuiltinVieNeuVoice(voice.name) ? voice.name : null);
         if (builtin) voiceName = builtin;
         else if (voice.refAudioPath) referencePath = voice.refAudioPath;
         voiceSpeed = voice.defaultSpeed ?? voiceSpeed;

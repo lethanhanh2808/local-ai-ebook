@@ -53,6 +53,16 @@ export const BUILTIN_VIENEU_NAMES: readonly string[] =
 /** Membership check for "is this a built-in preset?" (used by API + worker routes). */
 export const BUILTIN_VIENEU: ReadonlySet<string> = new Set(BUILTIN_VIENEU_NAMES);
 
+export function isBuiltinVieNeuVoice(name?: string | null): boolean {
+  const value = name?.trim();
+  return !!value && BUILTIN_VIENEU.has(value);
+}
+
+export function resolveBuiltinVieNeuName(name?: string | null): string | null {
+  const value = name?.trim();
+  return value && isBuiltinVieNeuVoice(value) ? value : null;
+}
+
 /** Gender lookup by voice name. Used for pronoun resolution in the reader. */
 export const VIENEU_VOICE_GENDER: Readonly<Record<string, 'female' | 'male'>> =
   Object.fromEntries(VIENEU_PROFILES.map((p) => [p.name, p.gender]));

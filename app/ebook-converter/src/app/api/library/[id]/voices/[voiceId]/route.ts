@@ -7,7 +7,7 @@ import fs from 'fs';
 import { getBook } from '@/lib/db/books';
 import { getVoice, updateVoice, deleteVoice } from '@/lib/db/voices';
 import { setBookAudiobookStatus } from '@/lib/db/audiobook';
-import { BUILTIN_VIENEU_NAMES } from '@/lib/tts/vieneu-voices';
+import { isBuiltinVieNeuVoice } from '@/lib/tts/vieneu-voices';
 import { buildVoiceHeader, clampSpeechSpeed } from '@/lib/tts/speech-helpers';
 
 export const runtime = 'nodejs';
@@ -104,7 +104,6 @@ export async function POST(
   // built-in voices pass a preset name, cloned voices pass a reference path,
   // and both route through the same backend.
   const hasRef = !!voice.refAudioPath && fs.existsSync(voice.refAudioPath);
-  const BUILTIN_VIENEU = new Set(BUILTIN_VIENEU_NAMES);
   const payload: Record<string, unknown> = {
     text,
     backend: 'vieneu',
@@ -118,8 +117,7 @@ export async function POST(
     // may differ from the preset (e.g. "Giọng chung #2" → "Thanh Bình"),
     // so prefer builtinName when set, then fall back to display name
     // only if it IS a builtin preset.
-    const preset = voice.builtinName
-      ?? (BUILTIN_VIENEU.has(voice.name) ? voice.name : null);
+    const preset = voice.builtinName ?? (isBuiltinVieNeuVoice(voice.name) ? voice.name : null);
     if (preset) {
       payload['voice'] = preset;
     } else {

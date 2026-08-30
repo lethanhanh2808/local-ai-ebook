@@ -24,7 +24,7 @@ import {
   getDefaultVoice,
   listCharacters,
 } from '../lib/db/voices';
-import { BUILTIN_VIENEU_NAMES } from '../lib/tts/vieneu-voices';
+import { isBuiltinVieNeuVoice } from '../lib/tts/vieneu-voices';
 import {
   ensureChapterRow,
   updateChapter,
@@ -337,10 +337,8 @@ async function generateOneChapter(
     isBuiltinVieNeu?: boolean;
   }> = {};
 
-  const BUILTIN_VIENEU = new Set(BUILTIN_VIENEU_NAMES);
-
   for (const v of voices) {
-    const builtinName = v.builtinName ?? (BUILTIN_VIENEU.has(v.name) ? v.name : null);
+    const builtinName = v.builtinName ?? (isBuiltinVieNeuVoice(v.name) ? v.name : null);
     voicesById[v.id] = {
       name: builtinName ?? v.name,
       refAudioPath: v.refAudioPath ?? '',

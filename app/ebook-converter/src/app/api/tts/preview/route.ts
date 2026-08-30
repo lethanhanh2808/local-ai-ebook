@@ -12,7 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import { getVoice } from '@/lib/db/voices';
-import { BUILTIN_VIENEU_NAMES } from '@/lib/tts/vieneu-voices';
+import { isBuiltinVieNeuVoice } from '@/lib/tts/vieneu-voices';
 import { clampSpeechSpeed } from '@/lib/tts/speech-helpers';
 
 export const runtime = 'nodejs';
@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
 
   let refPath: string | undefined;
   let language = body.language ?? 'vi';
-  let useBuiltIn = BUILTIN_VIENEU.has(voice);
+  let useBuiltIn = isBuiltinVieNeuVoice(voice);
 
   // If it looks like a UUID, look up the custom voice
   if (!useBuiltIn && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(voice)) {
