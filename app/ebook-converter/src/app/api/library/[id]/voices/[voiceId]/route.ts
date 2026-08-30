@@ -100,24 +100,14 @@ export async function POST(
   const rawSpeed = body.speed ?? voice.defaultSpeed ?? 1.0;
   const speed = Number.isFinite(rawSpeed) ? Math.min(2, Math.max(0.5, rawSpeed)) : 1.0;
 
-  // Pick the right backend based on whether we have a reference audio (cloned
-  // voice) or just a built-in VieNeu voice name.
-  //   - Built-in VieNeu voice (e.g. "Thái Sơn", "Minh Đức"): pass the
-  //     builtinName (NOT voice.name) — VieNeu only recognises the 10 preset
-  //     names. For common-pool voices the user's display name is
-  //     "Giọng chung #1..4" but the underlying preset is one of the
-  //     COMMON_POOL_BUILTINS surfaced from vieneu-voices.ts.
-  //   - Custom cloned voice (has refAudioPath): pass `reference_path` for
-  //     voice cloning. Backend = 'vieneu' (cloning is supported on
-  //     Vietnamese AND English via VieNeu as of 2026-07-12).
-  // 2026-07-12: MOSS-TTS-Nano and Piper removed. VieNeu handles every
-  // language case (Vietnamese built-in + Vietnamese/English cloning).
+  // The active app runs only on VieNeu. Keep the payload explicit and simple:
+  // built-in voices pass a preset name, cloned voices pass a reference path,
+  // and both route through the same backend.
   const hasRef = !!voice.refAudioPath && fs.existsSync(voice.refAudioPath);
-  const backend = 'vieneu';
   const BUILTIN_VIENEU = new Set(BUILTIN_VIENEU_NAMES);
   const payload: Record<string, unknown> = {
     text,
-    backend,
+    backend: 'vieneu',
     language: book.language ?? 'vi',
     speed,
   };

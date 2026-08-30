@@ -56,19 +56,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `unknown voice: ${voice}` }, { status: 400 });
   }
 
-  // Synthesize via unified server
+  // Synthesize via the active VieNeu backend. The preview route no longer
+  // needs branch-specific backend handling; both built-in and cloned voices
+  // are served through the same unified endpoint.
   const payload: Record<string, unknown> = {
     text,
     speed,
     language,
+    backend: 'vieneu',
   };
   if (useBuiltIn) {
-    payload["voice"] = voice;
-    payload["backend"] = "vieneu";
+    payload['voice'] = voice;
   } else {
-    // Custom voice → voice cloning (unified server routes to appropriate backend)
-    payload["backend"] = "vieneu";
-    payload["reference_path"] = refPath;
+    payload['reference_path'] = refPath;
   }
 
   try {
