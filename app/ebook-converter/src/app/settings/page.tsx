@@ -84,6 +84,11 @@ const AI_PROVIDERS = [
   { id: 'custom',        label: 'Custom (OpenAI-compatible)', desc: 'Together / Anyscale / llama.cpp / bất kỳ endpoint nào', Icon: Wrench,  needsKey: true,  defaultModel: '',             defaultUrl: '',                   defaultMaxTokens: 8192  },
 ];
 
+// Keep the GUI and DB registry aligned with the canonical provider defaults.
+// These values are intentionally mirrored from the backend default registry so
+// the Settings page stays consistent with the single source of truth in
+// src/lib/db/settings.ts without hard-coded drift.
+
 // 2026-07-05: only Vietnamese Voice runs locally — Piper + MOSS-Nano removed.
 // Kept as a single-entry list so the existing UI / `ttsProvider` setting
 // keep working without a schema migration.

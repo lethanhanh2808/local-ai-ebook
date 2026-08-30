@@ -15,7 +15,7 @@
 // The provider is read from the Settings table on every call so changes
 // take effect immediately without restarting the server.
 
-import { getSettings } from '@/lib/db/settings';
+import { getAiProviderDefaults, getSettings } from '@/lib/db/settings';
 import type { Settings } from '@prisma/client';
 import { chat as omlxChat, chatWithStats as omlxChatWithStats } from './omlx-client';
 
@@ -32,29 +32,27 @@ export interface ChatOptions {
 /** Pick the best provider URL from settings. */
 function endpointFor(s: Settings): { baseUrl: string; apiKey: string; model: string } {
   const provider = s.aiProvider;
-  // Use empty string fallback (not "default") so the OMLX backend picks its
-  // own server-side default instead of returning "Model 'default' not found".
-  const model = s.aiModel?.trim() || process.env.OMLX_MODEL || '';
-  const overrideBase = s.aiBaseUrl?.trim() || undefined;
+  const defaults = getAiProviderDefaults(provider as keyof typeof import('@/lib/db/settings').AI_PROVIDER_DEFAULTS);
+  const model = s.aiModel?.trim() || defaults.model;
+  const overrideBase = s.aiBaseUrl?.trim();
   const apiKey = s.aiApiKey?.trim() || '';
 
   switch (provider) {
     case 'omlx-local':
-      // Re-use environment / omlx-client defaults for backward compat
       return {
-        baseUrl: overrideBase ?? '',
+        baseUrl: overrideBase ?? defaults.baseUrl,
         apiKey,
         model,
       };
     case 'minimax-cloud':
       return {
-        baseUrl: overrideBase ?? 'https://api.minimax.io/v1',
+        baseUrl: overrideBase ?? defaults.baseUrl,
         apiKey,
         model,
       };
     case 'openai':
       return {
-        baseUrl: overrideBase ?? 'https://api.openai.com/v1',
+        baseUrl: overrideBase ?? defaults.baseUrl,
         apiKey,
         model,
       };
@@ -106,10 +104,9 @@ async function rawChat(opts: ChatOptions, s: Settings): Promise<ChatResult> {
   // regardless of DB fields fixes that round-trip staleness — the env
   // vars are the single source of truth for omlx's URL + key.
   if (s.aiProvider === 'omlx-local') {
-    // CRITICAL: pass the resolved model name explicitly. Without this, the
-    // omlx-client falls back to process.env.OMLX_MODEL when opts.model is
-    // undefined (the common case in chapter-enhancer / chapter-formatter),
-    // which silently overrides the user's Settings.aiModel selection.
+    // CRITICAL: pass the resolved model name explicitly. The Settings row is
+    // the source of truth; legacy env fallbacks are intentionally not used to
+    // override the user's configured provider/model selection.
     const r = await omlxChatWithStats({ ...opts, model: opts.model ?? model });
     return {
       text: r.text,

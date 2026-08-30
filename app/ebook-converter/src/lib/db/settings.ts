@@ -8,14 +8,67 @@ export type AIProvider = 'omlx-local' | 'minimax-cloud' | 'openai' | 'custom';
 // 2026-07-12: Piper and MOSS-TTS-Nano removed. VieNeu is the sole backend.
 export type TTSProvider = 'vieneu';
 
+export type AIProviderDefaults = {
+  provider: AIProvider;
+  label: string;
+  desc: string;
+  needsKey: boolean;
+  baseUrl: string;
+  model: string;
+  maxTokens: number;
+};
+
+export const AI_PROVIDER_DEFAULTS: Record<AIProvider, AIProviderDefaults> = {
+  'omlx-local': {
+    provider: 'omlx-local',
+    label: 'OMLX (local)',
+    desc: 'Local Qwen/DeepSeek model — no API key, runs on your machine',
+    needsKey: false,
+    baseUrl: '',
+    model: 'Ornith-1.0-9B-mlx-4Bit',
+    maxTokens: 16384,
+  },
+  'minimax-cloud': {
+    provider: 'minimax-cloud',
+    label: 'MiniMax Cloud',
+    desc: 'MiniMax M-series models — fast cloud inference, requires API key',
+    needsKey: true,
+    baseUrl: 'https://api.minimax.io/v1',
+    model: 'MiniMax-Text-01',
+    maxTokens: 16384,
+  },
+  openai: {
+    provider: 'openai',
+    label: 'OpenAI',
+    desc: 'GPT-4o / GPT-4 / o1 — high quality, requires OpenAI API key',
+    needsKey: true,
+    baseUrl: 'https://api.openai.com/v1',
+    model: 'gpt-4o-mini',
+    maxTokens: 16384,
+  },
+  custom: {
+    provider: 'custom',
+    label: 'Custom (OpenAI-compatible)',
+    desc: 'Any OpenAI-compatible endpoint (Together, Anyscale, local llama.cpp…)',
+    needsKey: true,
+    baseUrl: '',
+    model: '',
+    maxTokens: 8192,
+  },
+};
+
 export const AI_PROVIDERS: Array<{
   id: AIProvider; label: string; desc: string; needsKey: boolean;
-}> = [
-  { id: 'omlx-local',    label: 'OMLX (local)',     desc: 'Local Qwen/DeepSeek model — no API key, runs on your machine', needsKey: false },
-  { id: 'minimax-cloud', label: 'MiniMax Cloud',    desc: 'MiniMax M-series models — fast cloud inference, requires API key', needsKey: true },
-  { id: 'openai',        label: 'OpenAI',           desc: 'GPT-4o / GPT-4 / o1 — high quality, requires OpenAI API key', needsKey: true },
-  { id: 'custom',        label: 'Custom (OpenAI-compatible)', desc: 'Any OpenAI-compatible endpoint (Together, Anyscale, local llama.cpp…)', needsKey: true },
-];
+}> = Object.values(AI_PROVIDER_DEFAULTS).map(({ provider, label, desc, needsKey }) => ({
+  id: provider,
+  label,
+  desc,
+  needsKey,
+}));
+
+export function getAiProviderDefaults(provider: AIProvider): AIProviderDefaults {
+  return AI_PROVIDER_DEFAULTS[provider];
+}
 
 export const TTS_PROVIDERS: Array<{ id: TTSProvider; label: string; desc: string }> = [
   { id: 'vieneu',  label: 'VieNeu-TTS',    desc: 'Vietnamese-native, 10 built-in voices, voice cloning (only TTS backend)' },
