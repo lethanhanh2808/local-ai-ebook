@@ -58,8 +58,14 @@ hg_token.md
 omlx-home/
 opencode-home/
 opencode-runtime/
-# VieNeu-TTS is intentionally vendored as a git submodule (see .gitmodules);
-# its working tree + .venv stay on disk but are tracked via the submodule pointer.
+# VieNeu-TTS is a plain local dir (cloned by scripts/setup_vieneu.sh) —
+# the venv (~1.2 GB model cache on first import) stays out of the repo.
+app/tts-service/VieNeu-TTS/.venv/
+app/tts-service/VieNeu-TTS/models/
+app/tts-service/VieNeu-TTS/voices/
+# The cloned source itself is also gitignored — re-run setup_vieneu.sh to
+# restore it. This keeps the repo small and avoids touching upstream.
+app/tts-service/VieNeu-TTS/
 
 # F5-TTS is a plain local dir (not a submodule): venv, ~1.3GB weights and the
 # prepared reference clips all stay out of the repo. `vocab.txt` is the one

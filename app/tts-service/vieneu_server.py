@@ -172,7 +172,13 @@ async def synthesize_endpoint(req: SynthesizeRequest):
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("VIENEU_PORT", "5020"))
+    # Bind 0.0.0.0 by default so the docker-compose sibling service (or LAN
+    # clients) can reach us. 127.0.0.1 was a foot-gun — the previous version
+    # worked locally for `uv run` smoke tests but the app container on the
+    # same host could never connect. Override with VIENEU_HOST=127.0.0.1 if
+    # you specifically want loopback-only.
+    host = os.environ.get("VIENEU_HOST", "0.0.0.0")
     print(f"[vieneu] Pre-loading model (first inference may take 10-30s)...")
     get_tts()  # warm up
-    print(f"[vieneu] Ready on http://127.0.0.1:{port}")
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
+    print(f"[vieneu] Ready on http://{host}:{port}")
+    uvicorn.run(app, host=host, port=port, log_level="info")
