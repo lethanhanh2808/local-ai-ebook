@@ -80,19 +80,7 @@ function appendBounded(current: string, chunk: unknown): string {
     : next;
 }
 
-// Belt-and-suspenders: coerce any stale/mistyped backend value to 'vieneu'
-// before spawning the Python subprocess. argparse in audiobook_generator.py
-// will SystemExit(2) on unknown values, which would abort in-flight BullMQ
-// jobs that still carry a legacy backend string ('piper' / 'moss-nano').
-// 2026-07-12: Piper + MOSS-TTS-Nano removed — 'vieneu' is the only allowed value.
-const ALLOWED_BACKENDS = new Set(['vieneu']);
-function coerceBackend(raw: string | undefined): 'vieneu' {
-  const v = raw ?? 'vieneu';
-  if (ALLOWED_BACKENDS.has(v)) return 'vieneu';
-  console.warn(`[audiobook-worker] legacy backend "${v}" coerced to "vieneu"`);
-  return 'vieneu';
-}
-
+// VieNeu is the only supported backend in the active app.
 function pickPython(): string {
   // 2026-07-12: .venv-moss-nano removed. audiobook_generator.py only needs
   // httpx (a system package in the container / a system-installed module
@@ -119,7 +107,7 @@ async function runGenerator(opts: {
       GENERATOR,
       '--book-id', opts.bookId,
       '--chapter-file', opts.chapterFile,
-      '--backend', coerceBackend(opts.backend),
+      '--backend', 'vieneu',
       '--language', opts.language,
       '--chapter-text-file', opts.chapterTextFile,
       '--out-dir', opts.outDir,

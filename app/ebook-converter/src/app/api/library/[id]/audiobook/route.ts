@@ -108,16 +108,9 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     }
   }
 
-  // Default to VieNeu — it's Vietnamese-native (10 built-in voices, 48 kHz, voice cloning).
-  // 2026-07-12: Piper + MOSS-TTS-Nano removed. VieNeu is the only backend,
-  // so we coerce any stale/unknown legacy backend string ('piper' / 'moss-nano')
-  // to 'vieneu' rather than 400ing the caller — there is no other path.
-  const ALLOWED_BACKENDS = new Set(['vieneu']);
-  const rawBackend = (body.backend ?? (book as { ttsBackend?: string }).ttsBackend ?? 'vieneu') as string;
-  const backendChoice: 'vieneu' = ALLOWED_BACKENDS.has(rawBackend) ? 'vieneu' : 'vieneu';
-  if (rawBackend !== backendChoice) {
-    console.warn(`[audiobook] legacy backend "${rawBackend}" coerced to "vieneu" (book=${params.id})`);
-  }
+  // VieNeu is the only supported backend in the active app.
+  // Legacy backend values are no longer accepted as runtime choices.
+  const backendChoice: 'vieneu' = 'vieneu';
 
   if (action === 'regenerate_one') {
     if (!body.chapterFile) return NextResponse.json({ error: 'chapterFile required' }, { status: 400 });
