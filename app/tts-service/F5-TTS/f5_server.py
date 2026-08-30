@@ -92,6 +92,16 @@ def get_tts():
         else:
             _tts = F5TTS.from_pretrained(str(F5_MODEL_DIR))
 
+        # The Vietnamese fine-tune (hynt/F5-TTS-Vietnamese-ViVoice, nguyenthienhy's
+        # F5TTS_Base.yaml config) was trained with text_mask_padding=False. The
+        # mlx port hardcodes True in cfm.F5TTS.from_pretrained — that mismatch
+        # zeros out padded positions inside the ConvNeXt text-embedding blocks
+        # at inference, muffling the high-frequency content where Vietnamese
+        # tones live. The fix is a one-line override after load — the weights
+        # are static, only the forward-time mask application flips. Verified
+        # by spectral centroid 2048 Hz → 2716 Hz on a hong-dao test clip.
+        _apply_vietnamese_finetune_overrides(_tts)
+
         # f5-tts-mlx 0.2.6 calls mx.random.normal((c, n)) — newer MLX rejects
         # the tuple AND the iter produces mx scalars, not Python ints, so
         # shape = (int, mx_array). Coerce both.
@@ -115,6 +125,16 @@ def get_tts():
 
         _cfm.mx.random.normal = _normal_compat
     return _tts
+
+
+def _apply_vietnamese_finetune_overrides(tts) -> None:
+    """Apply the inference-time overrides that align the mlx port with how
+    the Vietnamese fine-tune was actually trained. The mlx port hardcodes
+    text_mask_padding=True in DiT.__init__; the fine-tune (hynt's checkpoint,
+    nguyenthienhy's F5TTS_Base.yaml) was trained with False, so we flip it
+    after the model is constructed. Verified against the hong-dao test clip
+    by spectral centroid 2048 Hz → 2716 Hz (ref 3520 Hz)."""
+    tts.transformer.text_embed.mask_padding = False
 
 
 def _list_voice_dirs() -> list[Path]:
@@ -219,13 +239,16 @@ def synthesize(
     ref_text: Optional[str] = None,
     speed: float = 1.0,
     style: str = "doc_truyen",  # accepted for contract compatibility; ignored
-    # 2026-08-30: bumped defaults after a parameter sweep (scripts/f5_param_search.py)
-    # over 13 (steps, cfg_strength) combinations × 2 voices. steps=16 cfg=1.0
-    # is within ~0.5% MCD of the best quality at ~half the cost of steps=32;
-    # steps=8 cfg=2.0 (previous default) is ~1.2% worse MCD on Hồng Đào.
-    # RTF cost: steps=8 ≈ 2.5x, steps=16 ≈ 5x. steps=32+ times out >180s.
+    # 2026-08-31: cfg=2.0 (not 1.0) is the right default once
+    # text_mask_padding=False is in effect — the previous f5_param_search.py
+    # sweep was measured against the buggy mlx port default (mask_padding=True)
+    # which muffled high frequencies, and cfg=1.0 was tuned to compensate for
+    # that. With the mask fix, cfg=2.0 gets spectral centroid 3776 Hz (ref
+    # 3520 Hz) and formant2 energy 10.3% (ref 7%) on the hong-dao test clip;
+    # cfg=1.0 sits at 2716 Hz / 3.9% and sounds toneless. RTF cost is the
+    # same — the cfg term just adds one more transformer forward per step.
     steps: int = 16,
-    cfg_strength: float = 1.0,
+    cfg_strength: float = 2.0,
     seed: Optional[int] = None,
 ) -> bytes:
     from f5_tts_mlx.utils import convert_char_to_pinyin
@@ -313,7 +336,7 @@ class SynthesizeRequest(BaseModel):
     speed: Optional[float] = 1.0
     style: Optional[str] = "doc_truyen"    # ignored (no F5 equivalent)
     steps: Optional[int] = 16
-    cfg_strength: Optional[float] = 1.0
+    cfg_strength: Optional[float] = 2.0
     seed: Optional[int] = None
 
 

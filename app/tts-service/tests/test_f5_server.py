@@ -248,5 +248,31 @@ class TestF5Catalog(unittest.TestCase):
             self.assertIn("label", v)
 
 
+class TestVietnameseFinetuneOverrides(unittest.TestCase):
+    """Regression guard for the Vietnamese fine-tune compatibility fix.
+
+    hynt/F5-TTS-Vietnamese-ViVoice was trained with text_mask_padding=False
+    (per nguyenthienhy/F5-TTS-Vietnamese's F5TTS_Base.yaml). The mlx port
+    hardcodes True in DiT.__init__ via F5TTS.from_pretrained, so get_tts()
+    applies an override after load. Without it, output spectral centroid
+    drops from 2716 Hz → 2048 Hz and Vietnamese tones disappear (the
+    audible "Chinese voice" bug). This test pins the override so a future
+    mlx-port upgrade or careless refactor can't silently regress it.
+    """
+
+    def test_text_embed_mask_padding_is_flipped_to_false(self):
+        class _FakeTextEmbed:
+            mask_padding = True  # what the mlx port constructs
+
+        class _FakeTransformer:
+            text_embed = _FakeTextEmbed()
+
+        class _FakeTts:
+            transformer = _FakeTransformer()
+
+        f5_server._apply_vietnamese_finetune_overrides(_FakeTts())
+        self.assertFalse(_FakeTransformer.text_embed.mask_padding)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
