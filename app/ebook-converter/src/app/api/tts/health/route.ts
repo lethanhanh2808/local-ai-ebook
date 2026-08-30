@@ -1,10 +1,8 @@
 // src/app/api/tts/health/route.ts
 // Health summary for the local TTS stack used by reader/audiobook features.
 // 2026-07-12: VieNeu is the sole backend. The route talks to the VieNeu
-// FastAPI server on :5020 and synthesizes the same shape the reader +
-// ServiceHealth components expect (with `services.vieneu` + `services.piper`
-// + `services.mossNano` left in place for backward compatibility with any
-// cached UI consumers).
+// FastAPI server on :5020 and reports the current service state for the
+// active reader and audiobook workflows.
 import { NextResponse } from 'next/server';
 
 const VIENEU_BASE_URL = (
@@ -49,11 +47,6 @@ export async function GET(): Promise<NextResponse> {
       },
       services: {
         vieneu: vieneuReady || !!health.vieneu_alive,
-        // Piper and MOSS-TTS-Nano are removed (2026-07-12). Kept in the
-        // response as `false` so old UI consumers don't crash when reading
-        // `services.piper` / `services.mossNano`.
-        piper: false,
-        mossNano: false,
       },
       backends: inferredBackends,
       defaultBackend: vieneuReady ? 'vieneu' : null,
@@ -67,7 +60,7 @@ export async function GET(): Promise<NextResponse> {
       ok: false,
       checkedAt,
       unified: { ok: false, url: VIENEU_BASE_URL, status: 'down' },
-      services: { vieneu: false, piper: false, mossNano: false },
+      services: { vieneu: false },
       backends: [],
       defaultBackend: null,
       recommendation: 'Start the local TTS service: bash app/tts-service/start_all.sh, then re-check TTS health.',

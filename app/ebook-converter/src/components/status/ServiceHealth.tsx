@@ -18,10 +18,8 @@ interface TtsHealth {
   ok: boolean;
   checkedAt: string;
   unified: { ok: boolean; url: string; status: string };
-  // As of 2026-07-05 only Vietnamese Voice runs locally — Piper + MOSS-Nano
-  // were removed. We still read these fields because /api/tts/health returns
-  // them as false for backwards compat, but the UI no longer surfaces them.
-  services: { vieneu: boolean; piper?: boolean; mossNano?: boolean };
+  // As of 2026-07-05 only Vietnamese Voice runs locally.
+  services: { vieneu: boolean };
   backends: TtsBackend[];
   defaultBackend: string | null;
   recommendation: string | null;
@@ -102,11 +100,8 @@ export function ServiceHealth({ variant = 'compact', className, showWorker = tru
     );
   }
 
-  // 2026-07-05: only Vietnamese Voice is shown — Piper + MOSS-Nano were
-// removed from the stack and from this panel so users don't see stale
-// "legacy fallback" / "non-Vietnamese cloning" rows for engines that
-// no longer run.
-const rows = [
+  // Only the active Vietnamese Voice service is still shown in this panel.
+  const rows = [
     { label: 'Vietnamese Voice', ok: !!tts?.services?.vieneu, detail: 'Read-aloud + audiobook (Vietnamese-native, 10 voices)', Icon: Volume2 },
     { label: 'TTS server', ok: !!tts?.unified?.ok, detail: tts?.unified?.url ?? 'not checked', Icon: Server },
     ...(showWorker ? [{ label: 'Worker + Redis', ok: !!worker?.online && !!worker?.redis, detail: 'conversion and audiobook queues', Icon: Server }] : []),
