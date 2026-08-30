@@ -45,6 +45,23 @@ import {
   readerSurface,
   WIDTHS,
 } from './reader-config';
+import {
+  DEFAULT_TTS_SETTINGS,
+  estimateReadTime,
+  getSpeechRecognitionCtor,
+  loadBookmarks,
+  loadSettings,
+  loadTtsSettings,
+  saveBookmarks,
+  saveSettings,
+  saveTtsSettings,
+  type BrowserSpeechRecognition,
+  type BrowserSpeechRecognitionConstructor,
+  type BrowserSpeechRecognitionErrorEvent,
+  type BrowserSpeechRecognitionEvent,
+  type BrowserSpeechRecognitionResult,
+  type TtsSettings,
+} from './reader-persistence';
 
 // Lazy-loaded heavy panels — these are sizeable feature surfaces that most
 // readers never open. Loading on demand cuts the reader's initial JS by
@@ -133,113 +150,6 @@ interface BrowserSpeechRecognition {
 }
 type BrowserSpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
 
-function loadSettings(): ReaderSettings {
-  try {
-    const r = localStorage.getItem('epub-reader-settings');
-    if (r) {
-      const saved = JSON.parse(r) as Partial<ReaderSettings>;
-      // MIGRATION 2026-07-11 — bump OLD-default values to NEW defaults.
-      // If the saved value matches the OLD default exactly, the user never
-      // touched the slider — silently upgrade to the NEW default. Real
-      // user choices (e.g. width=900) are preserved.
-      //
-      // ALSO: padInline < 16px is treated as a bug/stale value, not a
-      // deliberate choice — anything below 16 leaves text pressed against
-      // the viewport edge. Bump to the NEW default (56px). The slider
-      // step is 4 so 0/4/8/12 are common off-by-one artifacts.
-      const OLD_DEFAULTS = {
-        width: 720,
-        padTop: 48,
-        padBottom: 96,
-        padInline: 40,
-        indent: 1.5,  // OLD default was 1.5em; NEW default is 0 (flush-left novel style)
-      } as const;
-      const migrated = { ...saved } as Record<string, unknown>;
-      for (const k of Object.keys(OLD_DEFAULTS) as Array<keyof typeof OLD_DEFAULTS>) {
-        if (saved[k] === OLD_DEFAULTS[k]) {
-          migrated[k] = DEFAULT_SETTINGS[k];
-        }
-      }
-      if (typeof saved.padInline === 'number' && saved.padInline < 16) {
-        migrated.padInline = DEFAULT_SETTINGS.padInline;
-      }
-      return { ...DEFAULT_SETTINGS, ...migrated };
-    }
-  } catch { /* corrupted JSON — fall through */ }
-  return DEFAULT_SETTINGS;
-}
-function saveSettings(s: ReaderSettings) {
-  try { localStorage.setItem('epub-reader-settings', JSON.stringify(s)); } catch { /**/ }
-}
-
-// ── TTS settings (read-aloud sliders/toggles) ──────────────────────────────
-// Persisted to localStorage so the user doesn't lose their slider positions
-// on page reload. Keyed under `epub-reader-tts-v1` (versioned so a future
-// schema change can migrate cleanly without wiping the older values).
-interface TtsSettings {
-  speed:             number;  // 0.5 – 2.5 (VieNeu TTS speed parameter)
-  noise:             number;  // 0.2 – 1.0 (expressiveness / noise_scale)
-  useAI:             boolean; // AI-driven emotion detection on/off
-  emotionIntensity:  number;  // 0.0 – 1.0 (how hard emotion deltas push)
-  voice:             string;  // builtin name from BUILTIN_VIENEU_NAMES
-  continuousPlay:    boolean; // auto-advance to next chapter
-  paragraphGap:      number;  // ms; 0 = no extra silence between paragraphs
-}
-const DEFAULT_TTS_SETTINGS: TtsSettings = {
-  speed: 1.0,
-  noise: 0.667,
-  useAI: false,
-  emotionIntensity: 0.6,  // see comment on `ttsEmotionIntensity` useState
-  voice: 'Xuân Vĩnh',
-  continuousPlay: false,
-  paragraphGap: 0,
-};
-function loadTtsSettings(): TtsSettings {
-  try {
-    const r = localStorage.getItem('epub-reader-tts-v1');
-    if (r) {
-      const parsed = JSON.parse(r) as Partial<TtsSettings>;
-      // Merge rather than replace so new fields added to DEFAULT_TTS_SETTINGS
-      // get their default without wiping the user's other choices. Each
-      // value is independently typed-checked at the call site (the
-      // individual useState<number>(...) etc. throws on bad type — but we
-      // validate numeric ranges here so a stray string doesn't slip in).
-      const merged: TtsSettings = { ...DEFAULT_TTS_SETTINGS, ...parsed };
-      if (typeof merged.speed            !== 'number') merged.speed            = DEFAULT_TTS_SETTINGS.speed;
-      if (typeof merged.noise            !== 'number') merged.noise            = DEFAULT_TTS_SETTINGS.noise;
-      if (typeof merged.useAI            !== 'boolean') merged.useAI            = DEFAULT_TTS_SETTINGS.useAI;
-      if (typeof merged.emotionIntensity !== 'number') merged.emotionIntensity = DEFAULT_TTS_SETTINGS.emotionIntensity;
-      if (typeof merged.voice            !== 'string') merged.voice            = DEFAULT_TTS_SETTINGS.voice;
-      if (typeof merged.continuousPlay   !== 'boolean') merged.continuousPlay   = DEFAULT_TTS_SETTINGS.continuousPlay;
-      if (typeof merged.paragraphGap     !== 'number') merged.paragraphGap     = DEFAULT_TTS_SETTINGS.paragraphGap;
-      return merged;
-    }
-  } catch { /* corrupted JSON — fall through to defaults */ }
-  return DEFAULT_TTS_SETTINGS;
-}
-function saveTtsSettings(s: TtsSettings) {
-  try { localStorage.setItem('epub-reader-tts-v1', JSON.stringify(s)); } catch { /**/ }
-}
-function loadBookmarks(id: string): number[] {
-  try { const r = localStorage.getItem(`epub-bm-${id}`); return r ? JSON.parse(r) : []; } catch { return []; }
-}
-function saveBookmarks(id: string, marks: number[]) {
-  try { localStorage.setItem(`epub-bm-${id}`, JSON.stringify(marks)); } catch { /**/ }
-}
-function getSpeechRecognitionCtor(): BrowserSpeechRecognitionConstructor | null {
-  if (typeof window === 'undefined') return null;
-  const w = window as typeof window & {
-    SpeechRecognition?: BrowserSpeechRecognitionConstructor;
-    webkitSpeechRecognition?: BrowserSpeechRecognitionConstructor;
-  };
-  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
-}
-function estimateReadTime(total: number, current: number): string {
-  const mins = Math.max(1, Math.round((total - current) * 3));
-  if (mins < 60) return `~${mins}m left`;
-  const h = Math.floor(mins / 60), m = mins % 60;
-  return m > 0 ? `~${h}h ${m}m left` : `~${h}h left`;
-}
 
 // ── ChapterJumpMenu ──────────────────────────────────────────────────────
 // Dropdown trigger for jumping to a specific chapter when the dot grid is
