@@ -46,6 +46,44 @@ npm run build
 npm run test:e2e:local:smoke
 ```
 
+## Database / deployment note
+
+If you deploy a fresh build to an existing Docker VM or a pre-existing SQLite database, make sure the Prisma schema is applied before starting the app. Two migrations were added by the auth refactor and the insecure-TLS feature:
+
+| Migration | What it does | Why it matters |
+|---|---|---|
+| `20260829000000_create_user_and_user_settings` | `CREATE TABLE IF NOT EXISTS` for `User`, `UserSettings`, `AuditLog` | Backfills the auth tables the refactor added to `schema.prisma` without a migration. `IF NOT EXISTS` makes it a no-op on DBs that already have the tables. |
+| `20260830000000_add_ai_allow_insecure_tls` | `ALTER TABLE Settings` / `UserSettings ADD COLUMN aiAllowInsecureTls` | Adds the per-gateway TLS-override flag. |
+
+If you see:
+
+```text
+PrismaClientKnownRequestError: Invalid `prisma.settings.upsert()` invocation:
+The column `main.Settings.aiAllowInsecureTls` does not exist in the current database.
+```
+
+then the database is stale and needs the migrations applied.
+
+The container entrypoint runs `prisma migrate deploy` on every start, so a normal `docker compose up -d` is enough **as long as the migration files are visible to the container**. The compose file bind-mounts `./prisma/migrations` into the container, so simply pulling the latest commits and restarting brings the DB back in sync:
+
+```bash
+cd /home/mgmt-admin/ebook-converter
+git pull
+docker compose up -d app worker
+docker compose logs app | grep -E "migrat|All migrations"   # confirm
+```
+
+If the bind-mount is missing in an older compose file, the recovery on the VM is:
+
+```bash
+cd /home/mgmt-admin/ebook-converter
+docker compose down app worker
+npx prisma migrate deploy --schema ./prisma/schema.prisma
+docker compose up -d app worker
+```
+
+This is required even when the app code is already updated, because the existing SQLite file on disk may not yet have the new column.
+
 ## App structure
 
 ```text

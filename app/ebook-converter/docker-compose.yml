@@ -74,6 +74,13 @@ services:
     volumes:
       - ./data:/app/data
       - ./public/assets/fonts:/app/public/assets/fonts:ro
+      # Bind-mount prisma/migrations so newly-added migrations on the host
+      # are visible to the container without rebuilding the image. The
+      # entrypoint runs `prisma migrate deploy`, which reads the SQL files
+      # from this directory on every start. Read-only because the migration
+      # runner never writes here — it only updates _prisma_migrations inside
+      # the SQLite DB at /app/data.
+      - ./prisma/migrations:/app/prisma/migrations:ro
       # tts-service: sibling Python project (character_detector.py + venv).
       # AI Character Detection runs the Python module via `spawn`; without
       # this mount, `character_detector.py not found` and the route 500s.
@@ -117,6 +124,10 @@ services:
     volumes:
       - ./data:/app/data
       - ./public/assets/fonts:/app/public/assets/fonts:ro
+      # Same prisma migrations mount as `app` — worker migrations aren't
+      # needed but keeping the bind mount uniform across services avoids
+      # surprises if the entrypoint ever runs prisma from here too.
+      - ./prisma/migrations:/app/prisma/migrations:ro
       # Same tts-service mount as `app` so the worker can spawn
       # character_detector.py for in-pipeline character bible pre-seeding.
       - ../tts-service:/app/tts-service:ro
