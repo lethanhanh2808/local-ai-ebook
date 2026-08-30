@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import { getVoice } from '@/lib/db/voices';
 import { BUILTIN_VIENEU_NAMES } from '@/lib/tts/vieneu-voices';
+import { clampSpeechSpeed } from '@/lib/tts/speech-helpers';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -35,10 +36,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'voice required' }, { status: 400 });
   }
   const text = (body.text?.trim() || DEFAULT_PREVIEW).slice(0, 1_000);
-  const rawSpeed = body.speed ?? 1.0;
-  const speed = typeof rawSpeed === 'number' && Number.isFinite(rawSpeed)
-    ? Math.min(2, Math.max(0.5, rawSpeed))
-    : 1.0;
+  const speed = clampSpeechSpeed(body.speed ?? 1.0);
 
   let refPath: string | undefined;
   let language = body.language ?? 'vi';

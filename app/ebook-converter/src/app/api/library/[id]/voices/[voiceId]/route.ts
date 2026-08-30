@@ -8,6 +8,7 @@ import { getBook } from '@/lib/db/books';
 import { getVoice, updateVoice, deleteVoice } from '@/lib/db/voices';
 import { setBookAudiobookStatus } from '@/lib/db/audiobook';
 import { BUILTIN_VIENEU_NAMES } from '@/lib/tts/vieneu-voices';
+import { buildVoiceHeader, clampSpeechSpeed } from '@/lib/tts/speech-helpers';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -56,7 +57,7 @@ export async function PATCH(
     if (typeof body.defaultSpeed !== 'number' || !Number.isFinite(body.defaultSpeed)) {
       return NextResponse.json({ error: 'defaultSpeed must be a finite number' }, { status: 400 });
     }
-    data.defaultSpeed = Math.min(2, Math.max(0.5, body.defaultSpeed));
+    data.defaultSpeed = clampSpeechSpeed(body.defaultSpeed);
   }
   if (body.defaultEmotion !== undefined) {
     if (typeof body.defaultEmotion !== 'string') return NextResponse.json({ error: 'defaultEmotion must be a string' }, { status: 400 });
@@ -97,8 +98,7 @@ export async function POST(
 
   const body = await req.json().catch(() => ({})) as { text?: string; speed?: number };
   const text = (body.text?.trim() || 'Xin chào, đây là giọng đọc thử nghiệm của tôi.').slice(0, 1_000);
-  const rawSpeed = body.speed ?? voice.defaultSpeed ?? 1.0;
-  const speed = Number.isFinite(rawSpeed) ? Math.min(2, Math.max(0.5, rawSpeed)) : 1.0;
+  const speed = clampSpeechSpeed(body.speed ?? voice.defaultSpeed ?? 1.0);
 
   // The active app runs only on VieNeu. Keep the payload explicit and simple:
   // built-in voices pass a preset name, cloned voices pass a reference path,
@@ -147,7 +147,7 @@ export async function POST(
     const audio = await r.arrayBuffer();
     // Sanitize the voice name for headers (HTTP requires Latin-1).
     // Vietnamese names like "Nguyễn Ngọc Ngạn" (with diacritics) crash Node's HTTP layer.
-    const voiceHeader = encodeURIComponent(voice.name);
+    const voiceHeader = buildVoiceHeader(voice.name);
     return new NextResponse(audio, {
       headers: {
         'Content-Type': 'audio/wav',
