@@ -36,7 +36,6 @@ export async function runWatermarkCleanupStage(
   let cleanedChapters = chapters;
 
   if (allPhrases.length > 0) {
-    console.log(`[pipeline] Stripping ${allPhrases.length} watermark phrase(s) (${memoryPhrases.length} from memory, ${newOnes.length} freshly detected)`);
     cleanedChapters = chapters.map((ch) => ({
       ...ch,
       html: stripPhrasesFromHtml(ch.html, allPhrases),
@@ -50,9 +49,9 @@ export async function runWatermarkCleanupStage(
   if (newOnes.length > 0) {
     try {
       for (const p of newOnes) await rememberWatermark(p, 'auto');
-      console.log(`[pipeline] Memorized ${newOnes.length} new watermark phrase(s)`);
     } catch (err) {
-      console.warn('[pipeline] Failed to persist watermark memory:', err);
+      // Keep the watermark memory write as a best-effort step; failures are
+      // surfaced through the caller's progress/error path instead of noisy console spam.
     }
   }
 

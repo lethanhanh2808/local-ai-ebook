@@ -42,7 +42,6 @@ export async function runDeepFormatStage(
   let deepFormatAiCalls = 0;
   let firstDeepWarning: string | null = null;
   const total = chapters.length;
-  console.log(`[pipeline] Starting DEEP format for ${total} chapters (slow)…`);
   await onProgress?.(66, `Deep format: processing chapter 1/${total}…`);
 
   const chapterBodies = prepareChapterBodies(chapters);
@@ -63,10 +62,6 @@ export async function runDeepFormatStage(
       html: buildChapterHtml({ id: ch.id, title: ch.title, body: out.bodyHtml, lang: language }),
     };
   });
-
-  if (firstDeepWarning) {
-    console.warn(`[pipeline] Deep format warning (${firstDeepWarning})`);
-  }
 
   await onProgress?.(
     84,
@@ -117,7 +112,6 @@ export async function runAiEnhancementStage(
   }
 
   const total = chapters.length;
-  console.log(`[pipeline] Starting light AI enhancement for ${total} chapters…`);
   await onProgress?.(66, `AI enhancement: processing ${total} chapters…`);
 
   const chapterBodies = prepareChapterBodies(chapters);
@@ -147,7 +141,6 @@ export async function runAiEnhancementStage(
         generationTokensPerSecond: stats.generationTokensPerSecond,
         promptTokensPerSecond: stats.promptTokensPerSecond,
       });
-      console.log(`[pipeline] Light enhance ${label}`);
     },
     async (i, totalChapters, chapterId) => {
       const ch = chapters.find((c) => c.id === chapterId);
