@@ -1,46 +1,51 @@
-# Ebook Converter & TTS Suite
+# Local AI Ebook Platform
 
-AI-powered EPUB repair, conversion, and library platform with Vietnamese audiobook generation. This repository holds only the ebook-focused code; supporting tooling (oMLX model serving, OpenCode CLI, Homebrew install) lives in a separate workspace.
+A local-first ebook conversion and audiobook system built around a Next.js app, a Python TTS pipeline, and a SQLite-backed library workflow.
 
-## What's here
+## Repository layout
 
-```
-.
-|-- app/
-|   |-- ebook-converter/         # Next.js 15 app — the main product
-|   `-- tts-service/             # Python FastAPI — VieNeu-TTS wrapper + audiobook pipeline
-|-- docs/                         # Engineering plans, audit reports, DB ops
-|-- reference/                    # Vendored EPUB specs (Sigil, standardebooks, w3c)
-|-- scripts/                      # start_full_app.sh, verify_changes.sh
-|-- ACTION_ITEMS.md               # Voice attribution engineering history
-|-- AI_CONVERSION_PROMPT_REVIEW.md
-|-- CHANGELOG.md
-|-- EPUB_STANDARDIZATION_AND_EDITOR_NOTES.md
-|-- How_voice_recogized.md        # Reverse-engineered voice recognition report
-|-- PROMPT_fix_attribution.md     # Vietnamese speaker attribution prompt
-`-- README.md (this file)
-```
+- app/ebook-converter — main web app and conversion pipeline
+- app/tts-service — Python TTS and voice attribution services
+- docs — repo-level documentation and archive boundaries
+- scripts — startup and verification helpers
+- reference — standards and reference material
+
+## What is in the app
+
+- EPUB, HTML, and TXT conversion with repair and normalization
+- Library management, catalog pages, and reader UI
+- Per-book chapter extraction and metadata tooling
+- AI-assisted enhancement, watermark cleanup, and illustrations
+- Audiobook generation using local TTS and chapter-level voice mapping
 
 ## Quick start
 
-See [`app/ebook-converter/README.md`](./app/ebook-converter/README.md) for the full quick-start, configuration, REST API, and project structure docs.
-
-From the repository root:
+From the repo root:
 
 ```bash
-./scripts/start_full_app.sh            # foreground
-./scripts/start_full_app.sh --background
-./scripts/verify_changes.sh            # lint + typecheck + tests + build + E2E smoke
+./scripts/start_full_app.sh
 ```
 
-## Dependencies (not in this repo)
+For background mode:
 
-These live in the parent Local-AI workspace and are referenced by configuration, not vendored here:
+```bash
+./scripts/start_full_app.sh --background
+```
 
-- **oMLX** local model server — `http://127.0.0.1:8080/v1` (Qwen/DeepSeek MLX models). Source: `lethanhanh2808/local-ai` workspace.
-- **Redis** for BullMQ job queues.
-- **VieNeu-TTS** Vietnamese neural TTS — vendored into `app/tts-service/VieNeu-TTS/` (git submodule pointer; working tree not tracked).
+Check status:
 
-## Layout philosophy
+```bash
+./scripts/start_full_app.sh --status
+```
 
-This repo is intentionally narrow: only the ebook app, its TTS service, and the docs/scripts/reference needed to develop and run them. The oMLX runtime config, model cache, Homebrew install, and OpenCode CLI stay in the parent workspace where they're easier to manage alongside other AI tools.
+## Main docs
+
+- [docs/README.md](docs/README.md) — central repo guide and archive map
+- [app/ebook-converter/README.md](app/ebook-converter/README.md) — app setup and feature overview
+- [CHANGELOG.md](CHANGELOG.md) — recent release notes
+
+## Important notes
+
+- The active development area is the ebook app and TTS service.
+- Historical research and expired plans live in the archive under [docs/archive](docs/archive).
+- Local runtime state and generated data are not treated as repo source.
