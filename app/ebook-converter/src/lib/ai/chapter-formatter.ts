@@ -19,7 +19,7 @@
 // Set FORMATTER_CONCURRENCY > 1 in env to parallelize.
 
 import { chatWithStats, ChatResult } from './';
-import { getSettings } from '@/lib/db/settings';
+import { getEffectiveSettings } from '@/lib/db/settings';
 import { retryWithBackoff } from '@/lib/utils/retry';
 import { stripIntroducedEmoji } from './emoji-stripper';
 
@@ -218,7 +218,7 @@ export async function formatChapters(
   // Fast-fail: if the AI provider has no key configured, skip the whole loop
   // so we don't waste 30-180 minutes making 4101 calls that all fail with
   // "API key required" — return a single warning for the whole book instead.
-  const s = await getSettings();
+  const s = await getEffectiveSettings();
   if (s.aiProvider !== 'omlx-local' && !s.aiApiKey?.trim()) {
     const earlyWarn = `Deep format skipped: AI provider "${s.aiProvider}" has no API key configured. Set it in /settings.`;
     for (const ch of chapters) {
@@ -280,8 +280,8 @@ async function callFormatterAI(
   // Read the current model from settings — the OMLX client falls back to
   // OMLX_MODEL env var if no override is provided. Passing model explicitly
   // ensures the user's selected model is used (not the env var).
-  const { getSettings } = await import('@/lib/db/settings');
-  const settings = await getSettings();
+  const { getEffectiveSettings } = await import('@/lib/db/settings');
+  const settings = await getEffectiveSettings();
 
   const aiResult: ChatResult = await chatWithStats({
     model: settings.aiModel,

@@ -74,28 +74,26 @@ export function ServiceHealth({ variant = 'compact', className, showWorker = tru
   }, [allOk, loading, showWorker, tts, worker?.online, worker?.redis]);
 
   if (variant === 'compact') {
+    const dotClassName = loading
+      ? 'bg-amber-400 shadow-[0_0_0_1px_rgba(251,191,36,0.25)]'
+      : allOk
+        ? 'bg-emerald-500 shadow-[0_0_0_1px_rgba(16,185,129,0.25)]'
+        : !tts?.ok
+          ? 'bg-red-500 shadow-[0_0_0_1px_rgba(239,68,68,0.25)]'
+          : 'bg-amber-500 shadow-[0_0_0_1px_rgba(245,158,11,0.25)]';
+
     return (
       <button
         type="button"
         onClick={() => void load()}
+        aria-label={label}
         title={tts?.recommendation ?? label}
         className={cn(
-          'inline-flex h-7 items-center gap-1.5 rounded-full border border-border px-2 text-[11px] font-medium transition-colors',
-          allOk
-            ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-            : 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300',
+          'inline-flex h-6 w-6 items-center justify-center rounded-full border border-border/60 bg-background/70 transition-colors hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
           className,
         )}
       >
-        {loading ? (
-          <Loader2 className="h-3 w-3 animate-spin" />
-        ) : allOk ? (
-          <CheckCircle2 className="h-3 w-3" />
-        ) : (
-          <AlertTriangle className="h-3 w-3" />
-        )}
-        <span className="hidden lg:inline">{label}</span>
-        <span className="lg:hidden">{allOk ? 'Ready' : 'Check'}</span>
+        <span className={cn('h-2.5 w-2.5 rounded-full', dotClassName)} />
       </button>
     );
   }

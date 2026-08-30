@@ -18,7 +18,7 @@ import path from 'path';
 import { prisma } from '@/lib/db/client';
 import { getBook } from '@/lib/db/books';
 import { parseEpub } from '@/lib/pipeline/epub-parser';
-import { getSettings } from '@/lib/db/settings';
+import { getEffectiveSettings } from '@/lib/db/settings';
 import { generateImage, analyzeChapterForIllustration, characterSeed, normalizeImageStyle } from '@/lib/ai/image-generator';
 import { resolveBookPath } from '@/lib/storage';
 
@@ -45,7 +45,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   const params = await props.params;
   const book = await getBook(params.id);
   if (!book) return NextResponse.json({ error: 'Book not found' }, { status: 404 });
-  const settings = await getSettings();
+  const settings = await getEffectiveSettings();
   if (settings.imageProvider === 'none') {
     return NextResponse.json({ error: 'Image generation is disabled in settings' }, { status: 400 });
   }

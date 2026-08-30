@@ -9,13 +9,16 @@ import path from 'path';
 import { spawn } from 'child_process';
 import { getBook } from '@/lib/db/books';
 import { listCharacters, upsertCharacters, listVoices, createVoice } from '@/lib/db/voices';
-import { pickBestBuiltInVoice, VIENEU_PROFILES } from '@/lib/ai/voice-selector';
+import { pickBestBuiltInVoice } from '@/lib/ai/voice-selector';
 import { g2pMatch } from '@/lib/vi-text-qa';
 import { resolveBookPath } from '@/lib/storage';
-import { BUILTIN_VIENEU_NAMES } from '@/lib/tts/vieneu-voices';
 import { computeAliasConfidence, type FoldMethod } from '@/lib/ai/character-alias-confidence';
-
-const BUILTIN_VIENEU = new Set(BUILTIN_VIENEU_NAMES);
+import {
+  getActiveTTSEngine,
+  getTTSEngine,
+  isBuiltinVoiceForEngine,
+  voicesForEngine,
+} from '@/lib/tts/provider';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -72,27 +75,30 @@ function resolvePython(): string {
   return process.env.TTS_PYTHON ?? 'python3';
 }
 
-const VIENEU_VOICES = VIENEU_PROFILES.map((p) => ({
-  id: p.name,
-  gender: p.gender,
-  tone: p.tone,
-  desc: p.description,
-}));
-
-/** Suggest the best built-in VieNeu voice for a character based on the
- *  full attribute set (gender + age + tone). Delegates to the centralized
- *  picker in lib/ai/voice-selector.ts which scores all 10 voices and
- *  returns the best match. `alreadyUsed` is a hint — we still respect it
- *  to avoid two characters in the same book getting identical voices. */
-function suggestVoice(gender: string, tone: string, alreadyUsed: Set<string>, age?: string | null, name?: string): string {
-  // Build candidates list, prefer unused voices to give visual diversity
-  // (the scoring itself doesn't care about used-set, only diversity does).
-  const profile = pickBestBuiltInVoice({ name: name ?? '_', gender, age, tone });
-  // If the top-scored voice is already in heavy use, try the runner-up.
+/** Suggest the best built-in voice for the active TTS engine. Delegates
+ *  to the centralized picker in lib/ai/voice-selector.ts which scores
+ *  the engine's catalog and returns the best match. `alreadyUsed` is a
+ *  hint — we still respect it to avoid two characters in the same book
+ *  getting identical voices. `engine` carries the catalog + membership
+ *  check so F5 gets its 2-voice pool and VieNeu keeps its 10. */
+function suggestVoice(
+  engine: ReturnType<typeof getTTSEngine>,
+  gender: string,
+  tone: string,
+  alreadyUsed: Set<string>,
+  age?: string | null,
+  name?: string,
+): string {
+  const catalog = engine.builtins();
+  const profile = pickBestBuiltInVoice(
+    { name: name ?? '_', gender, age, tone },
+    catalog,
+  );
+  // If the top-scored voice is already in heavy use, try a runner-up with
+  // the same gender so the suggestion still feels coherent. Cheap — picker
+  // is pure.
   if (alreadyUsed.has(profile.name)) {
-    // Re-score without the used voices by faking different gender until we
-    // find one not in the used set. Cheap fallback — picker is pure.
-    for (const p of VIENEU_PROFILES) {
+    for (const p of catalog) {
       if (!alreadyUsed.has(p.name) && p.gender === profile.gender) {
         return p.name;
       }
@@ -130,8 +136,8 @@ async function runDetector(epubPath: string, signal?: AbortSignal): Promise<Dete
   let omlxModel: string;
   let modelReason: 'empty' | 'default' | 'env-fallback' | 'validated' | 'unknown-replaced' = 'empty';
   try {
-    const { getSettings } = await import('@/lib/db/settings');
-    const settings = await getSettings();
+    const { getEffectiveSettings } = await import('@/lib/db/settings');
+    const settings = await getEffectiveSettings();
     // BUGFIX 2026-07-11 + 2026-07-12: validate the settings.aiModel value
     // against the live oMLX model list before passing it down. Previously
     // the code only filtered the literal "default" — but any stale value
@@ -279,11 +285,19 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     }
   }
 
+  // Resolve the active TTS engine once. Voice suggestions and the
+  // available_voices list both follow the active backend, so F5 users
+  // see Hồng Đào / Ngọc Ngân instead of VieNeu's 10 voices.
+  const engine = await getActiveTTSEngine();
+  const isBuiltin = (n: string) => isBuiltinVoiceForEngine(engine, n);
+  const availableVoices = voicesForEngine(engine);
+
   // Build suggestions: per detected character, suggest a voice + check for duplicates
   const characters = Array.isArray(result.characters) ? result.characters : [];
   const suggestions = characters.map((c: any) => {
     const name = String(c.name ?? '').trim();
     const suggestedVoice = suggestVoice(
+      engine,
       c.gender ?? 'unknown',
       c.tone ?? 'unknown',
       usedVoices,
@@ -351,13 +365,13 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
       for (const s of suggestions) {
         if (s.already_in_db) continue;  // skip dupes
         let voiceId: string | null = null;
-        if (s.suggested_voice && BUILTIN_VIENEU.has(s.suggested_voice)) {
+        if (s.suggested_voice && isBuiltin(s.suggested_voice)) {
           let v = voiceByName.get(s.suggested_voice);
           if (!v) {
             v = await createVoice({
               bookId: params.id,
               name: s.suggested_voice,
-              description: `Built-in VieNeu voice: ${s.suggested_voice}`,
+              description: `Built-in ${engine.label} voice: ${s.suggested_voice}`,
               refAudioPath: '',
               language: 'vi',
               isDefault: false,
@@ -423,7 +437,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     narrator_gender_hint: result.narrator_gender_hint ?? 'unknown',
     total_dialogue_lines: Number(result.total_dialogue_lines ?? 0),
     characters: suggestions,
-    available_voices: VIENEU_VOICES,
+    available_voices: availableVoices,
     source,
     // BUGFIX 2026-07-12: echo which model we actually used + the resolution
     // reason, so the /settings UI can flag stale model values without the

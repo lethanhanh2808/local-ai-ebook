@@ -9,11 +9,15 @@ import { getVoice, updateVoice, deleteVoice } from '@/lib/db/voices';
 import { setBookAudiobookStatus } from '@/lib/db/audiobook';
 import { isBuiltinVieNeuVoice } from '@/lib/tts/vieneu-voices';
 import { buildVoiceHeader, clampSpeechSpeed } from '@/lib/tts/speech-helpers';
+import {
+  getActiveTTSEngine,
+  isBuiltinVoiceForEngine,
+  sanitizeTextForEngine,
+  buildPayloadForEngine,
+} from '@/lib/tts/provider';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-const VIENEU_BASE_URL = process.env.VIENEU_BASE_URL ?? process.env.UNIFIED_TTS_URL ?? 'http://127.0.0.1:5020';
 
 export async function PATCH(
   req: NextRequest,
@@ -100,39 +104,61 @@ export async function POST(
   const text = (body.text?.trim() || 'Xin chào, đây là giọng đọc thử nghiệm của tôi.').slice(0, 1_000);
   const speed = clampSpeechSpeed(body.speed ?? voice.defaultSpeed ?? 1.0);
 
-  // The active app runs only on VieNeu. Keep the payload explicit and simple:
-  // built-in voices pass a preset name, cloned voices pass a reference path,
-  // and both route through the same backend.
-  const hasRef = !!voice.refAudioPath && fs.existsSync(voice.refAudioPath);
-  const payload: Record<string, unknown> = {
-    text,
-    backend: 'vieneu',
-    language: book.language ?? 'vi',
-    speed,
-  };
-  if (hasRef) {
-    payload['reference_path'] = voice.refAudioPath;
+  // Route the test synthesis through the engine registry. VieNeu takes
+  // `reference_path` (legacy — kept for back-compat) and F5 takes
+  // `ref_audio` + `ref_text`. The registry owns that distinction, plus
+  // backend-specific text sanitization (F5 would otherwise read the
+  // [cười] markers aloud as Vietnamese words).
+  const engine = await getActiveTTSEngine();
+  const baseUrl = engine.baseUrl();
+
+  // Prefer the explicit builtinName stored on the row; fall back to the
+  // display name only when it IS a preset for the active engine. We
+  // still OR with the legacy VieNeu catalog so a stale builtin name
+  // from before the F5 switch doesn't 400 here.
+  const isBuiltin = (n: string) =>
+    isBuiltinVoiceForEngine(engine, n) || isBuiltinVieNeuVoice(n);
+  const preset = voice.builtinName ?? (isBuiltin(voice.name) ? voice.name : null);
+
+  let payload: Record<string, unknown>;
+  if (preset) {
+    payload = buildPayloadForEngine(engine, {
+      text,
+      voice: preset,
+      speed,
+      language: book.language ?? 'vi',
+      emotion: voice.defaultEmotion ?? null,
+    });
+  } else if (voice.refAudioPath && fs.existsSync(voice.refAudioPath)) {
+    // Cloned voice — pass the file path. F5 also needs the transcript;
+    // we don't store one in this row, so the backend will reject if the
+    // engine requires it. The voices/upload endpoint (separate concern)
+    // is the right place to plumb transcripts through.
+    payload = buildPayloadForEngine(engine, {
+      text,
+      voice: null,
+      refAudio: voice.refAudioPath,
+      refText: null,
+      speed,
+      language: book.language ?? 'vi',
+      emotion: voice.defaultEmotion ?? null,
+    });
   } else {
-    // Built-in VieNeu voice — resolve the preset name. The display name
-    // may differ from the preset (e.g. "Giọng chung #2" → "Thanh Bình"),
-    // so prefer builtinName when set, then fall back to display name
-    // only if it IS a builtin preset.
-    const preset = voice.builtinName ?? (isBuiltinVieNeuVoice(voice.name) ? voice.name : null);
-    if (preset) {
-      payload['voice'] = preset;
-    } else {
-      // No preset and no ref audio — there's nothing the backend can use.
-      return NextResponse.json(
-        { error: `Voice "${voice.name}" has no reference audio and is not a known VieNeu preset. Upload a sample or pick a built-in.` },
-        { status: 400 },
-      );
-    }
+    return NextResponse.json(
+      { error: `Voice "${voice.name}" has no reference audio and is not a known preset for ${engine.label}. Upload a sample or pick a built-in.` },
+      { status: 400 },
+    );
+  }
+  // Belt-and-suspenders: drop any engine-incompatible bits the picker
+  // above didn't already strip. F5 would otherwise read "[cười]" aloud.
+  if (typeof payload.text === 'string') {
+    payload.text = sanitizeTextForEngine(engine, payload.text);
   }
 
   try {
     const bodyStr = JSON.stringify(payload);
     const bodyBytes = new TextEncoder().encode(bodyStr);
-    const r = await fetch(`${VIENEU_BASE_URL}/synthesize`, {
+    const r = await fetch(`${baseUrl}/synthesize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json; charset=utf-8' },
       body: bodyBytes,
@@ -151,6 +177,8 @@ export async function POST(
         'Content-Type': 'audio/wav',
         'Content-Length': String(audio.byteLength),
         'X-Voice-Name': voiceHeader,
+        // Echo which engine served this so the UI can tell F5 from VieNeu.
+        'X-TTS-Backend': engine.headerTag,
         'Cache-Control': 'no-cache',
       },
     });

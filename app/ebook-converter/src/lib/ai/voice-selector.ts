@@ -44,6 +44,7 @@ import {
   VIENEU_PROFILES,
   type VoiceProfile,
 } from '@/lib/tts/vieneu-voices';
+import { F5_PROFILES } from '@/lib/tts/f5-voices';
 
 // Re-export so existing callers (`characters/detect/route.ts`,
 // tests/reassign-character-voices.*.ts) can keep importing
@@ -76,14 +77,24 @@ function scoreVoice(profile: VoiceProfile, char: {
 }
 
 /** Pick the best built-in voice for a character. Deterministic by name
- *  (so the same character always gets the same voice). */
-export function pickBestBuiltInVoice(char: {
-  name: string;
-  gender?: string;
-  age?: string | null;
-  tone?: string;
-}): VoiceProfile {
-  const scored = VIENEU_PROFILES.map((p) => ({ p, s: scoreVoice(p, char) }));
+ *  (so the same character always gets the same voice).
+ *
+ *  `catalog` defaults to VIENEU_PROFILES so existing callers — which were
+ *  written before F5 existed — keep working unchanged. The detect-route
+ *  passes F5_PROFILES when the active backend is F5. F5 has only two
+ *  profiles, so the score is degenerate (gender match / mismatch); the
+ *  deterministic tie-break below is what makes a given character always
+ *  land on the same voice. */
+export function pickBestBuiltInVoice(
+  char: {
+    name: string;
+    gender?: string;
+    age?: string | null;
+    tone?: string;
+  },
+  catalog: readonly VoiceProfile[] = VIENEU_PROFILES,
+): VoiceProfile {
+  const scored = catalog.map((p) => ({ p, s: scoreVoice(p, char) }));
   scored.sort((a, b) => {
     if (b.s !== a.s) return b.s - a.s;
     // Tie-break by stable hash of name → same character always lands on same voice

@@ -20,6 +20,30 @@ import { Progress } from '@/components/ui/progress';
 import { cn, formatDuration } from '@/lib/utils';
 import { VIENEU_VOICES_LIST } from '@/lib/tts/vieneu-voices';
 
+// Re-use the type from the static VieNeu list — its shape
+// {id, label, shortLabel, gender, age, desc} is what VoiceAvatar and
+// the dropdown rows expect, so deriving from it saves us from
+// restating the contract.
+type BuiltinVoiceEntry = (typeof VIENEU_VOICES_LIST)[number];
+
+/** Derive a short Vietnamese flavor description from the engine's
+ *  profile metadata. Same logic the static VIENEU_VOICES_LIST uses;
+ *  here we apply it at runtime to whatever the active backend returns. */
+function descFromVoice(v: { gender?: 'male' | 'female'; age?: 'young' | 'mature' | 'old'; tone?: string }): string {
+  const gendered = v.gender === 'male' ? 'Nam' : 'Nữ';
+  const ageV =
+    v.age === 'young' ? 'trẻ' :
+    v.age === 'mature' ? 'trưởng thành' :
+    v.age === 'old' ? 'lớn tuổi' : 'trưởng thành';
+  const toneV =
+    v.tone === 'cheerful' ? 'vui tươi' :
+    v.tone === 'calm' ? 'điềm đạm' :
+    v.tone === 'cold' ? 'lạnh lùng' :
+    v.tone === 'serious' ? 'rõ ràng' :
+    'huyền bí';
+  return `${gendered} — ${ageV}, ${toneV}`;
+}
+
 interface CharacterVoice { name: string; voiceName?: string; }
 
 export interface CustomVoice {
@@ -91,14 +115,14 @@ interface ReadAloudPanelProps {
   activeCls: string;
 }
 
-// ── VieNeu built-in voices ────────────────────────────────────────────
-// Source: `src/lib/tts/vieneu-voices.ts` (synced from the upstream catalog
-// at `app/tts-service/VieNeu-TTS/src/vieneu/assets/voices_v3_turbo.json`).
-// Each entry has gender/age/desc metadata so the panel can show a richer
-// card (icon + tagline) instead of just a name.
-const VIENEU_VOICES = VIENEU_VOICES_LIST;
+// ── Built-in voices from the active TTS backend ────────────────────────
+// We fetch from `/api/tts/voices` instead of importing the static VieNeu
+// list, so the dropdown reflects whatever the user picked in /settings.
+// Shape returned: {id, label, gender?, age?, tone?}. We derive a short
+// Vietnamese desc from those fields so VoiceAvatar + rows look the same
+// regardless of which backend is active.
 
-function VoiceAvatar({ voice, selected }: { voice: typeof VIENEU_VOICES[number]; selected: boolean }) {
+function VoiceAvatar({ voice, selected }: { voice: BuiltinVoiceEntry; selected: boolean }) {
   const color = voice.gender === 'female' ? 'bg-pink-500/15 text-pink-700 dark:text-pink-300' : 'bg-blue-500/15 text-blue-700 dark:text-blue-300';
   const age = voice.age === 'young' ? 'Trẻ' : 'Trưởng thành';
   return (
@@ -133,10 +157,45 @@ export function ReadAloudPanel({
 }: ReadAloudPanelProps) {
   const [activeTab, setActiveTab] = useState<'voices' | 'settings'>('voices');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // 2026-08-30: moved from module top-level to inside the component — the
+  // previous declaration violated rules-of-hooks (`useState` cannot run at
+  // module scope), which Next.js's build-time ESLint rejects.
+  const [builtinVoices, setBuiltinVoices] = useState<BuiltinVoiceEntry[]>([]);
 
-  // Combined list of available voices (10 built-in + any custom)
+  // Fetch the active backend's built-in catalog on mount. The endpoint
+  // follows settings.ttsProvider, so flipping to F5 surfaces Hồng Đào
+  // / Ngọc Ngân without a code change here.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/api/tts/voices');
+        if (!r.ok) return;
+        const body = await r.json() as { voices?: Array<{ id: string; label: string; gender?: 'male' | 'female'; age?: 'young' | 'mature' | 'old'; tone?: string }> };
+        if (cancelled) return;
+        setBuiltinVoices(
+          (body.voices ?? []).map((v) => {
+            const desc = descFromVoice(v);
+            return {
+              id: v.id,
+              label: v.label ?? v.id,
+              shortLabel: v.label ?? v.id,
+              gender: v.gender ?? 'male',
+              age: v.age ?? 'mature',
+              desc,
+            };
+          }),
+        );
+      } catch {
+        // Best-effort — leave empty so the dropdown hides the built-in group.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Combined list of available voices (active backend's built-ins + any custom)
   const allVoices = [
-    ...VIENEU_VOICES,
+    ...builtinVoices,
     ...customVoices.map((v) => ({
       id: v.id, label: v.name, shortLabel: v.name, gender: 'male' as const, age: 'mature' as const,
       desc: v.isCloned ? '🎭 Giọng clone của bạn' : 'Giọng tùy chỉnh',
@@ -287,8 +346,8 @@ export function ReadAloudPanel({
 
                 <p className={cn('text-[10px] mt-2', mutedCls)}>
                   {customVoices.length > 0
-                    ? `${VIENEU_VOICES.length} giọng Vietnamese Voice + ${customVoices.length} giọng clone`
-                    : `${VIENEU_VOICES.length} giọng có sẵn. Nhấn "Clone" để tạo giọng từ audio mẫu.`}
+                    ? `${builtinVoices.length} giọng từ backend + ${customVoices.length} giọng clone`
+                    : `${builtinVoices.length} giọng có sẵn. Nhấn "Clone" để tạo giọng từ audio mẫu.`}
                 </p>
               </section>
 
@@ -596,6 +655,3 @@ export function ReadAloudPanel({
     </>
   );
 }
-
-// Re-export the VIENEU_VOICES list so the parent can use it for naming.
-export { VIENEU_VOICES };

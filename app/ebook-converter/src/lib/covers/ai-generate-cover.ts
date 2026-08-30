@@ -25,7 +25,7 @@
 import sharp from 'sharp';
 import { generateImage, isMonochromeStyle, type ImageStyle } from '@/lib/ai/image-generator';
 import { chatJSON } from '@/lib/ai';
-import { getSettings } from '@/lib/db/settings';
+import { getEffectiveSettings } from '@/lib/db/settings';
 import {
   detectGenre,
   toArtDirection,
@@ -442,7 +442,7 @@ export interface AIGenerateCoverResult {
  *  generation if image generation is disabled or the AI call fails. */
 export async function generateAIBookCover(opts: AICoverOptions): Promise<AIGenerateCoverResult> {
   const t0 = Date.now();
-  const s = await getSettings();
+  const s = await getEffectiveSettings();
   const W = 800, H = 1200;
 
   // If image generation is disabled, fall back to the original SVG/sharp generator

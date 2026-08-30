@@ -12,7 +12,6 @@ import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/components/ui/toast';
 import { ErrorState } from '@/components/layout/ErrorState';
-import { VIENEU_BUILTIN_LIST } from '@/lib/tts/vieneu-voices';
 import { CharacterDetection } from './CharacterDetection';
 
 interface Voice {
@@ -27,12 +26,18 @@ interface Voice {
   createdAt: string;
 }
 
-// ── VieNeu built-in voices (Vietnamese-native, 48 kHz) ──────────────────────
-// Source: `src/lib/tts/vieneu-voices.ts` — synced from the upstream catalog
-// at `app/tts-service/VieNeu-TTS/src/vieneu/assets/voices_v3_turbo.json`. The
-// backend's POST /characters route auto-creates a Voice row for the built-in
-// name when the user applies the assignment.
-const VIENEU_BUILTIN = VIENEU_BUILTIN_LIST;
+// ── Built-in voices from the active TTS backend ────────────────────────────
+// We fetch from `/api/tts/voices` instead of importing the static VieNeu
+// list, so the dropdown reflects whatever the user picked in /settings:
+// VieNeu's 10 presets or F5's two clones (Hồng Đào / Ngọc Ngân). The
+// shape `{id, label, builtin, gender?, age?, tone?}` comes from the
+// engine registry in lib/tts/provider.ts.
+interface BuiltinVoice {
+  id: string;
+  name: string;
+  gender: 'male' | 'female';
+  tone?: string;
+}
 
 interface Character {
   id: string;
@@ -111,6 +116,10 @@ export function VoicePanel({
   // this button works even if the user never opened the AI panel above.
   const [autoAssigning, setAutoAssigning] = useState(false);
   const [autoAssignMsg, setAutoAssignMsg] = useState<string | null>(null);
+  // 2026-08-30: moved from module top-level to inside the component — the
+  // previous declaration violated rules-of-hooks (`useState` cannot run at
+  // module scope), which Next.js's build-time ESLint rejects.
+  const [builtinVoices, setBuiltinVoices] = useState<BuiltinVoice[]>([]);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -130,6 +139,29 @@ export function VoicePanel({
   }, [bookId]);
 
   useEffect(() => { void fetchAll(); }, [fetchAll]);
+
+  // Fetch the active backend's built-in catalog. The endpoint follows
+  // settings.ttsProvider, so flipping to F5 shows Hồng Đào / Ngọc Ngân
+  // without a code change here.
+  const fetchBuiltinCatalog = useCallback(async () => {
+    try {
+      const r = await fetch('/api/tts/voices');
+      if (!r.ok) return;
+      const body = await r.json() as { voices?: Array<{ id: string; label: string; gender?: 'male' | 'female'; tone?: string }> };
+      setBuiltinVoices(
+        (body.voices ?? []).map((v) => ({
+          id: v.id,
+          name: v.label ?? v.id,
+          gender: v.gender ?? 'male',
+          tone: v.tone,
+        })),
+      );
+    } catch {
+      // Best-effort — leave empty so the dropdown just hides the built-in group.
+    }
+  }, []);
+
+  useEffect(() => { void fetchBuiltinCatalog(); }, [fetchBuiltinCatalog]);
 
   const handleUpload = async (file: File) => {
     if (!newName.trim()) { setError('Tên giọng không được trống'); return; }
@@ -231,7 +263,7 @@ export function VoicePanel({
     if (v) return v.name;
     // Optimistic: if the dropdown shows a built-in that hasn't been applied yet
     // (no Voice row in DB yet), the picker value equals the voice name.
-    const builtin = VIENEU_BUILTIN.find((vv) => vv.id === char.voiceId);
+    const builtin = builtinVoices.find((vv) => vv.id === char.voiceId);
     if (builtin) return builtin.name;
     return null;
   }, [voices]);
@@ -276,7 +308,7 @@ export function VoicePanel({
     let payload: { name: string; voiceId?: string | null; voiceName?: string };
     if (!voiceId) {
       payload = { name, voiceId: null };
-    } else if (VIENEU_BUILTIN.some((v) => v.id === voiceId)) {
+    } else if (builtinVoices.some((v) => v.id === voiceId)) {
       payload = { name, voiceName: voiceId };
     } else {
       payload = { name, voiceId };
@@ -602,14 +634,17 @@ export function VoicePanel({
                     className="rounded-md border border-border bg-background px-2 py-1 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring max-w-[160px]"
                   >
                     <option value="">— Mặc định —</option>
-                    {/* Built-in VieNeu voices (always available, no upload needed) */}
-                    <optgroup label="🎙️ VieNeu có sẵn (10)">
-                      {VIENEU_BUILTIN.map((v) => (
-                        <option key={`builtin-${v.id}`} value={v.id}>
-                          {v.name}{v.gender === 'female' ? ' ♀' : ' ♂'}
-                        </option>
-                      ))}
-                    </optgroup>
+                    {/* Built-in voices for the active backend (always available, no upload needed).
+                        Label adapts to whichever engine settings.ttsProvider points to. */}
+                    {builtinVoices.length > 0 && (
+                      <optgroup label={`🎙️ Có sẵn (${builtinVoices.length})`}>
+                        {builtinVoices.map((v) => (
+                          <option key={`builtin-${v.id}`} value={v.id}>
+                            {v.name}{v.gender === 'female' ? ' ♀' : ' ♂'}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                     {/* Custom cloned voices (only show if any exist) */}
                     {voices.length > 0 && (
                       <optgroup label="🎭 Giọng clone của bạn">

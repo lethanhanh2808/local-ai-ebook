@@ -150,8 +150,8 @@ export async function POST(req: NextRequest) {
       // defaults from the Settings row (defaultAiEnhance, defaultAiWatermarkClean,
       // defaultDeepFormat). This ensures changes in /settings take effect
       // immediately, even for users who haven't refreshed the upload zone.
-      const { getSettings } = await import('@/lib/db/settings');
-      const settings = await getSettings();
+      const { getEffectiveSettings } = await import('@/lib/db/settings');
+      const settings = await getEffectiveSettings();
       const formEnhance = formData.get('aiEnhance');
       const formWatermark = formData.get('aiWatermarkClean');
       const formDeep = formData.get('deepFormat');

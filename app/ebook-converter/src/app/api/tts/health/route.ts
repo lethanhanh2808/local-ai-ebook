@@ -1,16 +1,12 @@
 // src/app/api/tts/health/route.ts
 // Health summary for the local TTS stack used by reader/audiobook features.
-// 2026-07-12: VieNeu is the sole backend. The route talks to the VieNeu
-// FastAPI server on :5020 and reports the current service state for the
-// active reader and audiobook workflows.
+// 2026-07-12: VieNeu was the sole backend.
+// 2026-08-30: F5-TTS added as a second backend. The route now probes every
+// engine registered in lib/tts/provider.ts, reports the active one, and
+// keeps the legacy `services.vieneu` field for backward compatibility with
+// the existing health UI.
 import { NextResponse } from 'next/server';
-
-const VIENEU_BASE_URL = (
-  process.env.VIENEU_BASE_URL ??
-  process.env.UNIFIED_TTS_URL ??
-  process.env.TTS_SERVICE_URL ??
-  'http://127.0.0.1:5020'
-).replace(/\/$/, '');
+import { getActiveTTSEngine, listEngines } from '@/lib/tts/provider';
 
 interface Backend {
   id: string;
@@ -19,52 +15,58 @@ interface Backend {
   languages?: string[];
 }
 
-async function fetchJson<T>(path: string, timeoutMs = 3_000): Promise<T> {
-  const r = await fetch(`${VIENEU_BASE_URL}${path}`, {
-    signal: AbortSignal.timeout(timeoutMs),
-    cache: 'no-store',
-  });
-  if (!r.ok) throw new Error(`${path} HTTP ${r.status}`);
-  return r.json() as Promise<T>;
+async function probeEngine(baseUrl: string, timeoutMs = 1_500): Promise<boolean> {
+  try {
+    const r = await fetch(`${baseUrl}/health`, {
+      signal: AbortSignal.timeout(timeoutMs),
+      cache: 'no-store',
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
 }
 
 export async function GET(): Promise<NextResponse> {
   const checkedAt = new Date().toISOString();
-  try {
-    const health = await fetchJson<{ status?: string; vieneu?: string; vieneu_alive?: boolean }>('/health');
-    const vieneuReady = health.status === 'ok';
-    const inferredBackends: Backend[] = vieneuReady
-      ? [{ id: 'vieneu', name: 'VieNeu', ready: true, languages: ['vi'] }]
-      : [];
+  const activeEngine = await getActiveTTSEngine();
+  const registered = listEngines();
+  const probed = await Promise.all(
+    registered.map(async (e) => ({
+      ...e,
+      ready: await probeEngine(e.baseUrl),
+    })),
+  );
+  const backends: Backend[] = probed.map((e) => ({
+    id: e.id,
+    name: e.label,
+    ready: e.ready,
+    languages: ['vi'],
+  }));
+  const activeReady = probed.find((p) => p.id === activeEngine.headerTag)?.ready
+    ?? backends.find((b) => b.id === 'vieneu')?.ready
+    ?? false;
 
-    return NextResponse.json({
-      ok: vieneuReady,
-      checkedAt,
-      unified: {
-        ok: vieneuReady,
-        url: VIENEU_BASE_URL,
-        status: health.status ?? 'unknown',
-      },
-      services: {
-        vieneu: vieneuReady || !!health.vieneu_alive,
-      },
-      backends: inferredBackends,
-      defaultBackend: vieneuReady ? 'vieneu' : null,
-      recommendation: vieneuReady
-        ? null
-        : 'Start the local TTS service: bash app/tts-service/start_all.sh, then re-check TTS health.',
-      errors: { health: null, backends: null },
-    }, { status: vieneuReady ? 200 : 503 });
-  } catch (err) {
-    return NextResponse.json({
-      ok: false,
-      checkedAt,
-      unified: { ok: false, url: VIENEU_BASE_URL, status: 'down' },
-      services: { vieneu: false },
-      backends: [],
-      defaultBackend: null,
-      recommendation: 'Start the local TTS service: bash app/tts-service/start_all.sh, then re-check TTS health.',
-      error: err instanceof Error ? err.message : String(err),
-    }, { status: 503 });
-  }
+  return NextResponse.json({
+    ok: activeReady,
+    checkedAt,
+    unified: {
+      ok: activeReady,
+      url: activeEngine.baseUrl(),
+      status: activeReady ? 'ok' : 'down',
+      engine: activeEngine.headerTag,
+    },
+    services: {
+      // Legacy field — the health UI still reads it. Derived from the
+      // VieNeu probe so the boolean stays honest.
+      vieneu: backends.find((b) => b.id === 'vieneu')?.ready ?? false,
+      f5: backends.find((b) => b.id === 'f5')?.ready ?? false,
+    },
+    backends,
+    defaultBackend: activeEngine.headerTag,
+    recommendation: activeReady
+      ? null
+      : 'Start the local TTS service: bash app/tts-service/start_all.sh, then re-check TTS health.',
+    errors: { health: null, backends: null },
+  }, { status: activeReady ? 200 : 503 });
 }

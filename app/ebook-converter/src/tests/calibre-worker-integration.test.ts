@@ -74,6 +74,16 @@ vi.mock('@/lib/db/settings', () => ({
     aiModel: 'test-model',
     workerConcurrency: 1,
   })),
+  // 2026-08-30: the engine registry (lib/tts/provider.ts) reads
+  // getEffectiveSettings, and the worker uses the same helper for its
+  // startup log line. Without it vi.mock returns undefined and the
+  // worker import crashes before any test logic runs.
+  getEffectiveSettings: vi.fn(async () => ({
+    aiProvider: 'omlx-local',
+    aiModel: 'test-model',
+    ttsProvider: 'vieneu',
+    workerConcurrency: 1,
+  })),
 }));
 
 vi.mock('@/lib/pipeline/conversion-pipeline', () => ({

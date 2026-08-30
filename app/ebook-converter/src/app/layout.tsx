@@ -4,6 +4,7 @@ import './globals.css';
 import { AppNav } from '@/components/nav/AppNav';
 import { ToastProvider, Toaster } from '@/components/ui/toast';
 import { ThemeProvider } from '@/components/theme/ThemeProvider';
+import { AppAuthGate } from '@/components/auth/AppAuthGate';
 
 export const metadata: Metadata = {
   title: 'Ebook Manager – Convert, Organize & Read your EPUB library',
@@ -36,8 +37,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             >
               Bỏ qua điều hướng
             </a>
-            <AppNav />
-            <main id="main-content" tabIndex={-1}>{children}</main>
+            <AppAuthGate>
+              <AppNav />
+              <main id="main-content" tabIndex={-1}>{children}</main>
+            </AppAuthGate>
             <Toaster />
           </ToastProvider>
         </ThemeProvider>

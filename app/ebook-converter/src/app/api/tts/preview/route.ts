@@ -12,15 +12,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import { getVoice } from '@/lib/db/voices';
-import { isBuiltinVieNeuVoice } from '@/lib/tts/vieneu-voices';
+import { BUILTIN_VIENEU_NAMES, isBuiltinVieNeuVoice } from '@/lib/tts/vieneu-voices';
 import { clampSpeechSpeed } from '@/lib/tts/speech-helpers';
+import {
+  getActiveTTSEngine,
+  isBuiltinVoiceForEngine,
+  sanitizeTextForEngine,
+  buildPayloadForEngine,
+} from '@/lib/tts/provider';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const BUILTIN_VIENEU = new Set(BUILTIN_VIENEU_NAMES);
 
-const VIENEU_BASE_URL = process.env.VIENEU_BASE_URL ?? process.env.UNIFIED_TTS_URL ?? process.env.TTS_SERVICE_URL ?? 'http://127.0.0.1:5020';
 const DEFAULT_PREVIEW = 'Xin chào bạn đọc, đây là giọng của tôi.';
 
 export async function POST(req: NextRequest) {
@@ -38,9 +43,17 @@ export async function POST(req: NextRequest) {
   const text = (body.text?.trim() || DEFAULT_PREVIEW).slice(0, 1_000);
   const speed = clampSpeechSpeed(body.speed ?? 1.0);
 
+  // Resolve the active engine once. Backend-aware builtin check + the
+  // payload builder keep the differences between VieNeu (`voice` /
+  // `reference_path`) and F5 (`voice` / `ref_audio` / `ref_text`) in one
+  // place.
+  const engine = await getActiveTTSEngine();
+  const isBuiltin = (n: string) =>
+    isBuiltinVoiceForEngine(engine, n) || isBuiltinVieNeuVoice(n);
+
   let refPath: string | undefined;
   let language = body.language ?? 'vi';
-  let useBuiltIn = isBuiltinVieNeuVoice(voice);
+  let useBuiltIn = isBuiltin(voice);
 
   // If it looks like a UUID, look up the custom voice
   if (!useBuiltIn && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(voice)) {
@@ -54,23 +67,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `unknown voice: ${voice}` }, { status: 400 });
   }
 
-  // Synthesize via the active VieNeu backend. The preview route no longer
-  // needs branch-specific backend handling; both built-in and cloned voices
-  // are served through the same unified endpoint.
-  const payload: Record<string, unknown> = {
-    text,
+  const cleanText = sanitizeTextForEngine(engine, text);
+  const payload = buildPayloadForEngine(engine, {
+    text: cleanText,
+    voice: useBuiltIn ? voice : null,
+    refAudio: refPath,
+    refText: null,
     speed,
     language,
-    backend: 'vieneu',
-  };
-  if (useBuiltIn) {
-    payload['voice'] = voice;
-  } else {
-    payload['reference_path'] = refPath;
-  }
+  });
 
   try {
-    const r = await fetch(`${VIENEU_BASE_URL}/synthesize`, {
+    const r = await fetch(`${engine.baseUrl()}/synthesize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -86,6 +94,10 @@ export async function POST(req: NextRequest) {
         'Content-Type': 'audio/wav',
         'Content-Length': String(audio.byteLength),
         'Cache-Control': 'no-cache',
+        // Echo which engine served this so the UI can tell F5 from VieNeu.
+        // The Python servers set `X-TTS-Engine`; we rebrand at the proxy so
+        // the browser always sees `X-TTS-Backend`.
+        'X-TTS-Backend': r.headers.get('X-TTS-Engine') ?? r.headers.get('X-TTS-Backend') ?? engine.headerTag,
       },
     });
   } catch (err) {

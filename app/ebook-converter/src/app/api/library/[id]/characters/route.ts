@@ -15,6 +15,7 @@ import {
 import { setBookAudiobookStatus } from '@/lib/db/audiobook';
 import { prisma } from '@/lib/db/client';
 import { isBuiltinVieNeuVoice } from '@/lib/tts/vieneu-voices';
+import { getActiveTTSEngine, isBuiltinVoiceForEngine } from '@/lib/tts/provider';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -52,6 +53,14 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   const existingVoices = await listVoices(params.id);
   const voiceByName = new Map(existingVoices.map((v) => [v.name, v]));
 
+  // The active TTS engine decides which built-in names are valid. F5 has
+  // its own 2-voice catalog (hong-dao / ngoc-ngan); VieNeu keeps its 10.
+  // We still accept legacy VieNeu names so a stale voiceId from before the
+  // F5 switch doesn't 400 — the fallback check uses the static catalog.
+  const engine = await getActiveTTSEngine();
+  const isBuiltin = (n: string) =>
+    isBuiltinVoiceForEngine(engine, n) || isBuiltinVieNeuVoice(n);
+
   const resolved: Array<{
     name: string;
     aliases: string[];
@@ -72,15 +81,15 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     if (voiceId !== undefined && voiceId !== null && typeof voiceId !== 'string') {
       return NextResponse.json({ error: `Invalid voiceId for character ${c.name}` }, { status: 400 });
     }
-    if (!voiceId && c.voiceName && isBuiltinVieNeuVoice(c.voiceName)) {
+    if (!voiceId && c.voiceName && isBuiltin(c.voiceName)) {
       let voice = voiceByName.get(c.voiceName);
       if (!voice) {
-        // Auto-create a Voice row for the built-in name (no audio file needed
-        // because VieNeu resolves the preset by name).
+        // Auto-create a Voice row for the built-in name (no audio file
+        // needed because the engine resolves the preset by name).
         voice = await createVoice({
           bookId: params.id,
           name: c.voiceName,
-          description: `Built-in VieNeu voice: ${c.voiceName}`,
+          description: `Built-in ${engine.label} voice: ${c.voiceName}`,
           refAudioPath: '',  // placeholder; synthesize checks for isBuiltin name match
           language: 'vi',
           isDefault: false,

@@ -397,23 +397,94 @@ model ShelfBook {
 // One row, id="singleton". Stores user-configured preferences for AI providers,
 // TTS providers, and default conversion options. Read by all AI endpoints
 // to route to the selected backend (OMLX local, MiniMax cloud, etc.).
+model User {
+  id           String        @id @default(uuid())
+  username     String        @unique @default("admin")
+  name         String        @default("Local user")
+  email        String?       @unique
+  passwordHash String?
+  role         String        @default("USER")
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  settings     UserSettings?
+  auditLogs    AuditLog[]    @relation("AuditActor")
+  targetLogs   AuditLog[]    @relation("AuditTarget")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  action      String
+  actorId     String?
+  targetUserId String?
+  details     String?
+  createdAt   DateTime @default(now())
+
+  actor      User? @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  targetUser User? @relation("AuditTarget", fields: [targetUserId], references: [id], onDelete: SetNull)
+
+  @@index([actorId, createdAt])
+  @@index([targetUserId, createdAt])
+  @@index([action, createdAt])
+}
+
+model UserSettings {
+  id String @id @default(uuid())
+
+  userId String @unique
+
+  aiProvider           String  @default("omlx-local")
+  aiApiKey             String?
+  aiBaseUrl            String?
+  aiAllowInsecureTls   Boolean @default(false)
+  aiModel              String  @default("default")
+  aiMaxTokens          Int     @default(4096)
+  aiTemperature     Float   @default(0.2)
+  aiThinkingCombine Boolean @default(true)
+  aiThinkingFullLLM Boolean @default(false)
+
+  ttsProvider String @default("vieneu")
+
+  defaultAiEnhance        Boolean @default(true)
+  defaultAiWatermarkClean Boolean @default(true)
+  defaultDeepFormat       Boolean @default(false)
+  defaultLanguage         String  @default("vi")
+  defaultReaderFriendly   Boolean @default(true)
+
+  aiEnhanceConcurrency Int @default(3)
+
+  imageProvider   String  @default("none")
+  imageApiKey     String?
+  imageBaseUrl    String?
+  imageModel      String  @default("dall-e-3")
+  imageStyle      String  @default("bw-anime")
+  imageMaxPerBook Int     @default(6)
+
+  theme String @default("system")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
 model Settings {
   id String @id @default("singleton")
 
   // ── AI provider for text tasks (EPUB repair, character detection, etc.) ──
-  aiProvider    String  @default("omlx-local")
+  aiProvider        String  @default("omlx-local")
   // omlx-local | minimax-cloud | openai | custom
-  aiApiKey      String? // encrypted-at-rest API key (MiniMax, OpenAI, ...)
-  aiBaseUrl     String? // optional override for OpenAI-compatible endpoints
-  aiModel       String  @default("default") // model identifier
+  aiApiKey          String? // encrypted-at-rest API key (MiniMax, OpenAI, ...)
+  aiBaseUrl         String? // optional override for OpenAI-compatible endpoints
+  aiAllowInsecureTls Boolean @default(false) // disable certificate validation for private/self-signed custom gateways
+  aiModel           String  @default("default") // model identifier
   // Upper bound on response tokens per AI call.
   //   Chapter-enhancement uses this to cap the output budget — too high
   //   and the local OMLX model balloons the KV cache past the 12 GB RAM
   //   ceiling (memory_guard_tier abort), which crashes the entire book
   //   conversion. Lowering this is the user-facing knob to fix OOM.
   //   Default 4096 ≈ safe for a 9B-class 4-bit model on Apple Silicon.
-  aiMaxTokens   Int     @default(4096)
-  aiTemperature Float   @default(0.2)
+  aiMaxTokens       Int     @default(4096)
+  aiTemperature     Float   @default(0.2)
   // Per-mode `enable_thinking` override for the chapter-attribution
   // analyzer. Thinking ON for the chunked Combine mode (small batches,
   // accuracy over speed). Thinking OFF for the whole-chapter 'full-llm'
@@ -421,8 +492,8 @@ model Settings {
   // would burn the output cap before the model emits any rows).
   // 2026-07-12: surfaced in the Settings UI as two toggles so users can
   // override per model + workload.
-  aiThinkingCombine   Boolean @default(true)
-  aiThinkingFullLLM   Boolean @default(false)
+  aiThinkingCombine Boolean @default(true)
+  aiThinkingFullLLM Boolean @default(false)
 
   // ── TTS provider ──────────────────────────────────────────────────────────
   ttsProvider String @default("vieneu")

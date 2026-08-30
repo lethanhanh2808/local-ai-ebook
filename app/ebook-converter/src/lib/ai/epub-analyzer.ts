@@ -75,8 +75,8 @@ export async function repairHtmlChunk(
 
   // Read model from settings so the user's selected model is used (not the
   // OMLX_MODEL env var fallback)
-  const { getSettings } = await import('@/lib/db/settings');
-  const settings = await getSettings();
+  const { getEffectiveSettings } = await import('@/lib/db/settings');
+  const settings = await getEffectiveSettings();
 
   return chat({
     model: settings.aiModel,

@@ -837,10 +837,33 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     isCustom?: boolean;
   }
 
-  // ── Vietnamese Voice built-in voices (VieNeu-TTS under the hood, 48 kHz) ─────
-  // Source: `src/lib/tts/vieneu-voices.ts` — synced from the upstream catalog
-  // at `app/tts-service/VieNeu-TTS/src/vieneu/assets/voices_v3_turbo.json`.
-  const VIENEU_VOICES: TtsVoice[] = VIENEU_TTS_VOICES.map((v) => ({ id: v.id, name: v.name }));
+  // ── Vietnamese Voice built-in voices (active backend) ────────────────────
+  // We fetch from `/api/tts/voices` so the picker follows whatever the
+  // user has selected in /settings (VieNeu's 10 presets, or F5's two
+  // clones). The static VIENEU_TTS_VOICES list is kept as a fallback so
+  // the picker is never empty if the fetch is offline or slow — the
+  // live catalog overwrites it once the response lands.
+  const [backendVoices, setBackendVoices] = useState<TtsVoice[]>(
+    VIENEU_TTS_VOICES.map((v) => ({ id: v.id, name: v.name })),
+  );
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/api/tts/voices');
+        if (!r.ok) return;
+        const body = await r.json() as { voices?: Array<{ id: string; label: string }> };
+        if (cancelled) return;
+        if (Array.isArray(body.voices) && body.voices.length > 0) {
+          setBackendVoices(body.voices.map((v) => ({ id: v.id, name: v.label ?? v.id })));
+        }
+      } catch {
+        // Keep the static fallback.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  const VIENEU_VOICES: TtsVoice[] = backendVoices;
 
   // Default voice (centre of the spectrum — easy to listen to)
   const [ttsState, setTtsState]           = useState<TtsState>('idle');
@@ -2374,14 +2397,40 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   // Mirror of VIENEU_GENDER in audiobook_generator.py — keep in sync.
   // Gender is inferred from the character's voice builtin name. Cloned
   // voices fall back to "unknown" (pronoun resolution skips them).
-  // Source: `src/lib/tts/vieneu-voices.ts` (Python-side mirror in
-  // `app/tts-service/audiobook_generator.py:580-602` is intentionally left
-  // for a separate sync to that reference project).
-  const VOICE_GENDER: Record<string, 'female' | 'male' | 'unknown'> = {
-    ...Object.fromEntries(
+  // The static VIENEU_VOICE_GENDER is the fallback; we merge the active
+  // backend's gender hints on top so F5's voices (hong-dao / ngoc-ngan)
+  // get correct pronouns too.
+  const [backendGender, setBackendGender] = useState<Record<string, 'female' | 'male' | 'unknown'>>(
+    Object.fromEntries(
       Object.entries(VIENEU_VOICE_GENDER).map(([k, v]) => [k, v as 'female' | 'male' | 'unknown']),
     ),
-  };
+  );
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/api/tts/voices');
+        if (!r.ok) return;
+        const body = await r.json() as { voices?: Array<{ id: string; gender?: 'male' | 'female' }> };
+        if (cancelled) return;
+        if (Array.isArray(body.voices)) {
+          const next: Record<string, 'female' | 'male' | 'unknown'> = {};
+          for (const v of body.voices) {
+            if (v.gender === 'male' || v.gender === 'female') {
+              next[v.id] = v.gender;
+            }
+          }
+          if (Object.keys(next).length > 0) {
+            setBackendGender((prev) => ({ ...prev, ...next }));
+          }
+        }
+      } catch {
+        // Keep the static fallback.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  const VOICE_GENDER: Record<string, 'female' | 'male' | 'unknown'> = backendGender;
 
   /** Build canonical-name → gender map from ttsCharacterMap (name/alias → voice name). */
   function buildCharacterGenderMap(): Record<string, 'female' | 'male' | 'unknown'> {

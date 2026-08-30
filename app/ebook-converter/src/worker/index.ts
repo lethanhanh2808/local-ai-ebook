@@ -11,7 +11,7 @@ import { UnrecoverableError, Worker } from 'bullmq';
 import IORedis from 'ioredis';
 import { QUEUE_NAME, ConversionJobData, redisConnection } from '../lib/queue';
 import { updateJob } from '../lib/db/jobs';
-import { getSettings } from '../lib/db/settings';
+import { getEffectiveSettings } from '../lib/db/settings';
 import { runConversionPipeline } from '../lib/pipeline/conversion-pipeline';
 import { outputPath } from '../lib/storage';
 import { prisma } from '../lib/db/client';
@@ -78,7 +78,7 @@ let heartbeatTimers: Map<string, NodeJS.Timeout> = new Map();
 // ── Worker boot: read concurrency from settings
 async function getWorkerConcurrency(): Promise<number> {
   try {
-    const s = await getSettings();
+    const s = await getEffectiveSettings();
     return Math.max(1, Math.min(8, s.workerConcurrency));
   } catch {
     return 2;
@@ -178,7 +178,7 @@ const worker = new Worker<ConversionJobData>(
       }
 
       // Read current model/provider from settings so the JobCard can show it
-      const settings = await getSettings();
+      const settings = await getEffectiveSettings();
       log('info', 'config', `provider=${settings.aiProvider} model=${settings.aiModel}`);
       try {
         await updateJob(jobId, {

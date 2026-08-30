@@ -24,7 +24,7 @@
 // provider for "no color, no fills, white background", and the result is
 // checked for grayscale content before being kept.
 
-import { getSettings } from '@/lib/db/settings';
+import { getEffectiveSettings } from '@/lib/db/settings';
 import { chat, chatJSON } from './';
 
 export type ImageStyle =
@@ -129,7 +129,7 @@ interface ProviderCfg {
 }
 
 async function pickProviderCfg(): Promise<ProviderCfg> {
-  const s = await getSettings();
+  const s = await getEffectiveSettings();
   const provider = (s.imageProvider ?? 'none') as Provider;
   const model = s.imageModel || (provider === 'minimax' ? 'image-01' : 'dall-e-3');
   const apiKey = s.imageApiKey?.trim() || '';
@@ -191,7 +191,7 @@ const MINIMAX_ERRORS: Record<number, string> = {
 // ── Main API ─────────────────────────────────────────────────────────────
 /** Generate an image. Returns the public URL (or data: URL) of the result. */
 export async function generateImage(opts: GenerateImageOptions): Promise<GenerateImageResult> {
-  const s = await getSettings();
+  const s = await getEffectiveSettings();
   // Allow callers to force a specific style; otherwise pick up the user's
   // saved preference (auto-normalised so legacy values map to the closest
   // B&W preset, and an empty string falls back to the bw-anime default).

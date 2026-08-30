@@ -42,7 +42,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { getBook } from '@/lib/db/books';
-import { getSettings } from '@/lib/db/settings';
+import { getEffectiveSettings } from '@/lib/db/settings';
 import { listCharacters } from '@/lib/db/voices';
 import {
   invalidateAttribution,
@@ -273,7 +273,7 @@ export async function POST(
         // per-mode `enable_thinking` flag without racing the user's
         // mid-run toggle. Both new columns (2026-07-12) default to
         // sensible values: Combine=ON, Full-LLM=OFF.
-        const settings = await getSettings();
+        const settings = await getEffectiveSettings();
         const thinkingCombine = settings.aiThinkingCombine ?? true;
         const thinkingFullLLM = settings.aiThinkingFullLLM ?? false;
         log(controller,

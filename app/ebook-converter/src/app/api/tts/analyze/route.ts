@@ -14,8 +14,8 @@ const OMLX_KEY  = process.env.OMLX_API_KEY ?? '';
 //      "Model 'default' not found" when nothing is configured.
 async function resolveModel(): Promise<string> {
   try {
-    const { getSettings } = await import('@/lib/db/settings');
-    const s = await getSettings();
+    const { getEffectiveSettings } = await import('@/lib/db/settings');
+    const s = await getEffectiveSettings();
     return s.aiModel?.trim() || process.env.OMLX_MODEL || '';
   } catch {
     return process.env.OMLX_MODEL || '';

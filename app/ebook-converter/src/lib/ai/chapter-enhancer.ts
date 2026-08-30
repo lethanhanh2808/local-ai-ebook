@@ -3,7 +3,7 @@
 // Processes chapters in parallel (configurable concurrency).
 import { chatWithStats } from './';  // unified AI client (routes by settings.aiProvider)
 import { stripIntroducedEmoji } from './emoji-stripper';
-import { getSettings } from '../db/settings';
+import { getEffectiveSettings } from '../db/settings';
 
 // Defaults — overridable from the Settings singleton row in the DB.
 // Reading from DB per-batch means the user can change concurrency from
@@ -20,7 +20,7 @@ async function readConcurrency(): Promise<number> {
   const now = Date.now();
   if (_concurrencyCache && _concurrencyCache.expires > now) return _concurrencyCache.value;
   try {
-    const s = await getSettings();
+    const s = await getEffectiveSettings();
     const v = Number(s.aiEnhanceConcurrency ?? DEFAULT_CONCURRENCY);
     const clamped = Math.min(CONCURRENCY_MAX, Math.max(CONCURRENCY_MIN, Number.isFinite(v) ? v : DEFAULT_CONCURRENCY));
     _concurrencyCache = { value: clamped, expires: now + 2000 };
@@ -84,8 +84,8 @@ export async function enhanceChapter(
   language?: string,
 ): Promise<string> {
   // Read model from settings (override OMLX_MODEL env var fallback)
-  const { getSettings } = await import('@/lib/db/settings');
-  const settings = await getSettings();
+  const { getEffectiveSettings } = await import('@/lib/db/settings');
+  const settings = await getEffectiveSettings();
   const start = Date.now();
 
   // Cap response tokens tightly. The local OMLX model uses KV-cache RAM

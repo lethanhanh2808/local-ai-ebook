@@ -2,33 +2,49 @@
 //
 // Read-aloud endpoint — used by the reader's "Đọc to" (Read aloud) feature.
 // Speaks a chunk of text using the assigned character's voice (if known) or
-// the book's default voice. 2026-07-12: VieNeu is the only TTS backend —
-// Piper + MOSS-TTS-Nano were removed.
+// the book's default voice.
 //
-// GET  /api/tts/models      — list available built-in voices
-// POST /api/tts/speak      — { text, chapterId?, character?, speed?, language?, callIdx? } → audio/wav
+// 2026-07-12: VieNeu was the only TTS backend (Piper + MOSS-TTS-Nano removed).
+// 2026-08-30: routed through the engine registry — F5-TTS added as a second
+// backend. See lib/tts/provider.ts for the contract.
+//
+// GET  /api/tts/models      — list available engines (legacy compat shape)
+// POST /api/tts/speak       — { text, chapterId?, character?, speed?, language?, callIdx? } → audio/wav
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveVoiceForCharacter } from '@/lib/ai/voice-selector';
 import { getVoice } from '@/lib/db/voices';
 import { isBuiltinVieNeuVoice } from '@/lib/tts/vieneu-voices';
+import {
+  getActiveTTSEngine,
+  isBuiltinVoiceForEngine,
+  listEngines,
+  sanitizeTextForEngine,
+  buildPayloadForEngine,
+} from '@/lib/tts/provider';
 
-const VIENEU_BASE_URL = (
-  process.env.VIENEU_BASE_URL ??
-  process.env.UNIFIED_TTS_URL ??   // back-compat alias
-  process.env.TTS_SERVICE_URL ??
-  'http://127.0.0.1:5020'
-).replace(/\/$/, '');
-
-/** GET /api/tts/models — return the synthetic VieNeu backend list.
- *  The old `/backends` aggregator endpoint was retired when the unified
- *  router was removed on 2026-07-05. We always report a single ready
- *  VieNeu backend so existing UI / e2e consumers don't have to special-case
- *  this.
- */
+/** GET /api/tts/models — return the engine list. The legacy `/backends`
+ *  aggregator endpoint was retired when the unified router was removed on
+ *  2026-07-05; this endpoint now reports every engine registered in
+ *  lib/tts/provider.ts so a UI toggle can render the full set. We probe
+ *  each base URL with a 1s timeout so `ready` is honest — a stale URL
+ *  doesn't pretend to be available. */
 export async function GET(): Promise<NextResponse> {
+  const engines = listEngines();
+  const probed = await Promise.all(
+    engines.map(async (e) => {
+      try {
+        const r = await fetch(`${e.baseUrl}/health`, {
+          signal: AbortSignal.timeout(1500),
+        });
+        return { id: e.id, name: e.label, ready: r.ok, languages: ['vi'] };
+      } catch {
+        return { id: e.id, name: e.label, ready: false, languages: ['vi'] };
+      }
+    }),
+  );
   return NextResponse.json({
-    backends: [{ id: 'vieneu', name: 'VieNeu', ready: true, languages: ['vi'] }],
-    default_backend: 'vieneu',
+    backends: probed,
+    default_backend: probed.find((b) => b.ready)?.id ?? probed[0]?.id ?? 'vieneu',
   });
 }
 
@@ -135,33 +151,55 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'text is too long (maximum 10000 characters)' }, { status: 413 });
   }
 
+  // Resolve the active TTS engine once. Used for base URL, text
+  // sanitization, payload shape, and the response header tag.
+  const engine = await getActiveTTSEngine();
+
   // Resolve which voice to use, with this priority:
   //   1. If `body.character` is provided → per-character lookup
   //      (`resolveVoiceForCharacter` does alias-aware matching, common-
   //      pool routing, deterministic jitter for crowd voices).
   //   2. Else if `body.voice` is provided → user UI choice for narration
-  //      (the Read-aloud panel's "Default voice" selector). This is what
-  //      was silently broken before: the old code skipped this branch
-  //      whenever a `bookId` was set, because resolveVoiceForCharacter
-  //      always returned the book's isDefault voice for narration and
-  //      shadowed body.voice. Now body.voice wins for narration.
+  //      (the Read-aloud panel's "Default voice" selector).
   //   3. Else if `body.bookId` is set → book default (legacy fallback).
-  //   4. Undefined → unified server picks its own default.
+  //   4. Undefined → backend picks its own default.
   let voiceName: string | undefined;
   let referencePath: string | undefined;
   let voiceSpeed = 1.0;
   let voiceEmotion = 'neutral';
+  // Backend-aware membership check, with a fallback to the static
+  // VieNeu catalog so a stale builtin name from before the F5 switch
+  // doesn't 400 here.
+  const isBuiltin = (n: string) =>
+    isBuiltinVoiceForEngine(engine, n) || isBuiltinVieNeuVoice(n);
   if (body.character) {
     const v = await resolveVoiceForCharacter(body.bookId ?? '', body.character, body.callIdx ?? 0);
-    if (v?.builtinName) voiceName = v.builtinName;
-    if (v?.refAudioPath) referencePath = v.refAudioPath;
-    voiceSpeed = v?.speed ?? 1.0;
-    voiceEmotion = v?.emotion ?? 'neutral';
-  } else if (body.voice) {
+    if (v) {
+      // Character has a stored voice assignment — use it.
+      if (v.builtinName) voiceName = v.builtinName;
+      if (v.refAudioPath) referencePath = v.refAudioPath;
+      voiceSpeed = v.speed ?? 1.0;
+      voiceEmotion = v.emotion ?? 'neutral';
+    } else if (!body.voice) {
+      // No character row AND no explicit UI voice — bail with a clear 400
+      // rather than silently POSTing an empty payload (which the F5 server
+      // then rejects as "either `voice` or `ref_audio`+`ref_text` is
+      // required" → 502). The client treats 400 as a recoverable user
+      // error and shows a helpful message; 502 looks like a server fault.
+      return NextResponse.json(
+        { error: 'No voice assigned for this character and no default voice provided. Set a Default voice in the Read aloud panel, or run character detection to assign voices.' },
+        { status: 400 },
+      );
+    }
+    // else: character row missing BUT the client also passed an explicit
+    // `voice` — fall through to the body.voice branch below instead of
+    // throwing the request away.
+  }
+  if (!voiceName && !referencePath && body.voice) {
     if (UUID_RE.test(body.voice)) {
       const voice = await getVoice(body.voice);
       if (voice && (!body.bookId || voice.bookId === body.bookId)) {
-        const builtin = voice.builtinName ?? (isBuiltinVieNeuVoice(voice.name) ? voice.name : null);
+        const builtin = voice.builtinName ?? (isBuiltin(voice.name) ? voice.name : null);
         if (builtin) voiceName = builtin;
         else if (voice.refAudioPath) referencePath = voice.refAudioPath;
         voiceSpeed = voice.defaultSpeed ?? voiceSpeed;
@@ -170,10 +208,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     } else {
       voiceName = body.voice;
     }
-  } else if (body.bookId) {
-    // Legacy fallback: when neither character nor an explicit voice is
-    // given, defer to the book's stored default. Preserves pre-fix
-    // behaviour for any caller that doesn't set `voice` (e.g. scripts).
+  } else if (!voiceName && !referencePath && body.bookId) {
     const v = await resolveVoiceForCharacter(body.bookId, undefined, body.callIdx ?? 0);
     if (v?.builtinName) voiceName = v.builtinName;
     if (v?.refAudioPath) referencePath = v.refAudioPath;
@@ -181,26 +216,41 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     voiceEmotion = v?.emotion ?? 'neutral';
   }
 
-  // Build unified-server payload. Caller-provided speed overrides jitter.
-  const speed = body.speed ?? voiceSpeed;
-  const expressiveness = clampNumber(body.expressiveness ?? body.noiseScale, 0.667, 0.2, 1.0);
+  // Build the engine-specific payload. `buildPayloadForEngine` owns the
+  // difference between VieNeu's `reference_path` (legacy back-compat)
+  // and F5's `ref_audio`/`ref_text` — and knows which keys each engine
+  // expects, so adding a third backend only touches provider.ts.
+  const speed = Math.min(3.0, Math.max(0.5, body.speed ?? voiceSpeed));
   const emotion = body.emotion ?? voiceEmotion;
-  const payload: Record<string, unknown> = {
-    text: applyEmotionMarker(text, emotion),
-    speed: Math.min(3.0, Math.max(0.5, speed)),
+  // Apply the inline emotion marker ONLY for engines that understand it.
+  // F5 would otherwise read "[cười]" aloud as Vietnamese words. The
+  // engine's `sanitizeText` strips anything it can't render.
+  const marked = applyEmotionMarker(text, emotion);
+  const cleanText = sanitizeTextForEngine(engine, marked);
+  const payload = buildPayloadForEngine(engine, {
+    text: cleanText,
+    voice: voiceName ?? null,
+    refAudio: referencePath ?? null,
+    refText: null,
+    speed,
     language: body.language ?? 'vi',
-    noise_scale: expressiveness,
-    noise_w: clampNumber(body.noiseW ?? expressiveness, 0.8, 0.2, 1.0),
-  };
-  if (voiceName) payload['voice'] = voiceName;
-  if (referencePath) payload['reference_path'] = referencePath;
+    emotion,
+  });
+  // VieNeu-only noise params — left out for engines that don't read them.
+  // Adding noise_scale / noise_w to the F5 payload would be a no-op, but
+  // the registry shape stays clean.
+  if (engine.headerTag === 'vieneu') {
+    const expressiveness = clampNumber(body.expressiveness ?? body.noiseScale, 0.667, 0.2, 1.0);
+    payload['noise_scale'] = expressiveness;
+    payload['noise_w'] = clampNumber(body.noiseW ?? expressiveness, 0.8, 0.2, 1.0);
+  }
 
   try {
     let r: Response;
     // Build body as UTF-8 bytes to be safe with Vietnamese diacritics
     const bodyStr = JSON.stringify(payload);
     const bodyBytes = new TextEncoder().encode(bodyStr);
-    r = await fetch(`${VIENEU_BASE_URL}/synthesize`, {
+    r = await fetch(`${engine.baseUrl()}/synthesize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json; charset=utf-8' },
       body: bodyBytes,
@@ -217,13 +267,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // Sanitize the voice name for headers (HTTP requires Latin-1).
     // We percent-encode UTF-8 bytes so the client can decode back.
     const voiceHeader = voiceName ? encodeURIComponent(voiceName) : 'default';
+    // BUGFIX 2026-08-30: the server sets `X-TTS-Engine` (not `X-TTS-Backend`).
+    // The old code read the wrong header and always reported `unknown`.
+    // The client expects `X-TTS-Backend`, so we rebrand here at the proxy.
+    const engineTag = r.headers.get('X-TTS-Engine') ?? r.headers.get('X-TTS-Backend') ?? engine.headerTag;
     return new NextResponse(audio, {
       headers: {
         'Content-Type': 'audio/wav',
         'Content-Length': String(audio.byteLength),
         'Cache-Control': 'no-cache',
         'X-Voice-Used': voiceHeader,
-        'X-TTS-Backend': r.headers.get('X-TTS-Backend') ?? 'unknown',
+        'X-TTS-Backend': engineTag,
       },
     });
   } catch (err) {

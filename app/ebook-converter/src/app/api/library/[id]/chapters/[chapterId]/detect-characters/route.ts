@@ -168,8 +168,8 @@ export async function POST(
   let model = '';
   let modelResolution: 'empty' | 'default' | 'env-fallback' | 'validated' | 'unknown-replaced' = 'empty';
   try {
-    const { getSettings } = await import('@/lib/db/settings');
-    const s = await getSettings();
+    const { getEffectiveSettings } = await import('@/lib/db/settings');
+    const s = await getEffectiveSettings();
     const { resolveOmlxModel } = await import('@/lib/ai/omlx-models');
     const resolved = await resolveOmlxModel(s.aiModel);
     model = resolved.model;

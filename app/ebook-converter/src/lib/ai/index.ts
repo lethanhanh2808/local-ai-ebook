@@ -15,9 +15,20 @@
 // The provider is read from the Settings table on every call so changes
 // take effect immediately without restarting the server.
 
-import { getAiProviderDefaults, getSettings } from '@/lib/db/settings';
+import { getAiProviderDefaults, getEffectiveSettings } from '@/lib/db/settings';
 import type { Settings } from '@prisma/client';
 import { chat as omlxChat, chatWithStats as omlxChatWithStats } from './omlx-client';
+
+async function withInsecureTls<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    else process.env.NODE_TLS_REJECT_UNAUTHORIZED = previous;
+  }
+}
 
 export interface ChatMessage { role: 'system' | 'user' | 'assistant'; content: string; }
 export interface ChatOptions {
@@ -146,7 +157,7 @@ async function rawChat(opts: ChatOptions, s: Settings): Promise<ChatResult> {
 
   try {
     if (process.env.AI_DEBUG === '1') process.stderr.write(`[ai] model=${body.model} url=${baseUrl}/chat/completions\n`);
-    const res = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
+    const requestInit: RequestInit = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -154,7 +165,10 @@ async function rawChat(opts: ChatOptions, s: Settings): Promise<ChatResult> {
       },
       body: JSON.stringify(body),
       signal: controller.signal,
-    });
+    };
+    const insecureTls = Boolean(s.aiAllowInsecureTls);
+    const fetchCall = async () => fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, requestInit);
+    const res = insecureTls ? await withInsecureTls(fetchCall) : await fetchCall();
     if (!res.ok) {
       const text = await res.text();
       // Try to parse provider-specific error formats and extract a clean message.
@@ -199,13 +213,13 @@ async function rawChat(opts: ChatOptions, s: Settings): Promise<ChatResult> {
 
 /** Public API — chat() reads settings and routes to the right backend. */
 export async function chat(opts: ChatOptions): Promise<string> {
-  const s = await getSettings();
+  const s = await getEffectiveSettings();
   return (await rawChat(opts, s)).text;
 }
 
 /** Like chat() but also returns performance stats (tokens, duration, model). */
 export async function chatWithStats(opts: ChatOptions): Promise<ChatResult> {
-  const s = await getSettings();
+  const s = await getEffectiveSettings();
   return rawChat(opts, s);
 }
 

@@ -15,7 +15,7 @@ import {
   Mic, Languages, Wand2, ShieldOff, ExternalLink,
   Cloud, Server, Wrench, Trash2, Image as ImageIcon, Zap, Activity, Smartphone,
   Plus, Database, Bookmark, Palette, Monitor, Sun, Moon, BookOpen,
-  Brain, Download,
+  Brain, Download, Users,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -30,6 +30,7 @@ import { CalibrePanel } from '@/components/status/CalibrePanel';
 import { ErrorState } from '@/components/layout/ErrorState';
 import { useToast } from '@/components/ui/toast';
 import { useTheme, type ThemeMode } from '@/components/theme/ThemeProvider';
+import { TTS_PROVIDERS } from '@/lib/settings/tts-providers';
 import Link from 'next/link';
 
 interface Settings {
@@ -37,6 +38,7 @@ interface Settings {
   aiProvider: string;
   aiApiKey: string | null;
   aiBaseUrl: string | null;
+  aiAllowInsecureTls: boolean;
   aiModel: string;
   aiMaxTokens: number;
   aiTemperature: number;
@@ -53,6 +55,7 @@ interface Settings {
   theme: string;
   updatedAt: string;
   aiApiKeyMasked: string | null;
+  scope?: 'app' | 'session' | 'user';
   // Image generation
   imageProvider: string;
   imageApiKey: string | null;
@@ -81,20 +84,20 @@ const AI_PROVIDERS = [
   { id: 'omlx-local',    label: 'OMLX (local)',     desc: 'Local Qwen/DeepSeek — không cần API key, chạy trên máy. Để nhanh chọn model 4-bit (Ornith-9B-4bit hoặc Qwen3.5-9B-4bit).', Icon: Server, needsKey: false, defaultModel: 'Ornith-1.0-9B-mlx-4Bit', defaultUrl: '', defaultMaxTokens: 16384 },
   { id: 'minimax-cloud', label: 'MiniMax Cloud',    desc: 'MiniMax Text-01 / Image-01 — cloud nhanh, cần API key',     Icon: Cloud,   needsKey: true,  defaultModel: 'MiniMax-Text-01', defaultUrl: 'https://api.minimax.io/v1', defaultMaxTokens: 16384 },
   { id: 'openai',        label: 'OpenAI',           desc: 'GPT-4o / GPT-4 / o1 — chất lượng cao, cần OpenAI key',         Icon: Sparkles, needsKey: true,  defaultModel: 'gpt-4o-mini',  defaultUrl: 'https://api.openai.com/v1', defaultMaxTokens: 16384 },
-  { id: 'custom',        label: 'Custom (OpenAI-compatible)', desc: 'Together / Anyscale / llama.cpp / bất kỳ endpoint nào', Icon: Wrench,  needsKey: true,  defaultModel: '',             defaultUrl: '',                   defaultMaxTokens: 8192  },
+  { id: 'custom',        label: 'Custom (OpenAI-compatible)', desc: 'Together / Anyscale / llama.cpp / bất kỳ endpoint nào', Icon: Wrench,  needsKey: true,  defaultModel: 'default',       defaultUrl: 'https://api.example.com/v1', defaultMaxTokens: 8192  },
 ];
 
 // Keep the GUI and DB registry aligned with the canonical provider defaults.
 // These values are intentionally mirrored from the backend default registry so
 // the Settings page stays consistent with the single source of truth in
 // src/lib/db/settings.ts without hard-coded drift.
-
-// 2026-07-05: only Vietnamese Voice runs locally — Piper + MOSS-Nano removed.
-// Kept as a single-entry list so the existing UI / `ttsProvider` setting
-// keep working without a schema migration.
-const TTS_PROVIDERS = [
-  { id: 'vieneu',   label: 'Vietnamese Voice', desc: 'Vietnamese-native, 10 giọng built-in, voice cloning' },
-];
+//
+// TTS_PROVIDERS is imported from src/lib/settings/tts-providers.ts (single
+// source of truth) so adding an engine only requires editing the registry
+// there — this page renders whatever that array contains.
+// 2026-08-30: split out of src/lib/db/settings.ts because that file transitively
+// pulls in Prisma + node-fetch + node: scheme builtins, which broke the
+// client build (this page is `'use client'`).
 
 export default function SettingsPage() {
   const toast = useToast();
@@ -107,6 +110,7 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState('ai');
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [showKey, setShowKey] = useState(false);
+  const [settingsScope, setSettingsScope] = useState<'app' | 'session' | 'user'>('app');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; ms?: number; response?: string; error?: string } | null>(null);
   // Available models fetched from the provider
@@ -114,6 +118,13 @@ export default function SettingsPage() {
   const [imageModels, setImageModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState<'text' | 'image' | null>(null);
   const [modelsError, setModelsError] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<{ username: string; name: string; role: string } | null>(null);
+  const [profileForm, setProfileForm] = useState({ name: '', email: '', password: '' });
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [auditLogs, setAuditLogs] = useState<Array<{ id: string; action: string; actor?: { username: string; name: string | null; role: string } | null; targetUser?: { username: string; name: string | null; role: string } | null; details: string | null; createdAt: string }>>([]);
+  const [userRows, setUserRows] = useState<Array<{ id: string; username: string; name: string; email: string | null; role: string; createdAt: string }>>([]);
+  const [userForm, setUserForm] = useState({ username: '', email: '', password: '', role: 'USER' as 'USER' | 'ADMIN' });
+  const [userSubmitting, setUserSubmitting] = useState(false);
 
   const fetchModels = useCallback(async (kind: 'text' | 'image') => {
     setModelsLoading(kind);
@@ -138,6 +149,48 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const fetchCurrentUser = useCallback(async () => {
+    try {
+      const res = await fetch('/api/auth/me', { cache: 'no-store' });
+      if (!res.ok) {
+        setCurrentUser(null);
+        return;
+      }
+      const data = await res.json().catch(() => null);
+      if (data?.ok && data.user) setCurrentUser(data.user);
+    } catch {
+      setCurrentUser(null);
+    }
+  }, []);
+
+  const fetchUsers = useCallback(async () => {
+    try {
+      const res = await fetch('/api/users', { cache: 'no-store' });
+      if (!res.ok) {
+        setUserRows([]);
+        return;
+      }
+      const data = await res.json().catch(() => ({ users: [] }));
+      setUserRows(Array.isArray(data.users) ? data.users : []);
+    } catch {
+      setUserRows([]);
+    }
+  }, []);
+
+  const fetchAuditLogs = useCallback(async () => {
+    try {
+      const res = await fetch('/api/admin/audit-logs', { cache: 'no-store' });
+      if (!res.ok) {
+        setAuditLogs([]);
+        return;
+      }
+      const data = await res.json().catch(() => ({ logs: [] }));
+      setAuditLogs(Array.isArray(data.logs) ? data.logs : []);
+    } catch {
+      setAuditLogs([]);
+    }
+  }, []);
+
   const fetchSettings = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
@@ -145,7 +198,8 @@ export default function SettingsPage() {
       const res = await fetch('/api/settings');
       const s = await res.json().catch(() => ({})) as Settings & { error?: string };
       if (!res.ok) throw new Error(s.error ?? `HTTP ${res.status}`);
-      setSettings(s);
+      setSettings({ ...s, scope: (s.scope as 'app' | 'session' | 'user') ?? 'app' });
+      setSettingsScope((s.scope as 'app' | 'session' | 'user') ?? 'app');
       // BUGFIX 2026-07-11: loading /settings was silently overriding the
       // user's live theme choice. The provider paints the chrome based on
       // localStorage; the server field was being applied UNCONDITIONALLY on
@@ -190,7 +244,7 @@ export default function SettingsPage() {
     }
   }, [setTheme]);
 
-  useEffect(() => { void fetchSettings(); }, [fetchSettings]);
+  useEffect(() => { void fetchSettings(); void fetchCurrentUser(); void fetchUsers(); void fetchAuditLogs(); }, [fetchSettings, fetchCurrentUser, fetchUsers, fetchAuditLogs]);
 
   useEffect(() => {
     const syncHash = () => {
@@ -219,8 +273,10 @@ export default function SettingsPage() {
       const apiKeyInput = settings.aiApiKey ?? '';
       const hasSavedAiKey = !!settings.aiApiKeyMasked;
       const body: Record<string, unknown> = {
+        scope: settingsScope,
         aiProvider: settings.aiProvider,
         aiBaseUrl: settings.aiBaseUrl,
+        aiAllowInsecureTls: settings.aiAllowInsecureTls,
         aiModel: settings.aiModel,
         aiMaxTokens: settings.aiMaxTokens,
         aiTemperature: settings.aiTemperature,
@@ -270,7 +326,7 @@ export default function SettingsPage() {
       });
       const updated = await res.json().catch(() => ({})) as Settings & { error?: string };
       if (!res.ok) throw new Error(updated.error ?? `Không thể lưu (HTTP ${res.status})`);
-      setSettings(updated);
+      setSettings({ ...updated, scope: settingsScope });
       setSavedAt(new Date());
       setDirty(false);
       toast.success('Đã lưu cài đặt');
@@ -350,6 +406,66 @@ export default function SettingsPage() {
     setTheme(next);
   };
 
+  const createUser = async () => {
+    if (!userForm.username.trim()) {
+      toast.error('Username is required');
+      return;
+    }
+    setUserSubmitting(true);
+    try {
+      const res = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: userForm.username.trim(),
+          email: userForm.email.trim(),
+          password: userForm.password || 'changeme123',
+          role: userForm.role,
+        }),
+      });
+      const data = await res.json().catch(() => ({ ok: false, error: 'Failed to create user.' }));
+      if (!res.ok || !data.ok) throw new Error(data.error ?? 'Failed to create user.');
+      setUserForm({ username: '', email: '', password: '', role: 'USER' });
+      await fetchUsers();
+      await fetchAuditLogs();
+      toast.success('User created');
+    } catch (e) {
+      toast.error('Could not create user', { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setUserSubmitting(false);
+    }
+  };
+
+  const saveProfile = async () => {
+    setProfileSaving(true);
+    try {
+      const payload: Record<string, string> = {};
+      if (profileForm.name.trim()) payload.name = profileForm.name.trim();
+      if (profileForm.email.trim()) payload.email = profileForm.email.trim();
+      if (profileForm.password.trim()) payload.password = profileForm.password.trim();
+      if (Object.keys(payload).length === 0) {
+        toast.error('Enter at least one profile change');
+        return;
+      }
+
+      const res = await fetch('/api/auth/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({ ok: false, error: 'Profile update failed.' }));
+      if (!res.ok || !data.ok) throw new Error(data.error ?? 'Profile update failed.');
+      setProfileForm({ name: '', email: '', password: '' });
+      await fetchCurrentUser();
+      await fetchAuditLogs();
+      toast.success('Profile updated');
+    } catch (e) {
+      toast.error('Could not update profile', { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
   if (loading && !settings) {
     return (
       <div className="mx-auto max-w-7xl px-4 py-8">
@@ -391,10 +507,22 @@ export default function SettingsPage() {
             <Button variant="outline" size="sm" onClick={() => void fetchSettings()} title="Tải lại" aria-label="Tải lại cài đặt">
               <RefreshCw className="h-3.5 w-3.5" />
             </Button>
-            <Button onClick={save} disabled={saving || !dirty} size="sm">
-              {saving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Save className="h-3.5 w-3.5 mr-1.5" />}
-              Lưu
-            </Button>
+            <div className="flex items-center gap-2">
+              <Select value={settingsScope} onValueChange={(v) => setSettingsScope(v as 'app' | 'session' | 'user')}>
+                <SelectTrigger className="h-9 w-[180px] text-xs">
+                  <SelectValue placeholder="Scope" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="app">App default</SelectItem>
+                  <SelectItem value="session">This session</SelectItem>
+                  <SelectItem value="user">This user profile</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button onClick={save} disabled={saving || !dirty} size="sm">
+                {saving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Save className="h-3.5 w-3.5 mr-1.5" />}
+                Lưu
+              </Button>
+            </div>
           </>
         }
       />
@@ -580,6 +708,21 @@ export default function SettingsPage() {
                     placeholder="https://api.example.com/v1"
                     className="font-mono"
                   />
+                  {settings.aiProvider === 'custom' && (
+                    <div className="rounded-md border border-border bg-muted/20 p-2.5">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-medium">Disable TLS certificate verification</p>
+                          <p className="text-[10px] text-muted-foreground">Use for self-signed or private CA endpoints like gateway/bridge services.</p>
+                        </div>
+                        <Switch
+                          checked={!!settings.aiAllowInsecureTls}
+                          onCheckedChange={(v) => update('aiAllowInsecureTls', v)}
+                          aria-label="Disable TLS certificate verification for AI provider"
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1043,6 +1186,155 @@ export default function SettingsPage() {
           <CalibrePanel />
         </TabsContent>
       </Tabs>
+
+      <div className="space-y-4 pt-2">
+        <div className="flex items-center gap-2 border-b border-border pb-2">
+          <Users className="h-4 w-4 text-primary" />
+          <h2 className="text-sm font-semibold">User & access settings</h2>
+        </div>
+
+        <Card className="p-5 space-y-4">
+          <div>
+            <h2 className="text-sm font-semibold flex items-center gap-2">
+              <Users className="h-4 w-4 text-primary" /> My profile
+            </h2>
+            <p className="mt-1 text-[11px] text-muted-foreground">Update your visible name, email, and password for local app access.</p>
+          </div>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium">Display name</label>
+              <Input value={profileForm.name} onChange={(e) => setProfileForm((p) => ({ ...p, name: e.target.value }))} placeholder={currentUser?.name || 'Your name'} />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium">Email</label>
+              <Input value={profileForm.email} onChange={(e) => setProfileForm((p) => ({ ...p, email: e.target.value }))} placeholder="you@example.com" />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium">New password</label>
+              <Input type="password" value={profileForm.password} onChange={(e) => setProfileForm((p) => ({ ...p, password: e.target.value }))} placeholder="Leave blank to keep current" />
+            </div>
+          </div>
+          <div className="flex justify-end">
+            <Button type="button" onClick={() => void saveProfile()} disabled={profileSaving}>
+              {profileSaving ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-2 h-3.5 w-3.5" />}
+              {profileSaving ? 'Saving…' : 'Save profile'}
+            </Button>
+          </div>
+        </Card>
+      </div>
+
+      <Card className="p-5 space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold flex items-center gap-2">
+              <Users className="h-4 w-4 text-primary" /> Access & user management
+            </h2>
+            <p className="mt-1 text-[11px] text-muted-foreground">Admin-only user CRUD and role assignment for local app access.</p>
+          </div>
+          {currentUser?.role === 'ADMIN' && (
+            <Button type="button" variant="outline" size="sm" onClick={() => { void fetchUsers(); void fetchAuditLogs(); }}>
+              <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> Refresh
+            </Button>
+          )}
+        </div>
+
+        {currentUser?.role !== 'ADMIN' ? (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-300">
+            Only the admin role can manage users and update app settings.
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+              <div className="space-y-1.5 md:col-span-1">
+                <label className="text-xs font-medium">Username</label>
+                <Input value={userForm.username} onChange={(e) => setUserForm((p) => ({ ...p, username: e.target.value }))} placeholder="new-user" />
+              </div>
+              <div className="space-y-1.5 md:col-span-1">
+                <label className="text-xs font-medium">Email</label>
+                <Input value={userForm.email} onChange={(e) => setUserForm((p) => ({ ...p, email: e.target.value }))} placeholder="user@example.com" />
+              </div>
+              <div className="space-y-1.5 md:col-span-1">
+                <label className="text-xs font-medium">Password</label>
+                <Input type="password" value={userForm.password} onChange={(e) => setUserForm((p) => ({ ...p, password: e.target.value }))} placeholder="changeme123" />
+              </div>
+              <div className="space-y-1.5 md:col-span-1">
+                <label className="text-xs font-medium">Role</label>
+                <Select value={userForm.role} onValueChange={(v) => setUserForm((p) => ({ ...p, role: v as 'USER' | 'ADMIN' }))}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="USER">USER</SelectItem>
+                    <SelectItem value="ADMIN">ADMIN</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <Button type="button" onClick={() => void createUser()} disabled={userSubmitting}>
+                {userSubmitting ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Plus className="mr-2 h-3.5 w-3.5" />}
+                {userSubmitting ? 'Creating…' : 'Create user'}
+              </Button>
+            </div>
+
+            <div className="space-y-2">
+              {userRows.length === 0 ? (
+                <div className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">No users found.</div>
+              ) : (
+                userRows.map((user) => (
+                  <div key={user.id} className="flex flex-col gap-2 rounded-lg border border-border bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold">{user.name || user.username}</span>
+                        <span className={cn('rounded-full px-2 py-0.5 text-[10px] font-medium uppercase', user.role === 'ADMIN' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground')}>
+                          {user.role}
+                        </span>
+                      </div>
+                      <div className="mt-1 text-[11px] text-muted-foreground">
+                        {user.username} {user.email ? `• ${user.email}` : ''}
+                      </div>
+                    </div>
+                    <div className="text-[10px] text-muted-foreground">Created {new Date(user.createdAt).toLocaleDateString()}</div>
+                  </div>
+                ))
+              )}
+            </div>
+          </>
+        )}
+      </Card>
+
+      <Card className="p-5 space-y-4">
+        <div>
+          <h2 className="text-sm font-semibold flex items-center gap-2">
+            <Database className="h-4 w-4 text-primary" /> Admin audit log
+          </h2>
+          <p className="mt-1 text-[11px] text-muted-foreground">Recent local admin actions, user creation, setting changes, and profile updates.</p>
+        </div>
+
+        {currentUser?.role !== 'ADMIN' ? (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-300">
+            Audit logs are visible only to administrators.
+          </div>
+        ) : auditLogs.length === 0 ? (
+          <div className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">No audit events yet.</div>
+        ) : (
+          <div className="space-y-2">
+            {auditLogs.map((entry) => (
+              <div key={entry.id} className="rounded-lg border border-border bg-muted/20 p-3 text-xs">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-medium uppercase tracking-wider text-primary">{entry.action}</span>
+                  <span className="text-muted-foreground">{new Date(entry.createdAt).toLocaleString()}</span>
+                </div>
+                <div className="mt-1 text-muted-foreground">
+                  {entry.actor ? `${entry.actor.name || entry.actor.username} (${entry.actor.role})` : 'system'}
+                  {entry.targetUser ? ` → ${entry.targetUser.name || entry.targetUser.username} (${entry.targetUser.role})` : ''}
+                </div>
+                {entry.details && <div className="mt-1">{entry.details}</div>}
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
 
       <footer className="text-center text-[10px] text-muted-foreground pt-4 border-t border-border">
         Cài đặt lưu trong database. Áp dụng cho tất cả AI requests và conversion jobs.
