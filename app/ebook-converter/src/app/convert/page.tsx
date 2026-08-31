@@ -157,8 +157,26 @@ export default function ConvertPage() {
   };
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 space-y-8">
-      {/* ── Worker status banner (only shown when offline) ─────────────── */}
+    <div className="mx-auto max-w-7xl px-4 py-8 space-y-6">
+      {/* ── Page header ─────────────────────────────────────────────────── */}
+      <PageHeader
+        eyebrow="Convert · Repair · Optimize"
+        title="Chuyển đổi & sửa chữa ebook"
+        description="Kéo thả file EPUB, HTML hoặc TXT. AI tự động phát hiện lỗi, sửa chữa cấu trúc, làm sạch watermark và xuất EPUB3 chuẩn cho máy đọc sách."
+        icon={<Sparkles className="h-4 w-4" />}
+        actions={
+          <div className="flex items-center gap-2">
+            <Link href="/settings" className={buttonClasses({ variant: 'outline', size: 'sm' })}>
+              <Settings className="h-3.5 w-3.5 mr-1.5" /> Cài đặt AI
+            </Link>
+            <a href="#queue" className={buttonClasses({ variant: 'ghost', size: 'sm' })}>
+              <ListChecks className="h-3.5 w-3.5 mr-1.5" /> Hàng đợi ({stats.total})
+            </a>
+          </div>
+        }
+      />
+
+      {/* ── Worker status banner (offline) ──────────────────────────────── */}
       {workerStatus && !workerStatus.online && (
         <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 flex flex-wrap items-start gap-3">
           <Server className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
@@ -183,7 +201,6 @@ export default function ConvertPage() {
                 const data = await r.json();
                 if (data.ok) {
                   setWorkerActionMsg({ kind: 'ok', text: data.message ?? `Worker đã khởi động (pid=${data.pid})` });
-                  // Poll status until online (worker takes ~1s to ping Redis)
                   for (let i = 0; i < 8; i++) {
                     await new Promise((r) => setTimeout(r, 800));
                     await fetchWorkerStatus();
@@ -224,7 +241,7 @@ export default function ConvertPage() {
         </div>
       )}
 
-      {/* ── Worker status (compact, when online) — shows counts + stop btn */}
+      {/* ── Worker status (compact, when online) — shows counts + stop btn ── */}
       {workerStatus?.online && (
         <div className="flex items-center gap-2 text-[10px] text-muted-foreground px-1">
           <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
@@ -258,174 +275,129 @@ export default function ConvertPage() {
         </div>
       )}
 
-      {/* ── Hero ──────────────────────────────────────────────────────────── */}
-      <section className="relative overflow-hidden rounded-2xl border border-border bg-gradient-to-br from-primary/8 via-primary/3 to-transparent p-6 sm:p-8">
-        <div className="relative z-10 flex flex-col gap-3">
-          <div className="flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-primary" />
-            <span className="text-[10px] font-bold uppercase tracking-widest text-primary">
-              Convert · Repair · Optimize
-            </span>
-          </div>
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">
-            Chuyển đổi & sửa chữa ebook
-          </h1>
-          <p className="text-sm text-muted-foreground max-w-2xl">
-            Kéo thả file EPUB, HTML hoặc TXT vào đây. AI sẽ tự động phát hiện lỗi,
-            sửa chữa cấu trúc, làm sạch watermark, và xuất ra EPUB3 chuẩn cho máy đọc sách.
-          </p>
-          <div className="flex flex-wrap gap-2 pt-1">
-            <Link href="/settings" className={buttonClasses({ variant: 'outline', size: 'sm' })}>
-              <Settings className="h-3.5 w-3.5 mr-1.5" /> Cài đặt AI
-            </Link>
-            <a href="#queue" className={buttonClasses({ variant: 'ghost', size: 'sm' })}>
-              <ListChecks className="h-3.5 w-3.5 mr-1.5" /> Xem hàng đợi ({stats.total})
-              <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
-            </a>
-          </div>
-        </div>
-        <div className="absolute -right-12 -top-12 h-48 w-48 rounded-full bg-primary/10 blur-3xl pointer-events-none" />
-        <div className="absolute -right-24 -bottom-16 h-56 w-56 rounded-full bg-primary/5 blur-3xl pointer-events-none" />
-      </section>
+      {/* ── Main two-column layout ───────────────────────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1.4fr_1fr] gap-6 items-start">
+        {/* Left: upload + AI options + queue */}
+        <div className="space-y-6">
+          <Card className="rounded-2xl border border-border p-5 sm:p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Upload className="h-4 w-4" />
+              </div>
+              <div>
+                <h2 className="text-sm font-semibold">Upload file</h2>
+                <p className="text-[11px] text-muted-foreground">5 giai đoạn: validate → repair → convert → embed → done</p>
+              </div>
+            </div>
+            <UploadZone onJobCreated={onJobCreated} />
+          </Card>
 
-      {/* ── Upload zone ───────────────────────────────────────────────────── */}
-      <section>
-        <PageHeader
-          eyebrow="Bước 1"
-          title="Upload file"
-          description="File sẽ được xử lý qua 5 giai đoạn: validate → repair → convert → embed → done"
-          icon={<Upload className="h-4 w-4" />}
-        />
-        <UploadZone onJobCreated={onJobCreated} />
-      </section>
-
-      {/* ── Stats ─────────────────────────────────────────────────────────── */}
-      <section>
-        <PageHeader
-          eyebrow="Tổng quan"
-          title="Thống kê chuyển đổi"
-          icon={<Zap className="h-4 w-4" />}
-          actions={
-            <Button size="sm" variant="ghost" onClick={fetchJobs} aria-label="Refresh conversion statistics">
-              <Loader2 className={cn(loading && 'animate-spin', 'h-3.5 w-3.5')} />
-            </Button>
-          }
-        />
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <StatCard
-            icon={<FileText className="h-5 w-5" />}
-            label="Tổng file"
-            value={loading ? '—' : stats.total}
-            sub="Đã xử lý"
-            tone="primary"
-          />
-          <StatCard
-            icon={<Loader2 className="h-5 w-5" />}
-            label="Đang xử lý"
-            value={loading ? '—' : stats.active}
-            sub="Đang chạy"
-            tone="warning"
-          />
-          <StatCard
-            icon={<CheckCircle2 className="h-5 w-5" />}
-            label="Hoàn thành"
-            value={loading ? '—' : stats.completed}
-            sub={stats.total ? `${Math.round(stats.completed / stats.total * 100)}% thành công` : 'Chưa có'}
-            tone="success"
-          />
-          <StatCard
-            icon={<AlertTriangle className="h-5 w-5" />}
-            label="Lỗi"
-            value={loading ? '—' : stats.failed}
-            sub="Cần xem lại"
-            tone="danger"
-          />
-        </div>
-      </section>
-
-      {/* ── Queue ─────────────────────────────────────────────────────────── */}
-      <section id="queue">
-        <PageHeader
-          eyebrow="Bước 2"
-          title="Hàng đợi chuyển đổi"
-          description="Các file đang được AI xử lý. Click vào job để xem chi tiết / download kết quả."
-          icon={<ListChecks className="h-4 w-4" />}
-          actions={
-            <Button size="sm" variant="ghost" onClick={() => setRefreshKey((k) => k + 1)} aria-label="Refresh conversion queue">
-              <Loader2 className={cn(loading && 'animate-spin', 'h-3.5 w-3.5')} />
-            </Button>
-          }
-        />
-        <JobList refreshTrigger={refreshKey} />
-      </section>
-
-      {/* ── What gets done + supported formats ─────────────────────────────── */}
-      <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* AI pipeline */}
-        <Card className="rounded-xl border border-border p-5">
-          <h3 className="text-sm font-semibold flex items-center gap-2 mb-3">
-            <Wand2 className="h-4 w-4 text-primary" />
-            AI pipeline
-          </h3>
-          <ol className="space-y-3">
-            {[
-              { icon: BookCheck,    label: 'Validate',     desc: 'Phát hiện HTML lỗi, encoding, cấu trúc bị hỏng' },
-              { icon: Sparkles,     label: 'Repair (AI)',  desc: 'Sửa chữa HTML bằng LLM — giữ nguyên ý nghĩa' },
-              { icon: Languages,    label: 'Convert',      desc: 'Chuyển sang EPUB3 với font Literata + Vietnamese shaping' },
-              { icon: ShieldOff,    label: 'Clean',        desc: 'Loại bỏ quảng cáo / watermark tự động (tuỳ chọn)' },
-              { icon: CheckCircle2, label: 'Embed fonts',  desc: 'Nhúng font và metadata cho Kindle/Boox/Kobo' },
-            ].map((step, i) => (
-              <li key={step.label} className="flex items-start gap-3">
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-bold">
-                  {i + 1}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-semibold flex items-center gap-1.5">
-                    <step.icon className="h-3 w-3" /> {step.label}
-                  </p>
-                  <p className="text-[11px] text-muted-foreground">{step.desc}</p>
+          <section id="queue">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <ListChecks className="h-4 w-4" />
                 </div>
-              </li>
-            ))}
-          </ol>
-        </Card>
+                <div>
+                  <h2 className="text-sm font-semibold">Hàng đợi chuyển đổi</h2>
+                  <p className="text-[11px] text-muted-foreground">Click vào job để xem chi tiết / download</p>
+                </div>
+              </div>
+              <Button size="sm" variant="ghost" onClick={() => setRefreshKey((k) => k + 1)} aria-label="Refresh conversion queue">
+                <Loader2 className={cn(loading && 'animate-spin', 'h-3.5 w-3.5')} />
+              </Button>
+            </div>
+            <JobList refreshTrigger={refreshKey} />
+          </section>
+        </div>
 
-        {/* Supported formats */}
-        <Card className="rounded-xl border border-border p-5">
-          <h3 className="text-sm font-semibold flex items-center gap-2 mb-3">
-            <FileText className="h-4 w-4 text-primary" />
-            Định dạng hỗ trợ
-          </h3>
-          <div className="space-y-1.5">
-            {supportedFormats.map((f) => (
-              <div key={f.ext} className="flex items-center gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
-                <span className="rounded bg-primary/15 px-2 py-0.5 text-[10px] font-bold text-primary tabular-nums">
-                  .{f.ext.toLowerCase()}
-                </span>
-                <span className="text-xs">{f.desc}</span>
+        {/* Right: stats + pipeline + formats */}
+        <div className="space-y-6">
+          {/* Stats */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <Zap className="h-4 w-4" />
+                </div>
+                <h2 className="text-sm font-semibold">Thống kê chuyển đổi</h2>
               </div>
-            ))}
-            {calibreFormats.map((f) => (
-              <div key={f.extension} className="flex items-center gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
-                <span className="rounded bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-300 tabular-nums">
-                  .{f.extension}
-                </span>
-                <span className="text-xs">
-                  {f.description}{' '}
-                  <span className="text-[10px] text-muted-foreground">(qua Calibre)</span>
-                </span>
-              </div>
-            ))}
+              <Button size="sm" variant="ghost" onClick={fetchJobs} aria-label="Refresh conversion statistics">
+                <Loader2 className={cn(loading && 'animate-spin', 'h-3.5 w-3.5')} />
+              </Button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <StatCard icon={<FileText className="h-5 w-5" />} label="Tổng file" value={loading ? '—' : stats.total} sub="Đã xử lý" tone="primary" />
+              <StatCard icon={<Loader2 className="h-5 w-5" />} label="Đang xử lý" value={loading ? '—' : stats.active} sub="Đang chạy" tone="warning" />
+              <StatCard icon={<CheckCircle2 className="h-5 w-5" />} label="Hoàn thành" value={loading ? '—' : stats.completed} sub={stats.total ? `${Math.round(stats.completed / stats.total * 100)}% thành công` : 'Chưa có'} tone="success" />
+              <StatCard icon={<AlertTriangle className="h-5 w-5" />} label="Lỗi" value={loading ? '—' : stats.failed} sub="Cần xem lại" tone="danger" />
+            </div>
           </div>
-          <div className="mt-4 rounded-md border border-border border-dashed bg-muted/30 p-3 text-[11px] text-muted-foreground">
-            <Sparkles className="inline h-3 w-3 mr-1 text-primary" />
-            AI provider đang dùng có thể thay đổi trong{' '}
-            <Link href="/settings" className="text-primary hover:underline font-medium">Cài đặt</Link>.
-          </div>
-        </Card>
-      </section>
+
+          {/* AI pipeline */}
+          <Card className="rounded-xl border border-border p-5">
+            <h3 className="text-sm font-semibold flex items-center gap-2 mb-3">
+              <Wand2 className="h-4 w-4 text-primary" />
+              AI pipeline
+            </h3>
+            <ol className="space-y-3">
+              {[
+                { icon: BookCheck,    label: 'Validate',     desc: 'Phát hiện HTML lỗi, encoding, cấu trúc bị hỏng' },
+                { icon: Sparkles,     label: 'Repair (AI)',  desc: 'Sửa chữa HTML bằng LLM — giữ nguyên ý nghĩa' },
+                { icon: Languages,    label: 'Convert',      desc: 'Chuyển sang EPUB3 với font Literata + Vietnamese shaping' },
+                { icon: ShieldOff,    label: 'Clean',        desc: 'Loại bỏ quảng cáo / watermark tự động (tuỳ chọn)' },
+                { icon: CheckCircle2, label: 'Embed fonts',  desc: 'Nhúng font và metadata cho Kindle/Boox/Kobo' },
+              ].map((step, i) => (
+                <li key={step.label} className="flex items-start gap-3">
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-bold">
+                    {i + 1}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-semibold flex items-center gap-1.5">
+                      <step.icon className="h-3 w-3" /> {step.label}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">{step.desc}</p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </Card>
+
+          {/* Supported formats */}
+          <Card className="rounded-xl border border-border p-5">
+            <h3 className="text-sm font-semibold flex items-center gap-2 mb-3">
+              <FileText className="h-4 w-4 text-primary" />
+              Định dạng hỗ trợ
+            </h3>
+            <div className="space-y-1.5">
+              {supportedFormats.map((f) => (
+                <div key={f.ext} className="flex items-center gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
+                  <span className="rounded bg-primary/15 px-2 py-0.5 text-[10px] font-bold text-primary tabular-nums">
+                    .{f.ext.toLowerCase()}
+                  </span>
+                  <span className="text-xs">{f.desc}</span>
+                </div>
+              ))}
+              {calibreFormats.map((f) => (
+                <div key={f.extension} className="flex items-center gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
+                  <span className="rounded bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-300 tabular-nums">
+                    .{f.extension}
+                  </span>
+                  <span className="text-xs">
+                    {f.description}{' '}
+                    <span className="text-[10px] text-muted-foreground">(qua Calibre)</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 rounded-md border border-border border-dashed bg-muted/30 p-3 text-[11px] text-muted-foreground">
+              <Sparkles className="inline h-3 w-3 mr-1 text-primary" />
+              AI provider đang dùng có thể thay đổi trong{' '}
+              <Link href="/settings" className="text-primary hover:underline font-medium">Cài đặt</Link>.
+            </div>
+          </Card>
+        </div>
+      </div>
     </div>
   );
 }
-
-// cn helper is imported from '@/lib/utils' (UI Polish 2026-07-06)
