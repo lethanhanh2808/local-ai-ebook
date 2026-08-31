@@ -121,7 +121,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     await queue.add(
       'chapter',
       { bookId: params.id, chapterFile: body.chapterFile, backend: backendChoice, force: true },
-      { jobId: `audiobook:${params.id}:${encodeURIComponent(body.chapterFile)}:${Date.now()}` },
+      { jobId: `audiobook_${params.id}_${encodeURIComponent(body.chapterFile)}_${Date.now()}` },
     );
     return NextResponse.json({ ok: true, queued: [body.chapterFile] });
   }
@@ -136,7 +136,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   const job = await queue.add(
     'book',
     { bookId: params.id, backend: backendChoice },
-    { jobId: `audiobook_book:${params.id}:${Date.now()}` },
+    { jobId: `audiobook_book_${params.id}_${Date.now()}` },
   );
 
   return NextResponse.json({ ok: true, jobId: job.id });

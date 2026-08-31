@@ -60,15 +60,33 @@ interface ChapterInfo {
 
 const NARRATION_VALUE = '__narration__';
 
-// Deterministic HSL color from a voice id so each assigned voice gets a stable,
-// distinct highlight. Keeps text readable (used at low alpha for the bg).
+// Deterministic color from a voice id so each assigned voice gets a stable,
+// distinct highlight. Returns a hex string (e.g. "#d99726") so callers can
+// append an alpha suffix like "+ '22'" to get a valid 8-digit hex (#RRGGBB22).
 function voiceColor(voiceId: string): string {
   let h = 0;
   for (let i = 0; i < voiceId.length; i++) {
     h = (h * 31 + voiceId.charCodeAt(i)) | 0;
   }
   const hue = Math.abs(h) % 360;
-  return `hsl(${hue} 70% 50%)`;
+  // HSL(hue, 70%, 50%) → RGB, then to hex.
+  const s = 0.7;
+  const l = 0.5;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+  const m = l - c / 2;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  if (hue < 60) [r, g, b] = [c, x, 0];
+  else if (hue < 120) [r, g, b] = [x, c, 0];
+  else if (hue < 180) [r, g, b] = [0, c, x];
+  else if (hue < 240) [r, g, b] = [0, x, c];
+  else if (hue < 300) [r, g, b] = [x, 0, c];
+  else [r, g, b] = [c, 0, x];
+  const toHex = (v: number) =>
+    Math.round((v + m) * 255).toString(16).padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
 }
 
 function genderBadge(g?: 'male' | 'female' | null) {
