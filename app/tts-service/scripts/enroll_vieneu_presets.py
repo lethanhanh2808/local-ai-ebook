@@ -33,18 +33,38 @@ VOICES_JSON = (
     / "voices_v3_turbo.json"
 )
 
-# (2) Danh sách voice cần enroll. Mỗi entry:
+# (2) Tìm thư mục chứa reference audio. Thứ tự ưu tiên:
+#     - ~/reference/audio-voice-sample/         (VM-side convention)
+#     - ~/Documents/local-ai-ebook/reference/   (Mac alt)
+#     - /Volumes/EXT-SSD/.../local-ai-ebook/... (Mac primary)
+AUDIO_DIR_CANDIDATES = [
+    Path.home() / "reference" / "audio-voice-sample",
+    Path.home() / "Documents" / "local-ai-ebook" / "reference" / "audio-voice-sample",
+    Path("/Volumes/EXT-SSD/Users/anhl/local-ai-ebook/reference/audio-voice-sample"),
+]
+
+
+def find_wav(stem: str) -> Path | None:
+    """Return the first existing candidate matching the stem (any extension)."""
+    for d in AUDIO_DIR_CANDIDATES:
+        if not d.is_dir():
+            continue
+        for ext in (".wav", ".WAV"):
+            p = d / f"{stem}{ext}"
+            if p.exists():
+                return p
+    return None
+
+
+# (3) Danh sách voice cần enroll. Mỗi entry:
 #     name: tên hiển thị (đã có trong file audio-voice-sample).
-#     ref_audio: đường dẫn tới file WAV tham chiếu (5–30 s, mono hoặc stereo).
+#     ref_stem: tên file WAV (không extension) — đường dẫn đầy đủ suy ra từ AUDIO_DIR_CANDIDATES.
 #     gender / region / style: metadata khớp với schema trong voices_v3_turbo.json.
 #     description: chuỗi tiếng Việt hiển thị trong dropdown UI.
 VOICES = [
     {
         "name": "Ngọc Ngạn",
-        "ref_audio": Path.home()
-        / "Documents/local-ai-ebook/reference/audio-voice-sample/Ngoc-Ngan-(Male).wav"
-        if (Path.home() / "Documents/local-ai-ebook").exists()
-        else "/Volumes/EXT-SSD/Users/anhl/local-ai-ebook/reference/audio-voice-sample/Ngoc-Ngan-(Male).wav",
+        "ref_stem": "Ngoc-Ngan-(Male)",
         "gender": "male",
         "region": "Nam",
         "style": "tu_nhien",
@@ -52,10 +72,7 @@ VOICES = [
     },
     {
         "name": "Hồng Đào",
-        "ref_audio": Path.home()
-        / "Documents/local-ai-ebook/reference/audio-voice-sample/Hong-Dao-(Female).wav"
-        if (Path.home() / "Documents/local-ai-ebook").exists()
-        else "/Volumes/EXT-SSD/Users/anhl/local-ai-ebook/reference/audio-voice-sample/Hong-Dao-(Female).wav",
+        "ref_stem": "Hong-Dao-(Female)",
         "gender": "female",
         "region": "Nam",
         "style": "tu_nhien",
@@ -77,9 +94,11 @@ def main() -> int:
 
     for entry in VOICES:
         name = entry["name"]
-        wav = Path(entry["ref_audio"])
-        if not wav.exists():
-            print(f"[enroll] ✗ skip {name!r}: ref audio missing → {wav}")
+        wav = find_wav(entry["ref_stem"])
+        if wav is None:
+            print(f"[enroll] ✗ skip {name!r}: ref audio not found in any of:")
+            for d in AUDIO_DIR_CANDIDATES:
+                print(f"           - {d}")
             continue
         print(f"[enroll] Encoding {name!r} from {wav.name} ({wav.stat().st_size/1e6:.1f} MB) ...")
         # encode_reference does mono-downmix + silence-trim + NeuCodec pass.
