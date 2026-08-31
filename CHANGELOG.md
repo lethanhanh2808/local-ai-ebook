@@ -14,6 +14,14 @@ This file tracks the major product changes and cleanup steps. It is intentionall
   - Added a `hasCover` flag (checks the cover file on disk) so missing covers surface a clear action instead of a silent placeholder.
   - Fixed cover cache-busting: the URL now uses the book's `updatedAt` instead of a local counter that reset on remount, so generated covers persist across navigation and on the Dashboard.
   - Library covers use `object-fill` to fill the card area.
+- **Removed the 2-side (spread / two-column) reader mode:**
+  - The spread pagination was unreliable (content clipping, wrong column counts), so
+    the mode was pulled entirely. The reader is now single-column scroll only.
+  - Deleted `buildSpreadCss`, `SPREAD_SCRIPT`, the `#epub-clip`/`.epub-spread` CSS,
+    the `Layout` type, the `layout` setting, the layout toggle (header + settings
+    panel + dropdown), the spread page-indicator/progress bar, and all spread
+    postMessage pagination (`next-page`/`prev-page`/`go-last-page`/`page-info`).
+  - The chapter route now always renders scroll-mode HTML.
 
 ## Recent milestones
 

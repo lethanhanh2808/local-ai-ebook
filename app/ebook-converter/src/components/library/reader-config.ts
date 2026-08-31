@@ -1,6 +1,5 @@
 export type Theme = 'light' | 'dark' | 'sepia';
 export type Font = 'serif' | 'sans' | 'mono';
-export type Layout = 'spread' | 'scroll';
 
 export interface ReaderSettings {
   theme: Theme;
@@ -8,7 +7,6 @@ export interface ReaderSettings {
   fontSize: number;
   lineHeight: number;
   width: number;
-  layout: Layout;
   indent: number;
   padTop: number;
   padBottom: number;
@@ -24,7 +22,6 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
   fontSize: 18,
   lineHeight: 1.85,
   width: 820,
-  layout: 'spread',
   indent: 0,
   padTop: 56,
   padBottom: 96,

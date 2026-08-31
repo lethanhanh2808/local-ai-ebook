@@ -1,11 +1,11 @@
 'use client';
 // src/components/library/EbookReader.tsx
-// Professional EPUB reader: spread (two-column Apple Books) + scroll modes
+// Professional EPUB reader (single-column scroll mode)
 import { useEffect, useRef, useState, useCallback, lazy, Suspense } from 'react';
 import { createPortal } from 'react-dom';
 import { Button, buttonClasses } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-import { Progress } from '@/components/ui/progress';
+
 import { KbdHint } from '@/components/ui/kbd-hint';
 import { Tooltip } from '@/components/ui/tooltip';
 import { Dialog, DialogBody, DialogFooter } from '@/components/ui/dialog';
@@ -19,7 +19,7 @@ import {
   ChevronLeft, ChevronRight, List, X, Home, Settings2,
   Bookmark, BookmarkCheck, AlignLeft, Minus, Plus,
   Search, Clock, RotateCcw, Maximize2, Minimize2,
-  Columns, ScrollText, Wand2, Check, Loader2, Trash2,
+  Wand2, Check, Loader2, Trash2,
   Volume2, VolumeX, Play, Pause, Square, Headphones,
   Mic, Bug, Terminal, Clipboard, Copy, Activity, CheckCircle2, AlertCircle,
   Eye, Filter, ArrowUpDown, User, ChevronDown, MoreVertical, Info, Images,
@@ -39,7 +39,6 @@ import {
   INDENT_PRESETS,
   THEMES,
   type Font,
-  type Layout,
   type ReaderSettings,
   type Theme,
   readerSurface,
@@ -808,9 +807,6 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   }, [analyzerModePickerOpen]);
   const [fullscreen, setFullscreen] = useState(false);
   const [iframeLoading, setIframeLoading] = useState(false);
-  // Spread-mode page tracking
-  const [spreadPage, setSpreadPage]   = useState(0);
-  const [spreadTotal, setSpreadTotal] = useState(1);
   const pendingLastPage = useRef(false);
   // Watermark panel
   const [wmOpen, setWmOpen] = useState(false);
@@ -1554,18 +1550,15 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
 
   useEffect(() => { setBookmarks(loadBookmarks(bookId)); }, [bookId]);
 
-  // Handle postMessages from iframe (chapter navigation + spread pagination)
+  // Handle postMessages from iframe (chapter navigation)
   useEffect(() => {
     const handler = (e: MessageEvent) => {
       if (e.source !== iframeRef.current?.contentWindow) return;
       if (!e.data?.type) return;
-      const { type } = e.data as { type: string; chapterId?: string; current?: number; total?: number };
+      const { type } = e.data as { type: string; chapterId?: string };
       if (type === 'epub-navigate' && e.data.chapterId) {
         const idx = chapters.findIndex((c) => c.id === e.data.chapterId);
         if (idx >= 0) goToChapter(idx);
-      } else if (type === 'page-info') {
-        setSpreadPage(e.data.current ?? 0);
-        setSpreadTotal(e.data.total ?? 1);
       } else if (type === 'chapter-end') {
         goToChapter(currentIdx + 1);
       } else if (type === 'chapter-start') {
@@ -1604,7 +1597,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentIdx, chapters, bookmarks, settings.layout, spreadPage, spreadTotal]);
+  }, [currentIdx, chapters, bookmarks]);
 
   /**
    * Close the analyzer modal AND cancel any in-flight SSE stream.  All four
@@ -1630,8 +1623,6 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     if (chapters.length === 0) return;
     const clamped = Math.max(0, Math.min(chapters.length - 1, idx));
     setIframeLoading(true);
-    setSpreadPage(0);
-    setSpreadTotal(1);
     setCurrentIdx(clamped);
     setTocOpen(false);
     setBookmarksOpen(false);
@@ -1640,29 +1631,15 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
 
   function handleNext() {
     if (chapters.length === 0) return;
-    if (settings.layout === 'spread') {
-      iframeRef.current?.contentWindow?.postMessage({ type: 'next-page' }, '*');
-    } else {
-      goToChapter(currentIdx + 1);
-    }
+    goToChapter(currentIdx + 1);
   }
   function handlePrev() {
     if (chapters.length === 0) return;
-    if (settings.layout === 'spread') {
-      iframeRef.current?.contentWindow?.postMessage({ type: 'prev-page' }, '*');
-    } else {
-      goToChapter(currentIdx - 1);
-    }
+    goToChapter(currentIdx - 1);
   }
 
   const handleIframeLoad = () => {
     setIframeLoading(false);
-    if (pendingLastPage.current) {
-      pendingLastPage.current = false;
-      setTimeout(() => {
-        iframeRef.current?.contentWindow?.postMessage({ type: 'go-last-page' }, '*');
-      }, 80);
-    }
     setTimeout(() => {
       if (ttsStateRef.current !== 'idle') syncTtsHighlight(ttsIndex);
     }, 120);
@@ -1693,7 +1670,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       // `padding-left: 0.6rem` plus a matching `-0.6rem` margin-left gives
       // the bar ~10px of breathing room from the text WITHOUT shifting the
       // paragraph's overall box — the negative margin extends the element
-      // 10px to the left into the column-gap (spread) or body padding
+      // 10px to the left into the body padding
       // (scroll), which both have horizontal headroom.
       style.textContent = `
         .tts-current-block {
@@ -4141,7 +4118,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   const accentColor   = isDark ? '#7070cc' : isSepia ? '#a07840' : '#3b82f6';
 
   const chapterSrc = current
-    ? `/api/library/${bookId}/chapters/${current.id}?theme=${settings.theme}&font=${settings.font}&size=${settings.fontSize}&lh=${settings.lineHeight}&width=${settings.width}&layout=${settings.layout}&indent=${settings.indent}&padt=${settings.padTop}&padb=${settings.padBottom}&padx=${settings.padInline}`
+    ? `/api/library/${bookId}/chapters/${current.id}?theme=${settings.theme}&font=${settings.font}&size=${settings.fontSize}&lh=${settings.lineHeight}&width=${settings.width}&indent=${settings.indent}&padt=${settings.padTop}&padb=${settings.padBottom}&padx=${settings.padInline}`
     : null;
 
   const filteredChapters = tocSearch
@@ -4264,19 +4241,6 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
             <Clock className="h-3 w-3 opacity-60" />{estimateReadTime(chapters.length, currentIdx)}
           </span>
         )}
-
-        {/* Layout toggle */}
-        <div className="hidden md:flex rounded-md border border-border overflow-hidden">
-          {(['spread', 'scroll'] as Layout[]).map((l) => (
-            <Tooltip key={l} content={l === 'spread' ? 'Hai cột (Apple Books)' : 'Cuộn dọc'} side="bottom">
-              <button onClick={() => updateSetting('layout', l)} title={l === 'spread' ? 'Hai cột (Apple Books)' : 'Cuộn dọc'}
-                type="button" aria-label={l === 'spread' ? 'Hai cột' : 'Cuộn dọc'} aria-pressed={settings.layout === l}
-                className={cn('flex h-7 w-7 items-center justify-center border-r last:border-r-0 transition-colors', settings.layout === l ? activeCls : `border-transparent ${hoverCls}`)}>
-                {l === 'spread' ? <Columns className="h-3.5 w-3.5" /> : <ScrollText className="h-3.5 w-3.5" />}
-              </button>
-            </Tooltip>
-          ))}
-        </div>
 
         <Tooltip content={<span className="inline-flex items-center gap-1.5">{isBookmarked ? 'Bỏ bookmark' : 'Bookmark'} <KbdHint keys={['B']} /></span>} side="bottom" className="hidden md:inline-flex">
           <button onClick={toggleBookmark}
@@ -4513,14 +4477,6 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
               className="gap-2"
             >
               <Settings2 className="h-3.5 w-3.5" /> Cài đặt trình đọc
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => updateSetting('layout', settings.layout === 'spread' ? 'scroll' : 'spread')}
-              className="gap-2"
-            >
-              {settings.layout === 'spread'
-                ? <><ScrollText className="h-3.5 w-3.5" />Scroll layout</>
-                : <><Columns className="h-3.5 w-3.5" />Spread layout (2 cột)</>}
             </DropdownMenuItem>
             <DropdownMenuItem
               onSelect={() => {
@@ -4880,20 +4836,6 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
             <button type="button" onClick={() => setSettingsOpen(false)} aria-label="Đóng cài đặt trình đọc" className={cn('rounded p-1', hoverCls)}><X className="h-3.5 w-3.5" /></button>
           </div>
           <div className="flex-1 space-y-5 p-4 overflow-y-auto">
-            {/* Layout */}
-            <div>
-              <p className={cn('mb-2 text-[10px] font-semibold uppercase tracking-widest', mutedCls)}>Layout</p>
-              <div className="grid grid-cols-2 gap-2">
-                {[{ id: 'spread' as Layout, label: 'Book (2-col)', icon: Columns },
-                  { id: 'scroll' as Layout, label: 'Scroll', icon: ScrollText }].map(({ id, label, icon: Icon }) => (
-                  <button key={id} type="button" onClick={() => updateSetting('layout', id)} aria-pressed={settings.layout === id}
-                    className={cn('flex flex-col items-center gap-1 rounded-lg border border-border py-3 text-xs font-medium transition-all bg-transparent',
-                      settings.layout === id ? activeCls : `${hoverCls} opacity-70`)}>
-                    <Icon className="h-4 w-4" />{label}
-                  </button>
-                ))}
-              </div>
-            </div>
             {/* Theme */}
             <div>
               <p className={cn('mb-2 text-[10px] font-semibold uppercase tracking-widest', mutedCls)}>Theme</p>
@@ -4955,10 +4897,8 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
                 ))}
               </div>
             </div>
-            {/* Width — always shown; in scroll mode it caps max-width,
-                in spread mode it caps the column-pair width so each column
-                stays readable on wide viewports. See buildSpreadCss and
-                buildScrollCss in the chapters route. */}
+            {/* Width — caps the body text max-width. See buildScrollCss
+                in the chapters route. */}
             <div>
               <p className={cn('mb-2 text-[10px] font-semibold uppercase tracking-widest', mutedCls)}>Column Width</p>
               <div className="grid grid-cols-4 gap-1.5">
@@ -4970,9 +4910,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
                 ))}
               </div>
               <p className={cn('mt-1.5 text-[10px]', mutedCls)}>
-                {settings.layout === 'spread'
-                  ? 'Total spread width — each column will be roughly half this value.'
-                  : `Body text wraps at ${settings.width}px max.`}
+                Body text wraps at {settings.width}px max.
               </p>
             </div>
             {/* Padding controls */}
@@ -5322,7 +5260,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       {/* ── Footer ── */}
       <footer className={cn('flex items-center gap-2 px-3 py-2 border-t shrink-0 backdrop-blur-sm', headerCls)}>
         <Button variant="outline" size="sm" onClick={handlePrev}
-          disabled={chapters.length === 0 || (currentIdx <= 0 && (settings.layout === 'scroll' || spreadPage <= 0))}
+          disabled={chapters.length === 0 || currentIdx <= 0}
           style={btnStyle}
           aria-label="Previous chapter"
           className="gap-1 text-xs">
@@ -5330,21 +5268,6 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         </Button>
 
         <div className="flex-1 flex flex-col items-center gap-1">
-          {/* ── Intra-chapter progress: thin 1px-tall bar driven by the
-              iframe's page-info postMessage. Shows where you are inside
-              the current chapter as a continuous percentage, complementing
-              the chapter-level dots below. */}
-          {chapters.length > 0 && spreadTotal > 1 && (
-            <Progress
-              value={Math.round(((spreadPage + 1) / spreadTotal) * 100)}
-              ariaLabel={`Trang ${spreadPage + 1}/${spreadTotal} trong chương hiện tại`}
-              className="h-[2px] w-full max-w-xs"
-              indicatorClassName="bg-primary/70"
-            />
-          )}
-          {settings.layout === 'spread' && spreadTotal > 1 && (
-            <p className={cn('text-[10px]', mutedCls)}>Page {spreadPage + 1} / {spreadTotal} in chapter</p>
-          )}
           {chapters.length > 0 && chapters.length <= 80 ? (
             // ── Condensed dots — ≤80 chapters, each dot 3px (4px active). ──
             <div className="flex flex-wrap justify-center items-center gap-1 max-w-md">
@@ -5418,7 +5341,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         </div>
 
         <Button variant="outline" size="sm" onClick={handleNext}
-          disabled={chapters.length === 0 || (currentIdx >= chapters.length - 1 && (settings.layout === 'scroll' || spreadPage >= spreadTotal - 1))}
+          disabled={chapters.length === 0 || currentIdx >= chapters.length - 1}
           style={btnStyle}
           aria-label="Next chapter"
           className="gap-1 text-xs">

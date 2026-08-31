@@ -5,8 +5,7 @@
 // ?font=serif|sans|mono
 // ?size=16    → font size in px
 // ?lh=1.8    → line height
-// ?width=720  → max-width in px (scroll mode only)
-// ?layout=scroll|spread → scroll = single-column scrollable; spread = two-column paginated
+// ?width=720  → max-width in px
 import { NextResponse, NextRequest } from 'next/server';
 import { getBook, getBookWatermarks } from '@/lib/db/books';
 import { parseEpub } from '@/lib/pipeline/epub-parser';
@@ -22,7 +21,7 @@ const THEME_COLORS = {
   // SEPIA — 2-tone palette shared with the reader UI:
   //   • `bg`     = the actual reading surface (lighter cream) — body bg +
   //                readerSurface `input` bg + slider thumb fills.
-  //   • `htmlBg` = the "chrome around the spread" tone (darker cream) —
+  //   • `htmlBg` = the "chrome around the reading surface" tone (darker cream) —
   //                readerSurface `panel` + `header` so the iframe's html
   //                background blends seamlessly with the surrounding UI.
   //   • `text`   = warm dark brown, the single text color (currentColor).
@@ -39,7 +38,7 @@ const FONT_STACK = {
   mono:  "'JetBrains Mono', 'Consolas', 'Courier New', monospace",
 };
 
-/** Shared typographic styles (used in both scroll and spread modes) */
+/** Shared typographic styles for the reader chapter view */
 function buildTypoCss(f: string, size: number, lh: number, text: string, indent: number): string {
   const indentEm = indent.toFixed(2);
   return `
@@ -61,8 +60,7 @@ function buildTypoCss(f: string, size: number, lh: number, text: string, indent:
     text-indent: ${indentEm}em;
     orphans: 3; widows: 3;
   }
-  /* First paragraph after a heading has no indent — standard book layout.
-     Also reset indent for the very first paragraph in the spread. */
+  /* First paragraph after a heading has no indent — standard book layout. */
   p:first-of-type, h1 + p, h2 + p, h3 + p, h4 + p { text-indent: 0; }
   hr { border: none; text-align: center; margin: 1.5em auto; column-span: all; }
   hr::after { content: '— ✦ —'; font-size: 0.85em; opacity: 0.4; }
@@ -96,38 +94,7 @@ function buildTypoCss(f: string, size: number, lh: number, text: string, indent:
   }
   blockquote { margin: 1.5em 2em; font-style: italic; border-left: 3px solid rgba(128,128,128,0.4); padding-left: 1em; }
   .calibre7, .calibre8 { font-size: inherit; }
-  /* BUGFIX 2026-07-11 — Vietnamese/Calibre EPUBs often ship with embedded CSS
-     like p { columns: 2 } or section { columns: 2 } to mimic newspaper
-     layout. When that combines with our .epub-spread column-count: 2,
-     you get nested columns (2 outer x 2 inner = 4 visible). Two layers
-     of defense:
-       1. stripEmbeddedStyles() (in the route) drops <style> blocks before
-          they ever reach the iframe — that removes most rogue rules.
-       2. The selector list below prefixes with #epub-clip .epub-spread,
-          which raises specificity to (1 ID, 1 class, 1 element) — high
-          enough to beat any "p" or "section" rule the EPUB might inject
-          via inline style attributes or surviving <style> blocks.
-     BUGFIX 2026-07-12 — the previous rule used the \`columns: 1\` shorthand,
-     which ALSO sets \`column-width: auto\`. In a multi-column parent, that
-     makes each <p> expand to the FULL PARENT WIDTH (820px) instead of the
-     current column width (378px), so 3 columns of text bleed into the
-     820px clip from neighbouring page tracks. Fix: use \`column-count: 1\`
-     alone (no shorthand, no \`column-width: auto\`) so the p's natural
-     column-width applies. Also add \`max-width: 100%; box-sizing: border-box\`
-     as defense-in-depth in case any future CSS tries to overflow. */
-  #epub-clip .epub-spread p,
-  #epub-clip .epub-spread section,
-  #epub-clip .epub-spread div,
-  #epub-clip .epub-spread article,
-  #epub-clip .epub-spread blockquote,
-  #epub-clip .epub-spread li,
-  #epub-clip .epub-spread dd,
-  #epub-clip .epub-spread dt {
-    column-count: 1 !important;
-    max-width: 100%;
-    box-sizing: border-box;
-  }
-  /* Headings and HRs should always span across the spread's columns. */
+  /* Headings and HRs span the full reading width. */
   h1, h2, h3, h4, h5, h6, hr { column-span: all; }
   section[epub\\:type="chapter"], section[role="doc-chapter"] { display: contents; }
   * { box-sizing: border-box; }
@@ -152,94 +119,6 @@ function buildScrollCss(
     text-align: justify; word-break: break-word;
   }
   ${buildTypoCss(f, size, lh, t.text, indent)}
-`;
-}
-
-function buildSpreadCss(
-  theme: string, font: string, size: number, lh: number, indent: number,
-  padTop: number, padBottom: number, padInline: number, width = 820,
-): string {
-  const t = THEME_COLORS[theme as keyof typeof THEME_COLORS] ?? THEME_COLORS.dark;
-  const f = FONT_STACK[font as keyof typeof FONT_STACK] ?? FONT_STACK.serif;
-  // Clip is the visible window for one "page" (one column track = 2 columns).
-  // Width MUST equal the spread width so only 2 columns are visible at once;
-  // otherwise a wider clip would show 1.5+ page tracks side-by-side, which the
-  // user perceives as 3-4 columns. Centered horizontally. Capped at viewport
-  // minus padding so it never overflows on narrow screens.
-  const clipW = `min(${width}px, calc(100vw - ${2 * padInline}px))`;
-  const clipLeft = `max(${padInline}px, calc(50vw - ${width / 2}px))`;
-  const clipH = `calc(100vh - ${padTop}px - ${padBottom}px)`;
-  return `
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html { height: 100%; overflow: hidden; background: ${t.htmlBg}; }
-  body { height: 100%; overflow: hidden; background: ${t.bg}; }
-  /* Fixed clip box: its position/size IS the padding. Body background shows as margins.
-     Width = exactly the spread width so only ONE page track (2 columns) is visible
-     at a time. The clip scrolls horizontally through page tracks. */
-  #epub-clip {
-    position: fixed;
-    top: ${padTop}px;
-    left: ${clipLeft};
-    width: ${clipW};
-    height: ${clipH};
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-width: none;
-  }
-  #epub-clip::-webkit-scrollbar { display: none; }
-  .epub-spread {
-    /* height set via JS to exact clip height for reliable column geometry */
-    height: 100%;
-    /* NO inline padding — columns fill the clip width exactly.
-       column-count: 2 is authoritative — never set to 'auto' (3-column bleed risk) */
-    /* !important prevents any inline style="column-count: N" override
-       (SPREAD_SCRIPT's narrow-mode path, or a browser extension injecting
-       column rules) from blowing the layout up to 3 or 4 columns. Combined
-       with the explicit JS threshold sync below, the spread is reliably
-       exactly 2 columns whenever the viewport is 400px or wider. */
-    column-count: 2 !important;
-    column-gap: 4rem;
-    column-rule: 1px solid rgba(128,128,128,0.12);
-    column-fill: auto;
-    font-family: ${f};
-    font-size: ${size}px;
-    line-height: ${lh};
-    color: ${t.text};
-    text-align: justify;
-    word-break: break-word;
-    /* Width equals the clip width (the spread fills the clip edge-to-edge).
-       This makes page-track boundary align exactly with clip edges, so the
-       visible area is always exactly 2 columns wide. */
-    width: 100%;
-    /* BUGFIX 2026-07-12 (revised) — MUST stay \`overflow: visible\` (not
-       hidden). With column-count:2 + column-fill:auto + a fixed height, the
-       content paginates into multiple 2-column "page tracks" that overflow
-       the spread horizontally. \`overflow: hidden\` here clips those extra
-       tracks, which (a) hides all content past the first 2 columns and
-       (b) makes the clip's scrollWidth == clientWidth so the pagination
-       script reports only 1 page and can never scroll. The clip's own
-       \`overflow-x: auto\` already clips visually at the clip edge, and the
-       \`max-width: 100%\` below (plus the per-child max-width:100% rules)
-       already prevents any child from exceeding the spread width, so the
-       original "leak" concern is covered without clipping pagination. */
-    max-width: 100%;
-    overflow: visible;
-  }
-  /* Truly narrow viewport (phone-width iframe): revert to single-column
-     scroll. Threshold lowered to 400px so the 2-column layout stays on
-     even when the reader iframe is moderately narrowed by an open side
-     panel (audio panel, settings) on desktop viewports. */
-  @media (max-width: 400px) {
-    html { overflow-x: hidden; overflow-y: auto; }
-    body { overflow-x: visible; overflow-y: auto; }
-    #epub-clip { position: static; width: auto; height: auto; left: auto; overflow: visible; }
-    /* !important for parity with the wide-mode rule — guarantees single-column
-       even if a browser extension tries to inject column-count: 2 inline. */
-    .epub-spread { column-count: 1 !important; column-gap: 0; height: auto; width: auto; padding: 2rem 1.5rem 4rem; }
-  }
-  ${buildTypoCss(f, size, lh, t.text, indent)}
-  /* Spread-specific: allow headings to break across columns */
-  h1, h2 { column-span: all; margin-top: 1em; }
 `;
 }
 
@@ -464,128 +343,6 @@ const NAV_SCRIPT = `<script>
 })();
 </script>`;
 
-/** Two-column spread pagination script.
- * Uses #epub-clip as the scroll container so column overflow never bleeds outside
- * the padded content area — the body background naturally shows as page margins.
- */
-const SPREAD_SCRIPT = `<script>
-(function() {
-  var currentPage = 0;
-  var isSingleCol = false;
-  var clip = null; // #epub-clip — the actual horizontal scroll container
-
-  function getClip() {
-    return clip || (clip = document.getElementById('epub-clip'));
-  }
-
-  function setExactColumnGeometry() {
-    var spread = document.querySelector('.epub-spread');
-    var c = getClip();
-    if (!spread || !c || isSingleCol) return;
-    // Height = clip client height (already sized to exclude padTop/padBottom via fixed positioning)
-    spread.style.height = c.clientHeight + 'px';
-  }
-
-  function updateLayout() {
-    var spread = document.querySelector('.epub-spread');
-    if (!spread) return;
-    // Must mirror the CSS @media (max-width: 400px) threshold above — if these
-    // drift apart, the JS will switch to single-column at a width where the
-    // CSS still wants 2 columns, and you'll see a flash from 2 → 1 columns on
-    // every resize.
-    var narrow = window.innerWidth < 400;
-    if (narrow !== isSingleCol) {
-      isSingleCol = narrow;
-      if (narrow) {
-        spread.style.columnCount = '1';
-        spread.style.columnWidth = '';
-        spread.style.columnGap = '0';
-        spread.style.height = 'auto';
-      } else {
-        // Clear narrow-mode overrides — CSS column-count:2 takes over
-        spread.style.columnCount = '';
-        spread.style.columnWidth = '';
-        spread.style.columnGap = '';
-        setExactColumnGeometry();
-      }
-      currentPage = 0;
-    } else if (!narrow) {
-      setExactColumnGeometry();
-    }
-  }
-
-  // Page width = clip client width (already excludes inline padding via clip positioning)
-  function getPageWidth() {
-    var c = getClip();
-    return c ? Math.max(1, c.clientWidth) : window.innerWidth;
-  }
-
-  // Total pages = clip scrollWidth / clip clientWidth (column tracks equal clip width exactly)
-  function getTotalPages() {
-    if (isSingleCol) return 1;
-    var c = getClip();
-    if (!c) return 1;
-    var pageW = getPageWidth();
-    return Math.max(1, Math.round(c.scrollWidth / pageW));
-  }
-
-  function goToPage(n) {
-    if (isSingleCol) { notifyParent(1); return; }
-    var c = getClip();
-    if (!c) return;
-    var total = getTotalPages();
-    currentPage = Math.max(0, Math.min(n, total - 1));
-    c.scrollLeft = currentPage * getPageWidth();
-    notifyParent(total);
-  }
-
-  function notifyParent(total) {
-    window.parent.postMessage({
-      type: 'page-info',
-      current: currentPage,
-      total: total != null ? total : getTotalPages()
-    }, '*');
-  }
-
-  window.addEventListener('message', function(e) {
-    if (!e.data || !e.data.type) return;
-    if (e.data.type === 'next-page') {
-      if (isSingleCol) { window.parent.postMessage({ type: 'chapter-end' }, '*'); return; }
-      var total = getTotalPages();
-      if (currentPage >= total - 1) {
-        window.parent.postMessage({ type: 'chapter-end' }, '*');
-      } else {
-        goToPage(currentPage + 1);
-      }
-    } else if (e.data.type === 'prev-page') {
-      if (currentPage <= 0) {
-        window.parent.postMessage({ type: 'chapter-start' }, '*');
-      } else {
-        goToPage(currentPage - 1);
-      }
-    } else if (e.data.type === 'go-last-page') {
-      goToPage(getTotalPages() - 1);
-    }
-  });
-
-  window.addEventListener('load', function() {
-    clip = document.getElementById('epub-clip');
-    updateLayout();
-    setTimeout(function() { goToPage(0); }, 80);
-  });
-
-  var resizeTimer;
-  window.addEventListener('resize', function() {
-    clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(function() {
-      clip = document.getElementById('epub-clip');
-      updateLayout();
-      goToPage(currentPage);
-    }, 120);
-  });
-})();
-</script>`;
-
 /** Remove the first duplicate heading if the same text appears twice in a row */
 function deduplicateHeading(html: string): string {
   // Match first heading
@@ -637,8 +394,6 @@ export async function GET(
   const fontSize  = Math.max(12, Math.min(28, parseInt(sp.get('size') ?? '18', 10)));
   const lineH     = Math.max(1.3, Math.min(3.0, parseFloat(sp.get('lh') ?? '1.85')));
   const width     = Math.max(400, Math.min(1200, parseInt(sp.get('width') ?? '720', 10)));
-  const layout    = sp.get('layout') ?? 'spread';
-  const isSpread  = layout === 'spread';
   const indent    = Math.max(0, Math.min(3, parseFloat(sp.get('indent') ?? '1.5')));
   const padTop    = Math.max(0, Math.min(200, parseInt(sp.get('padt') ?? '48', 10)));
   const padBottom = Math.max(0, Math.min(200, parseInt(sp.get('padb') ?? '96', 10)));
@@ -682,14 +437,10 @@ export async function GET(
 
     // Strip embedded <style> blocks from the chapter body BEFORE any other
     // processing. Vietnamese/Calibre EPUBs commonly ship with inline CSS
-    // like `p { columns: 2 }` or `section { columns: 2 }` that targets our
-    // reader's block-level children — when that nests inside our
-    // `.epub-spread { column-count: 2 }`, you get 2 outer × 2 inner = 4
-    // visible columns. Embedded <style> blocks also routinely include
-    // styles that fight our theme (hard-coded colors, fonts, margins),
-    // so removing them is a clean win on top of the higher-specificity
-    // override in buildTypoCss. Our <style> in <head> already provides
-    // every typographic rule the reader needs.
+    // that fights our theme (hard-coded colors, fonts, margins, multi-column
+    // newspaper layouts). Removing them is a clean win on top of the
+    // higher-specificity override in buildTypoCss. Our <style> in <head>
+    // already provides every typographic rule the reader needs.
     const noStyle = rawBody.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '');
 
     // Rewrite assets and chapter links, deduplicate headings, strip watermarks
@@ -739,29 +490,8 @@ export async function GET(
       return NextResponse.json({ title, html: bodyContent });
     }
 
-    let page: string;
-    if (isSpread) {
-      const spreadCss = buildSpreadCss(theme, font, fontSize, lineH, indent, padTop, padBottom, padInline, width);
-      const themeColors = THEME_COLORS[theme as keyof typeof THEME_COLORS] ?? THEME_COLORS.dark;
-      page = `<!DOCTYPE html>
-<html lang="${book.language ?? 'vi'}">
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>${title.replace(/</g, '&lt;')}</title>
-  <style>${spreadCss}</style>
-</head>
-<body style="background:${themeColors.bg}">
-<div id="epub-clip"><div class="epub-spread">
-${bodyContent}
-</div></div>
-</body>
-${NAV_SCRIPT}
-${SPREAD_SCRIPT}
-</html>`;
-    } else {
-      const scrollCss = buildScrollCss(theme, font, fontSize, lineH, width, indent, padTop, padBottom, padInline);
-      page = `<!DOCTYPE html>
+    const scrollCss = buildScrollCss(theme, font, fontSize, lineH, width, indent, padTop, padBottom, padInline);
+    const page = `<!DOCTYPE html>
 <html lang="${book.language ?? 'vi'}">
 <head>
   <meta charset="utf-8"/>
@@ -774,7 +504,6 @@ ${bodyContent}
 </body>
 ${NAV_SCRIPT}
 </html>`;
-    }
 
     return new NextResponse(page, {
       status: 200,
