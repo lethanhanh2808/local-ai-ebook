@@ -8,7 +8,7 @@
 # The repo ships a real pyproject.toml (vieneu==3.3.0, Apache-2.0, torch-free
 # ONNX runtime — runs on CPU, no GPU required). `uv sync` is exactly what
 # the upstream Makefile target `setup` runs, plus we pin Python to 3.11 to
-# match TTS_PYTHON and the sibling F5-TTS setup.
+# match TTS_PYTHON (the standard interpreter the rest of app/tts-service uses).
 #
 # Model weights (ONNX, ~1.2 GB) are fetched on first import by the
 # `huggingface_hub` cache, so this script is fast.

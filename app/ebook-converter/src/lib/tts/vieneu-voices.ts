@@ -23,8 +23,9 @@ export interface VoiceProfile {
 }
 
 /**
- * The 10 voices currently served by `:5020/vieneu-server` after the Jul-2026
- * upstream sync. Metadata is a hand-curated mirror of `voices_v3_turbo.json`.
+ * The 12 voices currently served by `:5020/vieneu-server` after the Jul-2026
+ * upstream sync + Aug-2026 user-preset add (Ngọc Ngạn + Hồng Đào). Metadata
+ * is a hand-curated mirror of `voices_v3_turbo.json`.
  *
  * Server `style` → client `tone/age/energy` mapping:
  *   tự nhiên  → cheerful / young   / high
@@ -38,12 +39,18 @@ export const VIENEU_PROFILES: readonly VoiceProfile[] = [
   { name: 'Đoan Trang', gender: 'female', tone: 'cheerful', age: 'young',  energy: 'high',   description: 'Nữ — Bắc — tự nhiên' },
   { name: 'Mai Anh',    gender: 'female', tone: 'serious',  age: 'mature', energy: 'medium', description: 'Nữ — Bắc — tin tức' },
   { name: 'Thục Đoan',  gender: 'female', tone: 'calm',     age: 'mature', energy: 'low',    description: 'Nữ — Nam — kể chuyện' },
+  // ── Hồng Đào: user-preset enrolled 2026-08-31 from
+  // reference/audio-voice-sample/Hong-Dao-(Female).wav.
+  { name: 'Hồng Đào',   gender: 'female', tone: 'cheerful', age: 'mature', energy: 'high',   description: 'Nữ — Nam — tự nhiên' },
   // ── Male ──────────────────────────────────────────────────────────────────
   { name: 'Phạm Tuyên', gender: 'male',   tone: 'cheerful', age: 'young',  energy: 'high',   description: 'Nam — Bắc — tự nhiên' },
   { name: 'Xuân Vĩnh',  gender: 'male',   tone: 'cheerful', age: 'young',  energy: 'high',   description: 'Nam — Nam — tự nhiên' },
   { name: 'Thái Sơn',   gender: 'male',   tone: 'calm',     age: 'mature', energy: 'low',    description: 'Nam — Nam — kể chuyện' },
   { name: 'Thanh Bình', gender: 'male',   tone: 'calm',     age: 'mature', energy: 'low',    description: 'Nam — Bắc — kể chuyện' },
   { name: 'Minh Đức',   gender: 'male',   tone: 'serious',  age: 'mature', energy: 'medium', description: 'Nam — Bắc — tin tức' },
+  // ── Ngọc Ngạn: user-preset enrolled 2026-08-31 from
+  // reference/audio-voice-sample/Ngoc-Ngan-(Male).wav.
+  { name: 'Ngọc Ngạn',  gender: 'male',   tone: 'cheerful', age: 'mature', energy: 'high',   description: 'Nam — Nam — tự nhiên' },
 ] as const;
 
 /** Just the name list, ordered for stable iteration. */
