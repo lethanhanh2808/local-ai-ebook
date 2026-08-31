@@ -4,6 +4,25 @@ This file tracks the major product changes and cleanup steps. It is intentionall
 
 ## Unreleased
 
+- **Added a Voice Assign Editor (Phân giọng) for per-sentence voice assignment:**
+  - New `ChapterVoicePlan` Prisma model stores a per-chapter, per-sentence voice
+    plan (discovered character + chosen voice) so assignments persist and survive
+    navigation.
+  - New `GET/PUT /api/library/[id]/chapters/[chapterId]/voice-plan` route derives
+    sentence suggestions from the existing attribution engine (default = narration
+    voice for every sentence; dialogue quotes attributed to a known character are
+    suggested as that character) and auto-saves edits.
+  - New "Phân giọng" tab in the reader's Audio panel lists every sentence with its
+    suggested character and a voice picker; changes auto-save (debounced PUT) and
+    show a "Đã lưu" indicator. Sentences left on the narration voice need no
+    assignment — read-aloud and the audiobook generator fall back to narration
+    automatically.
+  - Read-aloud now consults the saved plan (single-sentence paragraphs) so manual
+    voice overrides take effect during playback; unassigned sentences use the
+    narration (default) voice.
+  - The Python audiobook generator honours an optional `VOICE_PLAN` env var
+    (sentence text → voiceId) so the same per-sentence assignments drive
+    generation; a null voiceId forces the narration voice. No-op when unset.
 - Consolidated repo documentation to one active source of truth.
 - Archived historical plans, debug notes, and expired research into docs/archive.
 - Kept the product docs aligned to the current app and TTS architecture.

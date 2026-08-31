@@ -675,6 +675,64 @@ def _load_character_map() -> dict:
         return {"voices_by_id": {}, "characters": [], "default_voice_id": None}
 
 
+def _load_voice_plan() -> dict:
+    """Optional per-sentence voice plan produced by the app's Voice Assign Editor.
+
+    Env var VOICE_PLAN is a JSON array of { "text": str, "voiceId": str|null }.
+    A segment whose (cleaned) text matches a plan entry uses that voiceId,
+    overriding the character auto-detection. A null voiceId means "use the
+    narration (default) voice". When VOICE_PLAN is unset the function is a
+    no-op and the generator behaves exactly as before.
+
+    Returns a dict keyed by normalized segment text → voiceId (str) or None.
+    """
+    raw = os.environ.get("VOICE_PLAN", "")
+    if not raw:
+        return {}
+    try:
+        rows = json.loads(raw)
+    except Exception as e:
+        print(f"[warn] VOICE_PLAN parse failed: {e}", file=sys.stderr)
+        return {}
+    plan: dict = {}
+    for row in rows:
+        text = (row.get("text") or "").strip().lower()
+        if not text:
+            continue
+        plan[text] = row.get("voiceId")  # may be None → narration
+    return plan
+
+
+def _resolve_voice_plan_override(
+    text: str,
+    plan: dict,
+    cmap: dict,
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """If `text` matches a VOICE_PLAN entry, return (voice_id, voice_name, tone)
+    for that assignment. Returns (None, None, None) when there is no match so the
+    caller falls through to the normal character/attribution resolution."""
+    key = text.strip().lower()
+    if key not in plan:
+        return (None, None, None)
+    voice_id = plan[key]
+    if not voice_id:
+        # Explicit narration override → default voice (or builtin default).
+        default_voice_id = cmap.get("default_voice_id")
+        if default_voice_id:
+            v = cmap["voices_by_id"].get(default_voice_id, {})
+            if v.get("isBuiltinVieNeu"):
+                return (default_voice_id, v.get("name"), v.get("defaultEmotion"))
+            return (default_voice_id, None, v.get("defaultEmotion"))
+        return (None, None, None)
+    voice = cmap["voices_by_id"].get(voice_id)
+    if not voice:
+        return (None, None, None)
+    tone = voice.get("defaultEmotion")
+    if voice.get("isBuiltinVieNeu"):
+        return (voice_id, voice.get("name"), tone)
+    return (voice_id, None, tone)
+
+
 def _resolve_segment_voice(char_name: Optional[str], cmap: dict, default_voice_id: Optional[str]) -> tuple[Optional[str], Optional[str], Optional[str]]:
     """
     Decide which voice to use for a segment.
@@ -2238,9 +2296,24 @@ def generate_chapter(
     Returns dict with audio_path, duration_ms, size_bytes, segments counts.
     """
     cmap = _load_character_map()
+    voice_plan = _load_voice_plan()
     segments = split_into_segments(chapter_html_body, cmap)
     if not segments:
         raise RuntimeError("No segments extracted from chapter")
+
+    # Apply the Voice Assign Editor plan (VOICE_PLAN env). Each segment whose
+    # cleaned text matches a plan entry gets its voice overridden; a null
+    # voiceId forces the narration (default) voice. No-op when no plan is set.
+    if voice_plan:
+        for seg in segments:
+            override_id, override_name, _ = _resolve_voice_plan_override(
+                seg["text"], voice_plan, cmap,
+            )
+            if override_id is not None or (seg["text"].strip().lower() in voice_plan):
+                seg["voice_id"] = override_id
+                seg["voice_name"] = override_name
+                if override_id is None:
+                    seg["character"] = None
 
     wav_parts: list[bytes] = []
     total_chars = sum(len(s["text"]) for s in segments)

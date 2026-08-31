@@ -75,6 +75,7 @@ import {
 // ~150kb and surfaces the chapter list a few hundred ms sooner.
 const AudiobookPanel = lazy(() => import('./AudiobookPanel').then((m) => ({ default: m.AudiobookPanel })));
 const ReadAloudPanel  = lazy(() => import('./ReadAloudPanel').then((m) => ({ default: m.ReadAloudPanel })));
+const VoiceAssignEditor = lazy(() => import('./VoiceAssignEditor').then((m) => ({ default: m.VoiceAssignEditor })));
 const VoiceDebugPanel = lazy(() => import('./VoiceDebugPanel').then((m) => ({ default: m.VoiceDebugPanel })));
 
 /** Tiny fallback while a lazy panel chunk resolves. Skeleton instead of a
@@ -816,7 +817,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   const [wmSelected, setWmSelected] = useState<Set<number>>(new Set());
   // Audiobook panel (voice management + pre-generation)
   const [abOpen, setAbOpen] = useState(false);
-  const [abTab, setAbTab] = useState<'readAloud' | 'audiobook' | 'voices' | 'characters'>('readAloud');
+  const [abTab, setAbTab] = useState<'readAloud' | 'audiobook' | 'voices' | 'characters' | 'assign'>('readAloud');
   // Keyboard shortcuts overlay (UI Polish §5.3) — opened by pressing
   // '?' anywhere in the reader. Mirrors the legend shown in tooltips.
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -922,6 +923,15 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     }>
   >(new Map());
   const chapterAttributionInFlightRef = useRef<Set<string>>(new Set());
+
+  // Per-chapter, per-sentence voice assignments from the Voice Assign Editor.
+  // Keyed by chapterId → Map<normalized sentence text, voiceId|null>. Consumed
+  // by detectSpeaker() so read-aloud honours manual overrides. Sentences with a
+  // null voiceId fall back to the narration (default) voice.
+  const voicePlanRef = useRef<Map<string, Map<string, string | null>>>(new Map());
+  // voiceId → voice name (for the active backend). Used to translate a plan's
+  // voiceId into the `character` name the TTS server expects.
+  const voiceIdNameRef = useRef<Map<string, string>>(new Map());
   const [chapterAttributionStats, setChapterAttributionStats] =
     useState<{
       chapterId: string;
@@ -1799,6 +1809,14 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       }
       setTtsCharacterMap(map);
       setTtsCharacterList(list);
+
+      // Index voiceId → name so the Voice Assign Editor's plan (which stores
+      // voiceId) can be honoured by read-aloud (which speaks by voice name).
+      const idName = new Map<string, string>();
+      for (const vv of voicesList) {
+        if (vv.id) idName.set(vv.id, vv.name);
+      }
+      voiceIdNameRef.current = idName;
     } catch { /* silent */ }
   }
 
@@ -1871,6 +1889,30 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       // Silent — attribution is best-effort.
     } finally {
       chapterAttributionInFlightRef.current.delete(chapterId);
+    }
+  }
+
+  /** Fetch the per-sentence voice plan for a chapter and index it by normalized
+   *  sentence text so detectSpeaker() can honour manual voice overrides during
+   *  read-aloud. Sentences with a null voiceId are stored as null (→ narration
+   *  fallback). Safe to call repeatedly. */
+  async function loadVoicePlan(chapterId: string) {
+    try {
+      const r = await fetch(
+        `/api/library/${bookId}/chapters/${encodeURIComponent(chapterId)}/voice-plan`,
+      );
+      if (!r.ok) return;
+      const data = await r.json() as {
+        sentences?: Array<{ text: string; voiceId: string | null }>;
+      };
+      const map = new Map<string, string | null>();
+      for (const s of data.sentences ?? []) {
+        const key = s.text.trim().toLowerCase();
+        if (key) map.set(key, s.voiceId ?? null);
+      }
+      voicePlanRef.current.set(chapterId, map);
+    } catch {
+      // Silent — the plan is best-effort.
     }
   }
 
@@ -2828,6 +2870,29 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     text: string,
     paragraphIndex?: number,
   ): { name?: string; voiceName?: string; source?: 'parser' | 'regex' | 'llm' | 'conversation' } => {
+    // ── Tier 0: Voice Assign Editor plan ──────────────────────────────
+    // If this paragraph is a single sentence present in the chapter's saved
+    // voice plan, honour the user's assignment. A null voiceId means the user
+    // explicitly chose narration → fall back to the default voice. This lets
+    // the editor override both the character auto-detection and the per-
+    // character default voice, sentence by sentence.
+    const currentChapter = chapters[currentIdx];
+    if (currentChapter) {
+      const plan = voicePlanRef.current.get(currentChapter.id);
+      if (plan) {
+        const key = text.trim().toLowerCase();
+        if (plan.has(key)) {
+          const voiceId = plan.get(key) ?? null;
+          if (voiceId) {
+            const voiceName = voiceIdNameRef.current.get(voiceId);
+            if (voiceName) return { name: voiceName, voiceName, source: 'conversation' };
+          } else {
+            return {}; // explicit narration
+          }
+        }
+      }
+    }
+
     if (!ttsUseCharacterVoice) return {};
     const quotes = findQuoteSpans(text);
     if (quotes.length === 0) return {};
@@ -2836,7 +2901,6 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     // Only used when we know our paragraph index AND the map is loaded for
     // the current chapter. The map's source can be 'regex', 'llm',
     // 'conversation', or 'default'. speaker=null falls through to local regex.
-    const currentChapter = chapters[currentIdx];
     if (paragraphIndex !== undefined && currentChapter) {
       const mapEntry = chapterAttributionRef.current.get(currentChapter.id);
       if (mapEntry) {
@@ -4107,6 +4171,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     const ch = chapters[currentIdx];
     if (!ch) return;
     void loadChapterAttribution(ch.id);
+    void loadVoicePlan(ch.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentIdx, bookId]);
 
@@ -5102,6 +5167,11 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
                 abTab === 'characters' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')}>
               Nhân vật
             </button>
+            <button type="button" role="tab" aria-selected={abTab === 'assign'} onClick={() => setAbTab('assign')}
+              className={cn('flex-1 py-2 text-xs font-medium transition-colors border-b-2',
+                abTab === 'assign' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')}>
+              Phân giọng
+            </button>
           </div>
           <div className={cn('flex-1 min-h-0 overflow-y-auto', abTab === 'readAloud' ? '' : 'p-4')}>
             {abTab === 'readAloud' ? (
@@ -5155,6 +5225,20 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
             ) : abTab === 'audiobook' ? (
               <Suspense fallback={<PanelSkeleton />}>
                 <AudiobookPanel bookId={bookId} />
+              </Suspense>
+            ) : abTab === 'assign' ? (
+              <Suspense fallback={<PanelSkeleton />}>
+                <VoiceAssignEditor
+                  bookId={bookId}
+                  chapterId={chapters[currentIdx]?.id ?? null}
+                  chapterTitle={chapters[currentIdx]?.title ?? null}
+                  panelCls={panelCls}
+                  mutedCls={mutedCls}
+                  dividerCls={dividerCls}
+                  hoverCls={hoverCls}
+                  activeCls={activeCls}
+                  accentColor={accentColor}
+                />
               </Suspense>
             ) : abTab === 'voices' ? (
               <VoicePanel

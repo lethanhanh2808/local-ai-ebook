@@ -5,5 +5,7 @@
 ALTER TABLE "Settings"
 ADD COLUMN "aiAllowInsecureTls" BOOLEAN NOT NULL DEFAULT false;
 
-ALTER TABLE "UserSettings"
-ADD COLUMN "aiAllowInsecureTls" BOOLEAN NOT NULL DEFAULT false;
+  -- NOTE: UserSettings.aiAllowInsecureTls is already created by migration
+  -- 20260829000000_create_user_and_user_settings (its CREATE TABLE includes the
+  -- column). This ALTER was removed to keep the history replayable on a fresh
+  -- shadow database.

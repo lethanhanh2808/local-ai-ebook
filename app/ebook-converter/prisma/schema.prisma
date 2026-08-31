@@ -89,6 +89,7 @@ model Book {
   audiobookChapters      AudiobookChapter[]
   illustrations          Illustration[]
   chapterAttributions    ChapterAttribution[]
+  chapterVoicePlans      ChapterVoicePlan[]
   characterRelationships CharacterRelationship[]
   pendingBibleDiffs      PendingBibleDiff[]
   bibleRefreshLogs       BibleRefreshLog[]
@@ -617,6 +618,28 @@ model ChapterAttribution {
   sourceMtime   BigInt // mtime of the chapter HTML file when attribution ran
   parserVersion String   @default("conversation-v3") // which model produced the result
   createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@unique([bookId, chapterIndex])
+  @@index([bookId])
+}
+
+// Per-chapter, per-sentence voice assignment plan used by the Voice Assign
+// Editor. Sentences are derived from the chapter HTML at edit time; the plan
+// stores the discovered character + the chosen voice for each sentence so the
+// user can correct mis-attributions. Sentences with no voice assigned fall back
+// to the narration (default) voice at playback / generation time.
+model ChapterVoicePlan {
+  id            String   @id @default(uuid())
+  bookId        String
+  chapterIndex  Int // 0-based index into parseEpub().htmlFiles
+  // JSON array of sentence entries in reading order:
+  // { i: number, text: string, charId: string|null, voiceId: string|null,
+  //   source: "narration" | "character" | "manual" }
+  sentences     String
+  sourceMtime   BigInt // mtime of the chapter HTML file when sentences were derived
   updatedAt     DateTime @updatedAt
 
   book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
