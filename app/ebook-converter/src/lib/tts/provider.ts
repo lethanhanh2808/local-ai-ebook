@@ -47,6 +47,21 @@ interface EngineConfig {
   builtins(): readonly VoiceProfile[];
   /** Membership check against the engine's catalog. */
   isBuiltinName(name: string | null | undefined): boolean;
+  /**
+   * Engine-side default voice slug for callers that arrive without any voice
+   * hint (no character voice, no UI default, no book default). Returns null
+   * when the engine picks its own default — caller should leave voiceName
+   * unset in that case.
+   *
+   * 2026-08-31: this was added because F5-TTS is *cloning-only* — it has
+   * no internal default voice, and POSTing `/synthesize` without `voice`
+   * or `ref_audio` produces an instant 502. Without this fallback, pressing
+   * "Bắt đầu đọc" on a freshly opened Vietnamese chapter (no character
+   * detection yet, no UI default voice selected) silently fails with
+   * `Read-aloud: eager prefetch failed`. The eager prefetch loop catches
+   * those errors but the user hears nothing.
+   */
+  defaultVoice(): string | null;
   /** Strip engine-incompatible bits from input text. */
   sanitizeText(text: string): string;
   /** Map an emotion label → inline marker for the engine, '' for none. */
@@ -96,6 +111,10 @@ const VIENEU: EngineConfig = {
   isCloningOnly: false,
   builtins: () => VIENEU_PROFILES,
   isBuiltinName: (name) => isBuiltinVieNeuVoice(name),
+  // VieNeu's /synthesize endpoint picks its own default voice when no
+  // `voice` is supplied (the upstream v3-turbo checkpoint has a built-in
+  // default). Leaving voiceName unset is the right thing.
+  defaultVoice: () => null,
   // VieNeu understands the inline emotion markers natively — pass them through.
   sanitizeText: (text) => text,
   emotionMarker: vieneuEmotionMarker,
@@ -141,6 +160,13 @@ const F5: EngineConfig = {
     if (!name) return false;
     return F5_PROFILES.some((p) => p.name === name);
   },
+  // F5 is cloning-only — there is NO server-side default. Picking the
+  // first profile (Hồng Đào, the female narrator) as the silent default
+  // matches the typical use case: opening a freshly-uploaded Vietnamese
+  // novel and pressing "Bắt đầu đọc" without first running character
+  // detection. The user can override per-character or via the Read aloud
+  // panel's default-voice selector.
+  defaultVoice: () => F5_PROFILES[0]?.name ?? null,
   // Strip the [cười] / [thở dài] / [hắng giọng] markers — F5 would read them
   // aloud as Vietnamese words. The regex is the same one f5_server.py uses
   // server-side, so a UI bug here can't make synthesis sound wrong.

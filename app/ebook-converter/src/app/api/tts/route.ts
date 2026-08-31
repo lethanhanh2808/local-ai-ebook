@@ -216,6 +216,21 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     voiceEmotion = v?.emotion ?? 'neutral';
   }
 
+  // Engine-side fallback when no character voice, no UI default, and no
+  // book default was resolved. F5 is cloning-only — POSTing /synthesize
+  // with neither `voice` nor `ref_audio` returns an instant 502, and the
+  // reader's eager prefetch surfaces that as "eager prefetch failed" the
+  // moment the user presses "Bắt đầu đọc" on a chapter with no voice
+  // assignments yet. VieNeu's server has its own internal default, so
+  // its `defaultVoice()` returns null and we leave voiceName unset.
+  if (!voiceName && !referencePath) {
+    const fallback = engine.defaultVoice();
+    if (fallback) {
+      console.warn('[tts] using engine default voice', { engine: engine.headerTag, voice: fallback });
+      voiceName = fallback;
+    }
+  }
+
   // Build the engine-specific payload. `buildPayloadForEngine` owns the
   // difference between VieNeu's `reference_path` (legacy back-compat)
   // and F5's `ref_audio`/`ref_text` — and knows which keys each engine
