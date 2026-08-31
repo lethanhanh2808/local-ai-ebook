@@ -167,16 +167,25 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   let referencePath: string | undefined;
   let voiceSpeed = 1.0;
   let voiceEmotion = 'neutral';
-  // Backend-aware membership check, with a fallback to the static
-  // VieNeu catalog so a stale builtin name from before the F5 switch
-  // doesn't 400 here.
-  const isBuiltin = (n: string) =>
-    isBuiltinVoiceForEngine(engine, n) || isBuiltinVieNeuVoice(n);
+  // Engine-aware membership check. Critically, this does NOT fall back to
+  // the VieNeu catalog when the active engine is F5 — the previous
+  // back-compat shim accepted 'Xuân Vĩnh' on the F5 path, and the F5
+  // server then rejected it as `unknown voice: Xuân Vĩnh` → 502. The user
+  // sees that as "Read-aloud: eager prefetch failed" the moment they
+  // press "Bắt đầu đọc" if their default UI voice was never updated
+  // when they switched `settings.ttsProvider` to F5. We now reject
+  // engine-mismatched names and let the engine default fallback below
+  // pick something that actually works.
+  const isBuiltinForEngine = (n: string) =>
+    isBuiltinVoiceForEngine(engine, n) || (engine.headerTag === 'vieneu' && isBuiltinVieNeuVoice(n));
   if (body.character) {
     const v = await resolveVoiceForCharacter(body.bookId ?? '', body.character, body.callIdx ?? 0);
     if (v) {
-      // Character has a stored voice assignment — use it.
-      if (v.builtinName) voiceName = v.builtinName;
+      // Character has a stored voice assignment — use it. If the stored
+      // builtinName is for a different engine (stale voice assignment
+      // from before the user switched ttsProvider), drop it so the
+      // engine default fallback below can pick a valid voice.
+      if (v.builtinName && isBuiltinForEngine(v.builtinName)) voiceName = v.builtinName;
       if (v.refAudioPath) referencePath = v.refAudioPath;
       voiceSpeed = v.speed ?? 1.0;
       voiceEmotion = v.emotion ?? 'neutral';
@@ -199,18 +208,24 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     if (UUID_RE.test(body.voice)) {
       const voice = await getVoice(body.voice);
       if (voice && (!body.bookId || voice.bookId === body.bookId)) {
-        const builtin = voice.builtinName ?? (isBuiltin(voice.name) ? voice.name : null);
-        if (builtin) voiceName = builtin;
+        const builtin = voice.builtinName ?? (isBuiltinForEngine(voice.name) ? voice.name : null);
+        if (builtin && isBuiltinForEngine(builtin)) voiceName = builtin;
         else if (voice.refAudioPath) referencePath = voice.refAudioPath;
         voiceSpeed = voice.defaultSpeed ?? voiceSpeed;
         voiceEmotion = voice.defaultEmotion ?? voiceEmotion;
       }
-    } else {
+    } else if (isBuiltinForEngine(body.voice)) {
+      // Direct slug like "hong-dao" or "Trúc Ly". Validate it's actually
+      // a voice for the ACTIVE engine — the previous back-compat shim
+      // accepted any VieNeu name on F5, which is the bug we're fixing.
       voiceName = body.voice;
     }
+    // else: body.voice is a non-UUID string that isn't valid for the
+    // active engine. Drop it — the engine default fallback below picks
+    // something that works. (User can re-pick in the Read aloud panel.)
   } else if (!voiceName && !referencePath && body.bookId) {
     const v = await resolveVoiceForCharacter(body.bookId, undefined, body.callIdx ?? 0);
-    if (v?.builtinName) voiceName = v.builtinName;
+    if (v?.builtinName && isBuiltinForEngine(v.builtinName)) voiceName = v.builtinName;
     if (v?.refAudioPath) referencePath = v.refAudioPath;
     voiceSpeed = v?.speed ?? 1.0;
     voiceEmotion = v?.emotion ?? 'neutral';
