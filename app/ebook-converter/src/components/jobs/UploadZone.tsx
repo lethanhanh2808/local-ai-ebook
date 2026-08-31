@@ -4,10 +4,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Upload, FileText, Loader2, Sparkles, ChevronDown, ChevronUp, ShieldOff, Wand2, Zap, Smartphone, AlertTriangle } from 'lucide-react';
+import { Upload, FileText, Loader2, Sparkles, ChevronDown, ChevronUp, ShieldOff, Wand2, Zap, Smartphone, AlertTriangle, Info } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
+import { Tooltip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import Link from 'next/link';
 
@@ -230,12 +231,14 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
               <Zap className="h-4 w-4 text-primary" />
               <span className="text-sm font-medium">Auto-start conversion</span>
               {!autoStart && <span className="text-[10px] rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-400 px-1.5 py-0.5 font-medium">MANUAL</span>}
-            </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {autoStart
+              <Tooltip content={autoStart
                 ? 'Files start converting as soon as upload completes.'
-                : 'Files go to "Pending". Click ▶ Start in the queue below to begin.'}
-            </p>
+                : 'Files go to "Pending". Click ▶ Start in the queue below to begin.'} side="top">
+                <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help">
+                  <Info className="h-3 w-3" />
+                </span>
+              </Tooltip>
+            </div>
           </div>
         </div>
       </Card>
@@ -250,10 +253,12 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
               <Sparkles className="h-4 w-4 text-primary" />
               <span className="text-sm font-medium">AI Enhancement</span>
               {aiEnhance && <span className="text-[10px] rounded-full bg-primary/15 text-primary px-1.5 py-0.5 font-medium">FAST</span>}
+              <Tooltip content="Quick parallel pass: fixes watermarks, encoding, broken images. ~30s per book." side="top">
+                <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help">
+                  <Info className="h-3 w-3" />
+                </span>
+              </Tooltip>
             </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Quick parallel pass: fixes watermarks, encoding, broken images. ~30s per book.
-            </p>
           </div>
         </div>
 
@@ -265,10 +270,12 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
               <Wand2 className="h-4 w-4 text-primary" />
               <span className="text-sm font-medium">Deep Format (Vietnamese novel)</span>
               {deepFormat && <span className="text-[10px] rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 font-medium">SLOW</span>}
+              <Tooltip content={<><strong>Recommended cho tiểu thuyết.</strong> AI re-formats từng chương: gộp/tách đoạn văn, định dạng hội thoại (nháy cong), ngắt cảnh (&lt;hr/&gt;). ~2-5 phút/chương.</>} side="top">
+                <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help">
+                  <Info className="h-3 w-3" />
+                </span>
+              </Tooltip>
             </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              <strong>Recommended cho tiểu thuyết.</strong> AI re-formats từng chương: gộp/tách đoạn văn, định dạng hội thoại (nháy cong), ngắt cảnh (&lt;hr/&gt;). ~2-5 phút/chương.
-            </p>
           </div>
         </div>
 
@@ -280,10 +287,12 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
               <Smartphone className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
               <span className="text-sm font-medium">Reader-friendly (Onyx Boox / Kobo / Kindle)</span>
               {readerFriendly && <span className="text-[10px] rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 font-medium">QUICK</span>}
+              <Tooltip content={<><strong>Dùng khi sách chỉ hiện 1–2 trang trên máy đọc e-ink.</strong> Bỏ animation, blur, text-shadow, hyphens, background gradient, font custom. Dùng stylesheet tối giản — convert xong trong vài chục giây.</>} side="top">
+                <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help">
+                  <Info className="h-3 w-3" />
+                </span>
+              </Tooltip>
             </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              <strong>Dùng khi sách chỉ hiện 1–2 trang trên máy đọc e-ink.</strong> Bỏ animation, blur, text-shadow, hyphens, background gradient, font custom. Dùng stylesheet tối giản — convert xong trong vài chục giây.
-            </p>
           </div>
         </div>
 
@@ -393,10 +402,12 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
               <ShieldOff className="h-4 w-4 text-primary" />
               <span className="text-sm font-medium">AI Watermark Cleanup</span>
               {aiWatermarkClean && <span className="text-[10px] rounded-full bg-primary/15 text-primary px-1.5 py-0.5 font-medium">ON</span>}
+              <Tooltip content="Detects repeated watermark phrases in the ebook and removes them during conversion" side="top">
+                <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help">
+                  <Info className="h-3 w-3" />
+                </span>
+              </Tooltip>
             </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Detects repeated watermark phrases in the ebook and removes them during conversion
-            </p>
           </div>
         </div>
       </Card>
