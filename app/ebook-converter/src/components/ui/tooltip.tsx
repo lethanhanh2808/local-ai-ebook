@@ -30,8 +30,11 @@ export interface TooltipProps {
 }
 
 const sideClasses: Record<NonNullable<TooltipProps['side']>, string> = {
-  top: 'bottom-full left-1/2 -translate-x-1/2 mb-2',
-  bottom: 'top-full left-1/2 -translate-x-1/2 mt-2',
+  // Left-align the bubble to the trigger so it reads naturally left→right
+  // from the (usually left-positioned) info icon instead of being centred
+  // over the tiny icon and clipping off the left edge.
+  top: 'bottom-full left-0 mb-2',
+  bottom: 'top-full left-0 mt-2',
   left: 'right-full top-1/2 -translate-y-1/2 mr-2',
   right: 'left-full top-1/2 -translate-y-1/2 ml-2',
 };
@@ -75,7 +78,7 @@ export function Tooltip({ content, side = 'top', children, className }: TooltipP
         id={id}
         hidden={!open}
         className={cn(
-          'pointer-events-none absolute z-30 max-w-xs whitespace-nowrap rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md',
+          'pointer-events-none absolute z-30 w-[30rem] max-w-[30rem] max-h-[3.75rem] overflow-hidden whitespace-normal break-words rounded-md border border-border bg-popover px-3 py-2 text-xs leading-snug text-popover-foreground shadow-md',
           'animate-in fade-in-0',
           sideClasses[side],
         )}

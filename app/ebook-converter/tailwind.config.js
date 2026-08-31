@@ -47,6 +47,10 @@ module.exports = {
           DEFAULT: 'hsl(var(--card))',
           foreground: 'hsl(var(--card-foreground))',
         },
+        popover: {
+          DEFAULT: 'hsl(var(--popover))',
+          foreground: 'hsl(var(--popover-foreground))',
+        },
         // Modal backdrop tint. Resolves to `hsl(0 0% 0%)` so callers can
         // tweak alpha per use site via the `/NN` Tailwind syntax
         // (`bg-modal-overlay/50` → 50 % black). The bare class

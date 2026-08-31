@@ -15,7 +15,7 @@ import {
   Mic, Languages, Wand2, ShieldOff, ExternalLink,
   Cloud, Server, Wrench, Trash2, Image as ImageIcon, Zap, Activity, Smartphone,
   Plus, Database, Bookmark, Palette, Monitor, Sun, Moon, BookOpen,
-  Brain, Download, Users,
+  Brain, Download, Users, Info,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -23,6 +23,7 @@ import { Card } from '@/components/ui/card';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Tooltip } from '@/components/ui/tooltip';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { cn } from '@/lib/utils';
 import { ServiceHealth } from '@/components/status/ServiceHealth';
@@ -249,7 +250,7 @@ export default function SettingsPage() {
   useEffect(() => {
     const syncHash = () => {
       const next = window.location.hash.slice(1);
-      if (['ai', 'tts', 'conversion', 'watermarks', 'image', 'appearance', 'importers'].includes(next)) setActiveTab(next);
+      if (['ai', 'tts', 'conversion', 'watermarks', 'image', 'appearance', 'importers', 'users'].includes(next)) setActiveTab(next);
     };
     syncHash();
     window.addEventListener('hashchange', syncHash);
@@ -562,6 +563,9 @@ export default function SettingsPage() {
           <TabsTrigger value="importers" className="gap-1.5">
             <Download className="h-3.5 w-3.5" /> Importers
           </TabsTrigger>
+          <TabsTrigger value="users" className="gap-1.5">
+            <Users className="h-3.5 w-3.5" /> User &amp; access
+          </TabsTrigger>
         </TabsList>
 
         {/* ── AI Provider tab ─────────────────────────────────────────────── */}
@@ -611,58 +615,18 @@ export default function SettingsPage() {
             </div>
 
             {/* Provider-specific config */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-border">
-              <div className="space-y-1.5 sm:col-span-2">
-                <label htmlFor="settings-ai-key" className="text-xs font-medium flex items-center gap-1.5">
-                  <KeyRound className="h-3 w-3" />
-                  API Key {aiProvider.needsKey && <span className="text-destructive">*</span>}
-                </label>
-                <div className="flex gap-2">
-                  <Input
-                    id="settings-ai-key"
-                    type={showKey ? 'text' : 'password'}
-                    value={settings.aiApiKey ?? ''}
-                    onChange={(e) => update('aiApiKey', e.target.value)}
-                    placeholder={
-                      aiProvider.needsKey
-                        ? (settings.aiApiKeyMasked
-                            ? `Hiện đã lưu: ${settings.aiApiKeyMasked} — nhập key mới để thay`
-                            : 'sk-...')
-                        : '(không cần cho provider này)'
-                    }
-                    disabled={!aiProvider.needsKey}
-                    className="flex-1 font-mono"
-                  />
-                  {aiProvider.needsKey && settings.aiApiKeyMasked && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      type="button"
-                      onClick={() => clearSavedKey('ai')}
-                      title="Xoá key hiện tại"
-                      className="text-destructive"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  )}
-                  {aiProvider.needsKey && (
-                    <Button size="sm" variant="ghost" onClick={() => setShowKey((v) => !v)} title={showKey ? 'Ẩn key' : 'Hiện key'}>
-                      {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                    </Button>
-                  )}
-                </div>
-                {settings.aiApiKeyMasked && (
-                  <div
-                    data-testid="api-key-saved-badge"
-                    className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300"
-                  >
-                    <Check className="h-3 w-3" />
-                    <span>
-                      Key đã lưu (<span className="font-mono">{settings.aiApiKeyMasked}</span>) — để trống + Save sẽ giữ nguyên
-                    </span>
-                  </div>
-                )}
-              </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-4 pt-4 border-t border-border">
+              <ApiKeyField
+                id="settings-ai-key"
+                label={`API Key${aiProvider.needsKey ? ' *' : ''}`}
+                value={settings.aiApiKey}
+                masked={settings.aiApiKeyMasked}
+                required={aiProvider.needsKey}
+                showKey={showKey}
+                onToggleShow={() => setShowKey((v) => !v)}
+                onChange={(v) => update('aiApiKey', v)}
+                onClear={() => clearSavedKey('ai')}
+              />
 
               <ModelField
                 label="Model"
@@ -685,35 +649,37 @@ export default function SettingsPage() {
                     ? (textModels.length ? '' : 'Bấm "Lấy danh sách" để lấy model từ OMLX')
                     : 'vd: gpt-4o-mini, MiniMax-Text-01, qwen2.5-7b'
                 }
-                helpText={
+                tooltip={
                   settings.aiProvider === 'omlx-local' ? (
                     <>Model OMLX local lấy từ biến môi trường <span className="font-mono">OMLX_MODEL</span> trên server. Mặc định: <span className="font-mono">default</span>.</>
                   ) : undefined
                 }
               />
               {modelsError && textModels.length === 0 && settings.aiProvider !== 'omlx-local' && (
-                <p className="text-[10px] text-amber-600 dark:text-amber-400 sm:col-span-2">{modelsError}</p>
+                <p className="text-[10px] text-amber-600 dark:text-amber-400 sm:col-span-2 -mt-2">{modelsError}</p>
               )}
 
               {(settings.aiProvider === 'custom' || settings.aiBaseUrl) && (
-                <div className="space-y-1.5">
-                  <label htmlFor="settings-ai-url" className="text-xs font-medium flex items-center gap-1.5">
-                    Base URL
-                    <a href="https://platform.openai.com/docs/api-reference" target="_blank" rel="noreferrer" aria-label="Open AI API documentation in a new tab" className="text-muted-foreground hover:text-foreground">
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
-                  </label>
+                <Field
+                  label="Base URL"
+                  icon={<a href="https://platform.openai.com/docs/api-reference" target="_blank" rel="noreferrer" aria-label="Open AI API documentation in a new tab" className="text-muted-foreground hover:text-foreground"><ExternalLink className="h-3 w-3" /></a>}
+                  htmlFor="settings-ai-url"
+                >
                   <Input id="settings-ai-url" type="url" value={settings.aiBaseUrl ?? ''}
                     onChange={(e) => update('aiBaseUrl', e.target.value)}
                     placeholder="https://api.example.com/v1"
                     className="font-mono"
                   />
                   {settings.aiProvider === 'custom' && (
-                    <div className="rounded-md border border-border bg-muted/20 p-2.5">
+                    <div className="mt-2 rounded-md border border-border bg-muted/20 p-2.5">
                       <div className="flex items-center justify-between gap-3">
                         <div className="min-w-0">
-                          <p className="text-[11px] font-medium">Disable TLS certificate verification</p>
-                          <p className="text-[10px] text-muted-foreground">Use for self-signed or private CA endpoints like gateway/bridge services.</p>
+                          <Tooltip content="Use for self-signed or private CA endpoints like gateway/bridge services." side="top">
+                            <span tabIndex={0} className="inline-flex items-center gap-1.5 text-[11px] font-medium cursor-help">
+                              Disable TLS certificate verification
+                              <Info className="h-3 w-3 text-muted-foreground/70" />
+                            </span>
+                          </Tooltip>
                         </div>
                         <Switch
                           checked={!!settings.aiAllowInsecureTls}
@@ -723,26 +689,32 @@ export default function SettingsPage() {
                       </div>
                     </div>
                   )}
-                </div>
+                </Field>
               )}
 
-              <div className="space-y-1.5">
-                <label htmlFor="settings-ai-max-tokens" className="text-xs font-medium">Max tokens</label>
+              <Field label="Max tokens" htmlFor="settings-ai-max-tokens">
                 <Input id="settings-ai-max-tokens" type="number" min={64} max={32000} step={64} value={settings.aiMaxTokens}
                   onChange={(e) => update('aiMaxTokens', parseInt(e.target.value, 10) || 4096)}
                 />
-              </div>
+              </Field>
 
-              <div className="space-y-1.5">
-                <label htmlFor="settings-ai-temperature" className="text-xs font-medium">
-                  Temperature <span className="font-mono text-muted-foreground">{settings.aiTemperature.toFixed(2)}</span>
-                </label>
+              <Field
+                label="Temperature"
+                htmlFor="settings-ai-temperature"
+                tooltip="0 = deterministic (repeatable output) · 2 = most creative. Lower values keep the model on-topic; higher values add variety."
+                help={
+                  <span className="flex items-center justify-between">
+                    <span>0 → 2</span>
+                    <span className="font-mono font-semibold text-foreground">{settings.aiTemperature.toFixed(2)}</span>
+                  </span>
+                }
+              >
                 <input id="settings-ai-temperature" type="range" min={0} max={2} step={0.05} value={settings.aiTemperature}
                   aria-valuetext={settings.aiTemperature.toFixed(2)}
                   onChange={(e) => update('aiTemperature', parseFloat(e.target.value))}
-                  className="w-full"
+                  className="w-full accent-primary"
                 />
-              </div>
+              </Field>
 
               {/* Per-mode `enable_thinking` toggles (2026-07-12).
                   Combine (chunked, default ON) — small batches where the
@@ -757,10 +729,12 @@ export default function SettingsPage() {
                     <label htmlFor="settings-ai-thinking-combine" className="text-xs font-medium flex items-center gap-1.5">
                       <Brain className="h-3.5 w-3.5 text-muted-foreground" />
                       Thinking — Combine mode
+                      <Tooltip content="Bật enable_thinking cho các batch nhỏ (4 đoạn/batch). Khuyến nghị ON cho model thinking (Qwen3, DeepSeek-R1)." side="top">
+                        <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help">
+                          <Info className="h-3 w-3" />
+                        </span>
+                      </Tooltip>
                     </label>
-                    <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">
-                      Bật <span className="font-mono">enable_thinking</span> cho các batch nhỏ (4 đoạn/batch). Khuyến nghị ON cho model thinking (Qwen3, DeepSeek-R1).
-                    </p>
                   </div>
                   <Switch
                     id="settings-ai-thinking-combine"
@@ -773,10 +747,12 @@ export default function SettingsPage() {
                     <label htmlFor="settings-ai-thinking-full-llm" className="text-xs font-medium flex items-center gap-1.5">
                       <Brain className="h-3.5 w-3.5 text-muted-foreground" />
                       Thinking — Full LLM mode
+                      <Tooltip content="Bật enable_thinking cho whole-chapter LLM call. Mặc định OFF vì prompt lớn chiếm hết output budget trước khi kịp xuất rows." side="top">
+                        <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help">
+                          <Info className="h-3 w-3" />
+                        </span>
+                      </Tooltip>
                     </label>
-                    <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">
-                      Bật <span className="font-mono">enable_thinking</span> cho whole-chapter LLM call. Mặc định OFF vì prompt lớn chiếm hết output budget trước khi kịp xuất rows.
-                    </p>
                   </div>
                   <Switch
                     id="settings-ai-thinking-full-llm"
@@ -865,39 +841,39 @@ export default function SettingsPage() {
                 (restart worker to apply)
               </span>
             </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-medium">Max parallel jobs</label>
-                  <span className="text-xs font-mono text-muted-foreground">{settings.workerConcurrency}</span>
-                </div>
-                <input type="range" min={1} max={8} step={1} aria-label="Max parallel jobs"
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-4">
+              <Field
+                label="Max parallel jobs"
+                htmlFor="settings-worker-concurrency"
+                tooltip="Số conversion chạy đồng thời. Tăng để tận dụng AI provider nhanh (local 4B/9B, MiniMax), giảm cho máy yếu. Cần restart worker để áp dụng."
+                help={
+                  <span className="flex items-center justify-between">
+                    <span>1 → 8</span>
+                    <span className="font-mono font-semibold text-foreground">{settings.workerConcurrency}</span>
+                  </span>
+                }
+              >
+                <input id="settings-worker-concurrency" type="range" min={1} max={8} step={1} aria-label="Max parallel jobs"
                   value={settings.workerConcurrency}
                   onChange={(e) => update('workerConcurrency', parseInt(e.target.value, 10) || 2)}
-                  className="w-full" />
-                <div className="flex justify-between text-[10px] text-muted-foreground">
-                  <span>1 (chậm)</span><span>4 (cân bằng)</span><span>8 (nhanh)</span>
-                </div>
-                <p className="text-[10px] text-muted-foreground">
-                  Số conversion chạy đồng thời. Tăng để tận dụng AI provider nhanh (local 4B/9B, MiniMax), giảm cho máy yếu.
-                </p>
-              </div>
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-medium">Chapter concurrency (per job)</label>
-                  <span className="text-xs font-mono text-muted-foreground">{settings.workerChapterConcurrency}</span>
-                </div>
-                <input type="range" min={1} max={8} step={1} aria-label="Chapter concurrency per job"
+                  className="w-full accent-primary" />
+              </Field>
+              <Field
+                label="Chapter concurrency (per job)"
+                htmlFor="settings-worker-chapter-concurrency"
+                tooltip="Trong 1 conversion, deep-format nhiều chương đồng thời. Tăng để giảm thời gian, nhưng tốn nhiều API call hơn. Cần restart worker để áp dụng."
+                help={
+                  <span className="flex items-center justify-between">
+                    <span>1 → 8</span>
+                    <span className="font-mono font-semibold text-foreground">{settings.workerChapterConcurrency}</span>
+                  </span>
+                }
+              >
+                <input id="settings-worker-chapter-concurrency" type="range" min={1} max={8} step={1} aria-label="Chapter concurrency per job"
                   value={settings.workerChapterConcurrency}
                   onChange={(e) => update('workerChapterConcurrency', parseInt(e.target.value, 10) || 1)}
-                  className="w-full" />
-                <div className="flex justify-between text-[10px] text-muted-foreground">
-                  <span>1 (an toàn)</span><span>4</span><span>8 (nhanh)</span>
-                </div>
-                <p className="text-[10px] text-muted-foreground">
-                  Trong 1 conversion, deep-format nhiều chương đồng thời. Tăng để giảm thời gian, nhưng tốn nhiều API call hơn.
-                </p>
-              </div>
+                  className="w-full accent-primary" />
+              </Field>
             </div>
           </Card>
 
@@ -908,23 +884,22 @@ export default function SettingsPage() {
                 (live — no restart)
               </span>
             </h2>
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-medium">Parallel chapter LLM calls</label>
-                <span className="text-xs font-mono text-muted-foreground">{settings.aiEnhanceConcurrency}</span>
-              </div>
-              <input type="range" min={1} max={16} step={1} aria-label="Parallel chapter LLM calls"
+            <Field
+              label="Parallel chapter LLM calls"
+              htmlFor="settings-ai-enhance-concurrency"
+              tooltip="Số chapter AI-enhance chạy đồng thời. Thay đổi có hiệu lực NGAY trên batch kế tiếp của job đang chạy (không cần restart worker). Tăng nếu API cloud nhanh; giảm nếu model local (Apple Silicon KV cache bão hoà)."
+              help={
+                <span className="flex items-center justify-between">
+                  <span>1 → 16</span>
+                  <span className="font-mono font-semibold text-foreground">{settings.aiEnhanceConcurrency}</span>
+                </span>
+              }
+            >
+              <input id="settings-ai-enhance-concurrency" type="range" min={1} max={16} step={1} aria-label="Parallel chapter LLM calls"
                 value={settings.aiEnhanceConcurrency}
                 onChange={(e) => update('aiEnhanceConcurrency', parseInt(e.target.value, 10) || 3)}
-                className="w-full" />
-              <div className="flex justify-between text-[10px] text-muted-foreground">
-                <span>1 (an toàn)</span><span>4 (cân bằng)</span><span>8 (nhanh)</span><span>16 (tối đa)</span>
-              </div>
-              <p className="text-[10px] text-muted-foreground">
-                Số chapter AI-enhance chạy đồng thời. Thay đổi có hiệu lực NGAY trên batch kế tiếp của job đang chạy
-                (không cần restart worker). Tăng nếu API cloud nhanh; giảm nếu model local (Apple Silicon KV cache bão hoà).
-              </p>
-            </div>
+                className="w-full accent-primary" />
+            </Field>
           </Card>
 
           <Card className="p-5 space-y-4">
@@ -935,40 +910,41 @@ export default function SettingsPage() {
               <ToggleRow
                 icon={<Sparkles className="h-4 w-4" />}
                 label="AI enhance (auto-repair HTML)"
-                description="Bật LLM sửa HTML lỗi khi convert. Tốn thêm ~10-30s nhưng chất lượng cao hơn nhiều."
+                tooltip="Bật LLM sửa HTML lỗi khi convert. Tốn thêm ~10-30s nhưng chất lượng cao hơn nhiều."
                 checked={settings.defaultAiEnhance}
                 onChange={(v) => update('defaultAiEnhance', v)}
               />
               <ToggleRow
                 icon={<Wand2 className="h-4 w-4 text-amber-600 dark:text-amber-400" />}
                 label="Deep format (Vietnamese novel)"
-                description="Dùng LLM re-format từng chương cho tiểu thuyết Việt — gộp/tách đoạn văn, định dạng hội thoại (nháy cong), ngắt cảnh bằng &lt;hr/&gt;. Chậm (~2-5 phút/chương)."
+                tooltip="Dùng LLM re-format từng chương cho tiểu thuyết Việt — gộp/tách đoạn văn, định dạng hội thoại (nháy cong), ngắt cảnh bằng <hr/>. Chậm (~2-5 phút/chương)."
                 checked={settings.defaultDeepFormat}
                 onChange={(v) => update('defaultDeepFormat', v)}
               />
               <ToggleRow
                 icon={<ShieldOff className="h-4 w-4" />}
                 label="AI watermark cleaning"
-                description="Tự động phát hiện & loại bỏ quảng cáo / watermark cuối chương (có memory để lần sau detect nhanh hơn)."
+                tooltip="Tự động phát hiện & loại bỏ quảng cáo / watermark cuối chương (có memory để lần sau detect nhanh hơn)."
                 checked={settings.defaultAiWatermarkClean}
                 onChange={(v) => update('defaultAiWatermarkClean', v)}
               />
               <ToggleRow
                 icon={<Smartphone className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />}
                 label="Reader-friendly (Onyx Boox / Kobo / Kindle)"
-                description="Mặc định BẬT. Strip CSS nặng (animation, blur, text-shadow, hyphens) + dùng stylesheet tối giản để EPUB render đúng trên máy đọc e-ink. Tắt nếu muốn giữ styling gốc của sách."
+                tooltip="Mặc định BẬT. Strip CSS nặng (animation, blur, text-shadow, hyphens) + dùng stylesheet tối giản để EPUB render đúng trên máy đọc e-ink. Tắt nếu muốn giữ styling gốc của sách."
                 checked={settings.defaultReaderFriendly}
                 onChange={(v) => update('defaultReaderFriendly', v)}
               />
             </div>
 
-            <div className="space-y-1.5 pt-2 border-t border-border">
-              <label className="text-xs font-medium flex items-center gap-1.5">
-                <Languages className="h-3 w-3" />
-                Ngôn ngữ mặc định cho EPUB mới
-              </label>
+            <Field
+              label="Ngôn ngữ mặc định cho EPUB mới"
+              icon={<Languages className="h-3 w-3" />}
+              htmlFor="settings-default-language"
+              full
+            >
               <Select value={settings.defaultLanguage} onValueChange={(v) => update('defaultLanguage', v)}>
-                <SelectTrigger className="w-full" aria-label="Ngôn ngữ mặc định cho EPUB mới">
+                <SelectTrigger id="settings-default-language" className="w-full" aria-label="Ngôn ngữ mặc định cho EPUB mới">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -977,7 +953,7 @@ export default function SettingsPage() {
                   <SelectItem value="mixed">Hỗn hợp</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
+            </Field>
           </Card>
         </TabsContent>
 
@@ -992,6 +968,11 @@ export default function SettingsPage() {
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold flex items-center gap-2">
                 <ImageIcon className="h-4 w-4 text-primary" /> Image generation
+                <Tooltip content="AI generates black-and-white illustrations for “highlight” chapters of novels. Output style adapts to the story (e.g. ink-wash for tu tiểu thuyết, manga for modern web novels)." side="top">
+                  <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help">
+                    <Info className="h-3 w-3" />
+                  </span>
+                </Tooltip>
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-medium uppercase tracking-wider">
                   BETA
                 </span>
@@ -1005,10 +986,6 @@ export default function SettingsPage() {
                 {settings.imageProvider === 'none' ? 'Tắt' : settings.imageProvider}
               </span>
             </div>
-            <p className="text-[10px] text-muted-foreground -mt-2">
-              AI generates black-and-white illustrations for &ldquo;highlight&rdquo; chapters of novels.
-              Output style adapts to the story (e.g. ink-wash for tu tiểu thuyết, manga for modern web novels).
-            </p>
 
             {/* Provider cards */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -1032,28 +1009,18 @@ export default function SettingsPage() {
 
             {settings.imageProvider !== 'none' && (
               <>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-border">
-                  <div className="space-y-1.5">
-                    <label htmlFor="settings-image-key" className="text-xs font-medium flex items-center gap-1.5">
-                      <KeyRound className="h-3 w-3" />
-                      Image API Key
-                    </label>
-                    <div className="flex gap-2">
-                      <Input
-                        id="settings-image-key"
-                        type="password"
-                        value={settings.imageApiKey ?? ''}
-                        onChange={(e) => update('imageApiKey', e.target.value)}
-                        placeholder={settings.imageApiKeyMasked ? `Hiện: ${settings.imageApiKeyMasked}` : 'sk-...'}
-                        className="font-mono"
-                      />
-                      {settings.imageApiKeyMasked && (
-                        <Button type="button" size="sm" variant="outline" onClick={() => clearSavedKey('image')} className="text-destructive" aria-label="Xoá Image API key đã lưu">
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
-                    </div>
-                  </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-4 pt-4 border-t border-border">
+                  <ApiKeyField
+                    id="settings-image-key"
+                    label="Image API Key"
+                    value={settings.imageApiKey}
+                    masked={settings.imageApiKeyMasked}
+                    required
+                    showKey={showKey}
+                    onToggleShow={() => setShowKey((v) => !v)}
+                    onChange={(v) => update('imageApiKey', v)}
+                    onClear={() => clearSavedKey('image')}
+                  />
 
                   <ModelField
                     label="Model"
@@ -1072,28 +1039,31 @@ export default function SettingsPage() {
                   />
 
                   {(settings.imageProvider === 'custom' || settings.imageBaseUrl) && (
-                    <div className="space-y-1.5 sm:col-span-2">
-                      <label htmlFor="settings-image-url" className="text-xs font-medium">Base URL</label>
+                    <Field label="Base URL" htmlFor="settings-image-url" full
+                      tooltip={
+                        <span>
+                          Để trống sẽ dùng default của provider:{' '}
+                          <span className="font-mono">
+                            {settings.imageProvider === 'openai'  ? 'https://api.openai.com/v1' :
+                             settings.imageProvider === 'minimax' ? 'https://api.minimax.io/v1' :
+                             'bắt buộc cho Custom'}
+                          </span>
+                        </span>
+                      }
+                    >
                       <Input id="settings-image-url" type="url" value={settings.imageBaseUrl ?? ''}
                         onChange={(e) => update('imageBaseUrl', e.target.value)}
                         placeholder="https://api.example.com/v1"
                         className="font-mono"
                       />
-                      <p className="text-[10px] text-muted-foreground">
-                        Để trống sẽ dùng default của provider:{' '}
-                        <span className="font-mono">
-                          {settings.imageProvider === 'openai'  ? 'https://api.openai.com/v1' :
-                           settings.imageProvider === 'minimax' ? 'https://api.minimax.io/v1' :
-                           'bắt buộc cho Custom'}
-                        </span>
-                      </p>
-                    </div>
+                    </Field>
                   )}
 
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-medium">Art style</label>
+                  <Field label="Art style" htmlFor="settings-image-style"
+                    tooltip="Default is black-and-white anime line-art — keeps cover + chapters visually cohesive. Same character regenerates with matching look via per-chapter seed anchoring."
+                  >
                     <Select value={settings.imageStyle} onValueChange={(v) => update('imageStyle', v)}>
-                      <SelectTrigger className="w-full" aria-label="Art style">
+                      <SelectTrigger id="settings-image-style" className="w-full" aria-label="Art style">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -1113,22 +1083,16 @@ export default function SettingsPage() {
                         <SelectItem value="none">Provider default (no style guide)</SelectItem>
                       </SelectContent>
                     </Select>
-                    <p className="text-[10px] text-muted-foreground">
-                      Default is black-and-white anime line-art — keeps cover + chapters visually cohesive.
-                      Same character regenerates with matching look via per-chapter seed anchoring.
-                    </p>
-                  </div>
+                  </Field>
 
-                  <div className="space-y-1.5">
-                    <label htmlFor="settings-image-max" className="text-xs font-medium">Max illustrations per book</label>
+                  <Field label="Max illustrations per book" htmlFor="settings-image-max"
+                    tooltip="AI sẽ phân tích từng chương, chỉ chọn những chương có cảnh đáng kể (giai đoạn quan trọng, đấu pháp, gặp gỡ nhân vật, v.v.) và tạo ảnh cho tối đa số chương trên."
+                  >
                     <Input id="settings-image-max" type="number" min={0} max={50} value={settings.imageMaxPerBook}
                       onChange={(e) => update('imageMaxPerBook', parseInt(e.target.value, 10) || 0)}
                     />
-                  </div>
+                  </Field>
                 </div>
-                <p className="text-[10px] text-muted-foreground">
-                  AI sẽ phân tích từng chương, chỉ chọn những chương có cảnh đáng kể (giai đoạn quan trọng, đấu pháp, gặp gỡ nhân vật, v.v.) và tạo ảnh cho tối đa số chương trên.
-                </p>
               </>
             )}
           </Card>
@@ -1136,13 +1100,15 @@ export default function SettingsPage() {
 
         <TabsContent value="appearance" className="space-y-4 outline-none">
           <Card className="p-5 space-y-4">
-            <div>
+            <div className="flex items-center gap-1.5">
               <h2 className="text-sm font-semibold flex items-center gap-2">
                 <Palette className="h-4 w-4 text-primary" /> Giao diện ứng dụng
               </h2>
-              <p className="mt-1 text-[11px] text-muted-foreground">
-                Chọn giao diện cố định hoặc tự động theo cài đặt của hệ điều hành.
-              </p>
+              <Tooltip content="Chọn giao diện cố định hoặc tự động theo cài đặt của hệ điều hành." side="top">
+                <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help">
+                  <Info className="h-3 w-3" />
+                </span>
+              </Tooltip>
             </div>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" role="group" aria-label="Giao diện ứng dụng">
               {([
@@ -1150,31 +1116,34 @@ export default function SettingsPage() {
                 { id: 'light' as const, label: 'Sáng', description: 'Nền sáng, độ tương phản cao', Icon: Sun },
                 { id: 'dark' as const, label: 'Tối', description: 'Dịu mắt trong môi trường tối', Icon: Moon },
               ]).map(({ id: mode, label, description, Icon }) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => setAppTheme(mode)}
-                  aria-pressed={theme === mode}
-                  className={cn(
-                    'rounded-lg border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                    theme === mode ? 'border-primary bg-primary/5 ring-1 ring-primary/40' : 'border-border hover:bg-muted/40',
-                  )}
-                >
-                  <span className="flex items-center gap-2 text-sm font-semibold"><Icon className="h-4 w-4" />{label}</span>
-                  <span className="mt-1 block text-[10px] text-muted-foreground">{description}</span>
-                </button>
+                <Tooltip key={mode} content={description} side="bottom">
+                  <button
+                    type="button"
+                    onClick={() => setAppTheme(mode)}
+                    aria-pressed={theme === mode}
+                    className={cn(
+                      'w-full rounded-lg border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                      theme === mode ? 'border-primary bg-primary/5 ring-1 ring-primary/40' : 'border-border hover:bg-muted/40',
+                    )}
+                  >
+                    <span className="flex items-center gap-2 text-sm font-semibold"><Icon className="h-4 w-4" />{label}</span>
+                  </button>
+                </Tooltip>
               ))}
             </div>
           </Card>
 
           <Card className="p-5 space-y-3">
-            <h2 className="text-sm font-semibold flex items-center gap-2">
-              <BookOpen className="h-4 w-4 text-primary" /> Tuỳ chỉnh trình đọc
-            </h2>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              Kiểu trang, font, cỡ chữ, giãn dòng, thụt đầu dòng và lề được lưu riêng trên thiết bị này.
-              Mở một cuốn sách rồi chọn biểu tượng cài đặt trong thanh công cụ; nhấn <kbd className="rounded border px-1 py-0.5 font-mono">?</kbd> để xem phím tắt.
-            </p>
+            <div className="flex items-center gap-1.5">
+              <h2 className="text-sm font-semibold flex items-center gap-2">
+                <BookOpen className="h-4 w-4 text-primary" /> Tuỳ chỉnh trình đọc
+              </h2>
+              <Tooltip content="Kiểu trang, font, cỡ chữ, giãn dòng, thụt đầu dòng và lề được lưu riêng trên thiết bị này. Mở một cuốn sách rồi chọn biểu tượng cài đặt trong thanh công cụ; nhấn ? để xem phím tắt." side="top">
+                <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help">
+                  <Info className="h-3 w-3" />
+                </span>
+              </Tooltip>
+            </div>
             <Link href="/library" className="inline-flex h-8 items-center justify-center rounded-md border border-input bg-background px-3 text-xs font-medium hover:bg-accent hover:text-accent-foreground">
               Mở thư viện
             </Link>
@@ -1185,21 +1154,20 @@ export default function SettingsPage() {
         <TabsContent value="importers" className="space-y-4 outline-none">
           <CalibrePanel />
         </TabsContent>
-      </Tabs>
 
-      <div className="space-y-4 pt-2">
-        <div className="flex items-center gap-2 border-b border-border pb-2">
-          <Users className="h-4 w-4 text-primary" />
-          <h2 className="text-sm font-semibold">User & access settings</h2>
-        </div>
-
-        <Card className="p-5 space-y-4">
-          <div>
-            <h2 className="text-sm font-semibold flex items-center gap-2">
-              <Users className="h-4 w-4 text-primary" /> My profile
-            </h2>
-            <p className="mt-1 text-[11px] text-muted-foreground">Update your visible name, email, and password for local app access.</p>
-          </div>
+        {/* ── User & access tab ─────────────────────────────────────────── */}
+        <TabsContent value="users" className="space-y-4 outline-none">
+          <Card className="p-5 space-y-4">
+            <div className="flex items-center gap-1.5">
+              <h2 className="text-sm font-semibold flex items-center gap-2">
+                <Users className="h-4 w-4 text-primary" /> My profile
+              </h2>
+              <Tooltip content="Update your visible name, email, and password for local app access." side="top">
+                <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help">
+                  <Info className="h-3 w-3" />
+                </span>
+              </Tooltip>
+            </div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <div className="space-y-1.5">
               <label className="text-xs font-medium">Display name</label>
@@ -1221,17 +1189,20 @@ export default function SettingsPage() {
             </Button>
           </div>
         </Card>
-      </div>
 
-      <Card className="p-5 space-y-4">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold flex items-center gap-2">
-              <Users className="h-4 w-4 text-primary" /> Access & user management
-            </h2>
-            <p className="mt-1 text-[11px] text-muted-foreground">Admin-only user CRUD and role assignment for local app access.</p>
-          </div>
-          {currentUser?.role === 'ADMIN' && (
+        <Card className="p-5 space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-1.5">
+              <h2 className="text-sm font-semibold flex items-center gap-2">
+                <Users className="h-4 w-4 text-primary" /> Access & user management
+              </h2>
+              <Tooltip content="Admin-only user CRUD and role assignment for local app access." side="top">
+                <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help">
+                  <Info className="h-3 w-3" />
+                </span>
+              </Tooltip>
+            </div>
+            {currentUser?.role === 'ADMIN' && (
             <Button type="button" variant="outline" size="sm" onClick={() => { void fetchUsers(); void fetchAuditLogs(); }}>
               <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> Refresh
             </Button>
@@ -1304,11 +1275,15 @@ export default function SettingsPage() {
       </Card>
 
       <Card className="p-5 space-y-4">
-        <div>
+        <div className="flex items-center gap-1.5">
           <h2 className="text-sm font-semibold flex items-center gap-2">
             <Database className="h-4 w-4 text-primary" /> Admin audit log
           </h2>
-          <p className="mt-1 text-[11px] text-muted-foreground">Recent local admin actions, user creation, setting changes, and profile updates.</p>
+          <Tooltip content="Recent local admin actions, user creation, setting changes, and profile updates." side="top">
+            <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help">
+              <Info className="h-3 w-3" />
+            </span>
+          </Tooltip>
         </div>
 
         {currentUser?.role !== 'ADMIN' ? (
@@ -1335,6 +1310,8 @@ export default function SettingsPage() {
           </div>
         )}
       </Card>
+      </TabsContent>
+      </Tabs>
 
       <footer className="text-center text-[10px] text-muted-foreground pt-4 border-t border-border">
         Cài đặt lưu trong database. Áp dụng cho tất cả AI requests và conversion jobs.
@@ -1351,7 +1328,7 @@ export default function SettingsPage() {
 function ModelField({
   label, models, current, loading, omlxHint,
   onChange, onRefresh, onPickFast,
-  placeholder, helpText,
+  placeholder, helpText, tooltip,
 }: {
   label: string;
   models: string[];
@@ -1363,12 +1340,22 @@ function ModelField({
   onPickFast?: () => void;
   placeholder: string;
   helpText?: ReactNode;
+  tooltip?: ReactNode;
 }) {
   const fieldId = useId();
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between">
-        <label htmlFor={fieldId} className="text-xs font-medium">{label}</label>
+        <label htmlFor={fieldId} className="text-xs font-medium flex items-center gap-1.5">
+          {label}
+          {tooltip && (
+            <Tooltip content={tooltip} side="top">
+              <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help">
+                <Info className="h-3 w-3" />
+              </span>
+            </Tooltip>
+          )}
+        </label>
         <div className="flex items-center gap-1">
           {omlxHint && models.length > 0 && onPickFast && (
             <button
@@ -1653,9 +1640,123 @@ function WatermarkMemoryPanel() {
   );
 }
 
+/* ──────────────────────────────────────────────────────────────────────────
+ * Field — consistent labelled form row used across every settings tab.
+ *
+ * Guarantees:
+ *   - label + optional icon are always left-aligned on one baseline
+ *   - the control sits directly below the label with a fixed 1.5 gap
+ *   - help text + error share the same left inset as the control
+ *   - `full` spans both columns of a 2-col grid; otherwise it occupies one
+ *
+ * Using this everywhere removes the ad-hoc `space-y-1.5` + hand-rolled label
+ * drift that made fields mis-align between tabs.
+ * ──────────────────────────────────────────────────────────────────────── */
+function Field({
+  label, icon, htmlFor, full, help, error, tooltip, children,
+}: {
+  label: string;
+  icon?: ReactNode;
+  htmlFor?: string;
+  full?: boolean;
+  help?: ReactNode;
+  error?: string | null;
+  /** When set, an info icon (ⓘ) appears next to the label and shows this
+   *  text on hover/focus instead of always-visible helper text. */
+  tooltip?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div className={cn('space-y-1.5', full && 'sm:col-span-2')}>
+      <label htmlFor={htmlFor} className="flex items-center gap-1.5 text-xs font-medium">
+        {icon}
+        {label}
+        {tooltip && (
+          <Tooltip content={tooltip} side="top">
+            <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help">
+              <Info className="h-3 w-3" />
+            </span>
+          </Tooltip>
+        )}
+      </label>
+      {children}
+      {help && !error && <p className="text-[10px] leading-relaxed text-muted-foreground">{help}</p>}
+      {error && <p className="text-[10px] leading-relaxed text-amber-600 dark:text-amber-400">{error}</p>}
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * ApiKeyField — shared API-key input row (AI + Image tabs).
+ *
+ * Renders the label, a password/text input, an optional "clear saved key"
+ * button (only when a masked key is already stored), and a show/hide toggle
+ * (only when a key is required). The "key đã lưu" confirmation badge appears
+ * below the input so it never shifts the input's vertical alignment.
+ * ──────────────────────────────────────────────────────────────────────── */
+function ApiKeyField({
+  id, label, value, masked, required, showKey, onToggleShow, onChange, onClear,
+}: {
+  id: string;
+  label: string;
+  value: string | null;
+  masked: string | null;
+  required: boolean;
+  showKey: boolean;
+  onToggleShow: () => void;
+  onChange: (v: string) => void;
+  onClear: () => void;
+}) {
+  return (
+    <Field
+      label={label}
+      icon={<KeyRound className="h-3 w-3" />}
+      htmlFor={id}
+      full
+      help={
+        required
+          ? (masked
+              ? `Hiện đã lưu: ${masked} — nhập key mới để thay`
+              : 'sk-...')
+          : '(không cần cho provider này)'
+      }
+    >
+      <div className="flex gap-2">
+        <Input
+          id={id}
+          type={showKey ? 'text' : 'password'}
+          value={value ?? ''}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={required ? (masked ? `Hiện đã lưu: ${masked} — nhập key mới để thay` : 'sk-...') : '(không cần cho provider này)'}
+          disabled={!required}
+          className="flex-1 font-mono"
+        />
+        {required && masked && (
+          <Button size="sm" variant="outline" type="button" onClick={onClear} title="Xoá key hiện tại" className="text-destructive">
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        )}
+        {required && (
+          <Button size="sm" variant="ghost" type="button" onClick={onToggleShow} title={showKey ? 'Ẩn key' : 'Hiện key'}>
+            {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+          </Button>
+        )}
+      </div>
+      {masked && (
+        <div data-testid="api-key-saved-badge" className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+          <Check className="h-3 w-3" />
+          <span>
+            Key đã lưu (<span className="font-mono">{masked}</span>) — để trống + Save sẽ giữ nguyên
+          </span>
+        </div>
+      )}
+    </Field>
+  );
+}
+
 function ToggleRow({
-  icon, label, description, checked, onChange,
-}: { icon: React.ReactNode; label: string; description: string; checked: boolean; onChange: (v: boolean) => void }) {
+  icon, label, description, checked, onChange, tooltip,
+}: { icon: React.ReactNode; label: string; description?: string; checked: boolean; onChange: (v: boolean) => void; tooltip?: ReactNode }) {
   return (
     <div
       onClick={() => onChange(!checked)}
@@ -1667,8 +1768,17 @@ function ToggleRow({
         {icon}
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-xs font-semibold">{label}</p>
-        <p className="text-[10px] text-muted-foreground mt-0.5">{description}</p>
+        <div className="flex items-center gap-1.5">
+          <p className="text-xs font-semibold">{label}</p>
+          {tooltip && (
+            <Tooltip content={tooltip} side="top">
+              <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help">
+                <Info className="h-3 w-3" />
+              </span>
+            </Tooltip>
+          )}
+        </div>
+        {description && <p className="text-[10px] text-muted-foreground mt-0.5">{description}</p>}
       </div>
       <Switch
         checked={checked}
