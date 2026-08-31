@@ -19,7 +19,7 @@ fi
 
 lsof -ti ":$VIENEU_PORT" | xargs kill -9 2>/dev/null || true
 echo "[start] Starting VieNeu on :$VIENEU_PORT ..."
-( cd "$SCRIPT_DIR/VieNeu-TTS" && nohup .venv/bin/python vieneu_server.py > "$SCRIPT_DIR/logs/vieneu.log" 2>&1 & )
+( cd "$SCRIPT_DIR/VieNeu-TTS" && nohup .venv/bin/python ../vieneu_server.py > "$SCRIPT_DIR/logs/vieneu.log" 2>&1 & )
 echo "[start]   VieNeu launched (log: logs/vieneu.log)"
 
 # ── Wait & health-check ────────────────────────────────────────────────
