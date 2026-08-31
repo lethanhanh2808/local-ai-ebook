@@ -24,6 +24,7 @@ import {
   getDefaultVoice,
   listCharacters,
 } from '../lib/db/voices';
+import { prisma } from '../lib/db/client';
 import { isBuiltinVieNeuVoice } from '../lib/tts/vieneu-voices';
 import {
   ensureChapterRow,
@@ -96,6 +97,7 @@ async function runGenerator(opts: {
   chapterTextFile: string;
   outDir: string;
   charactersJson: string;
+  voicePlanJson?: string;
 }): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve, reject) => {
     if (!GENERATOR || !fs.existsSync(GENERATOR)) {
@@ -113,7 +115,7 @@ async function runGenerator(opts: {
       '--out-dir', opts.outDir,
     ];
     const proc = spawn(py, args, {
-      env: { ...process.env, VIENEU_URL, UNIFIED_TTS_URL: VIENEU_URL, CHARACTER_MAP: opts.charactersJson },
+      env: { ...process.env, VIENEU_URL, UNIFIED_TTS_URL: VIENEU_URL, CHARACTER_MAP: opts.charactersJson, VOICE_PLAN: opts.voicePlanJson ?? '' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const key = generatorKey(opts.bookId, opts.chapterFile);
@@ -266,7 +268,7 @@ async function generateOneChapter(
   bookId: string,
   chapterFile: string,
   backend: string,
-  opts: { force?: boolean; cancelOnStop?: boolean } = {},
+  opts: { force?: boolean; cancelOnStop?: boolean; voicePlanJson?: string } = {},
 ) {
   const book = await getBook(bookId);
   if (!book) throw new Error('book not found');
@@ -324,6 +326,31 @@ async function generateOneChapter(
   if (!htmlEntry) {
     await updateChapter(row.id, { status: 'failed', errorMsg: `Chapter file not in EPUB: ${chapterFile}` });
     throw new Error(`Chapter file not in EPUB: ${chapterFile}`);
+  }
+
+  // Resolve the per-chapter voice plan (if the user assigned voices in the
+  // Phân giọng editor) and pass it to the Python generator via VOICE_PLAN.
+  // The plan overrides the default narration voice on a per-sentence basis.
+  let voicePlanJson = opts.voicePlanJson ?? '';
+  if (!voicePlanJson) {
+    try {
+      const chapterIndex = epub.htmlFiles.findIndex(
+        (f) => path.basename(f, path.extname(f)) === chapterFile || path.basename(f) === chapterFile,
+      );
+      if (chapterIndex >= 0) {
+        const plan = await prisma.chapterVoicePlan.findUnique({
+          where: { bookId_chapterIndex: { bookId, chapterIndex } },
+        });
+        if (plan) {
+          const sentences = (plan.sentences as unknown as Array<{ text?: string; voiceId?: string | null }>) ?? [];
+          voicePlanJson = JSON.stringify(
+            sentences.map((s) => ({ text: s.text ?? '', voiceId: s.voiceId ?? null })),
+          );
+        }
+      }
+    } catch (error) {
+      console.warn(`[audiobook] failed to load voice plan for ${bookId}/${chapterFile}: ${String(error)}`);
+    }
   }
 
   // Load voices + characters
@@ -430,6 +457,7 @@ async function generateOneChapter(
         chapterTextFile: tmpHtml,
         outDir,
         charactersJson,
+        voicePlanJson,
       });
     } catch (error) {
       const fresh = opts.cancelOnStop ? await getBook(bookId) : null;

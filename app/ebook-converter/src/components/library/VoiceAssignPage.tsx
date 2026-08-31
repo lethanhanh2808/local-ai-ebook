@@ -21,6 +21,7 @@ import {
   Square,
   User,
   Volume2,
+  Wand2,
   X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -53,9 +54,22 @@ interface CharacterInfo {
 interface ChapterInfo {
   id: string;
   title: string;
+  /** Full EPUB path (e.g. "chapter001.xhtml") — used for per-chapter generation. */
+  file: string;
 }
 
 const NARRATION_VALUE = '__narration__';
+
+// Deterministic HSL color from a voice id so each assigned voice gets a stable,
+// distinct highlight. Keeps text readable (used at low alpha for the bg).
+function voiceColor(voiceId: string): string {
+  let h = 0;
+  for (let i = 0; i < voiceId.length; i++) {
+    h = (h * 31 + voiceId.charCodeAt(i)) | 0;
+  }
+  const hue = Math.abs(h) % 360;
+  return `hsl(${hue} 70% 50%)`;
+}
 
 function genderBadge(g?: 'male' | 'female' | null) {
   if (g === 'male') return { label: 'Nam', cls: 'bg-blue-500/15 text-blue-600 dark:text-blue-300' };
@@ -78,7 +92,22 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
 
   const [activeSentence, setActiveSentence] = useState<number | null>(null);
   const [previewing, setPreviewing] = useState<string | null>(null);
+  const [playingSentence, setPlayingSentence] = useState<number | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // (c) multi-select + batch assign
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [batchVoice, setBatchVoice] = useState<string | null>(null);
+
+  // (d) per-chapter audiobook generation
+  const [genStatus, setGenStatus] = useState<'idle' | 'generating' | 'ready' | 'failed'>('idle');
+  const [genProgress, setGenProgress] = useState<number>(0);
+  const [genBusy, setGenBusy] = useState(false);
+  const genPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // (e) AI suggest
+  const [suggesting, setSuggesting] = useState(false);
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dirtyRef = useRef(false);
@@ -196,6 +225,169 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
     [persist],
   );
 
+  // (c) Batch-assign one voice to all selected sentences in a single update.
+  const assignVoiceMany = useCallback(
+    (indices: Iterable<number>, value: string) => {
+      const voiceId = value === NARRATION_VALUE ? null : value;
+      const idxSet = new Set(indices);
+      setSentences((prev) => {
+        const next = prev.map((s, idx) =>
+          idxSet.has(idx) ? { ...s, voiceId, source: 'manual' as const } : s,
+        );
+        dirtyRef.current = true;
+        persist(next);
+        return next;
+      });
+      setSelected(new Set());
+      setBatchVoice(null);
+    },
+    [persist],
+  );
+
+  // (a) Play the assigned voice reading the exact sentence text.
+  const stopSentencePreview = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    setPlayingSentence(null);
+  }, []);
+
+  const playSentence = useCallback(
+    async (s: PlanSentence) => {
+      if (playingSentence === s.i) {
+        stopSentencePreview();
+        return;
+      }
+      stopSentencePreview();
+      setPlayingSentence(s.i);
+      try {
+        const body: Record<string, unknown> = {
+          text: s.text,
+          bookId,
+          language: 'vi',
+          emotion: undefined,
+          expressiveness: undefined,
+          callIdx: s.i,
+        };
+        if (s.voiceId != null) body.voice = s.voiceId;
+        const r = await fetch('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) throw new Error('tts failed');
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audioRef.current = audio;
+        audio.onended = () => { setPlayingSentence(null); audioRef.current = null; };
+        await audio.play();
+      } catch {
+        setPlayingSentence(null);
+      }
+    },
+    [bookId, playingSentence, stopSentencePreview],
+  );
+
+  // (d) Per-chapter audiobook generation that consumes the voice plan.
+  const currentChapterFile = useMemo(
+    () => chapters.find((c) => c.id === chapterId)?.file ?? null,
+    [chapters, chapterId],
+  );
+
+  const pollGeneration = useCallback(() => {
+    if (!bookId || !currentChapterFile) return;
+    (async () => {
+      try {
+        const r = await fetch(`/api/library/${bookId}/audiobook`);
+        if (!r.ok) return;
+        const data = await r.json() as {
+          chapters?: Array<{ chapterFile: string; status: string; progress?: number }>;
+        };
+        const row = (data.chapters ?? []).find((c) => c.chapterFile === currentChapterFile);
+        if (!row) {
+          setGenStatus('idle');
+          setGenProgress(0);
+          return;
+        }
+        if (row.status === 'generating') {
+          setGenStatus('generating');
+          setGenProgress(row.progress ?? 0);
+        } else if (row.status === 'ready') {
+          setGenStatus('ready');
+          setGenProgress(100);
+          if (genPollRef.current) { clearInterval(genPollRef.current); genPollRef.current = null; }
+        } else if (row.status === 'failed') {
+          setGenStatus('failed');
+          setGenProgress(0);
+          if (genPollRef.current) { clearInterval(genPollRef.current); genPollRef.current = null; }
+        } else {
+          setGenStatus('idle');
+          setGenProgress(0);
+        }
+      } catch {
+        /* best-effort */
+      }
+    })();
+  }, [bookId, currentChapterFile]);
+
+  const generateChapter = useCallback(
+    async (entire: boolean) => {
+      if (!currentChapterFile) return;
+      setGenBusy(true);
+      try {
+        await fetch(`/api/library/${bookId}/audiobook`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(
+            entire
+              ? { action: 'generate' }
+              : { action: 'regenerate_one', chapterFile: currentChapterFile },
+          ),
+        });
+        setGenStatus('generating');
+        setGenProgress(0);
+        if (genPollRef.current) clearInterval(genPollRef.current);
+        genPollRef.current = setInterval(() => pollGeneration(), 3000);
+        pollGeneration();
+      } finally {
+        setGenBusy(false);
+      }
+    },
+    [bookId, currentChapterFile, pollGeneration],
+  );
+
+  // (e) AI suggest voices — populate voiceId for character sentences.
+  const suggestVoices = useCallback(async () => {
+    if (!chapterId) return;
+    setSuggesting(true);
+    try {
+      const r = await fetch(
+        `/api/library/${bookId}/chapters/${encodeURIComponent(chapterId)}/voice-plan/suggest`,
+        { method: 'POST' },
+      );
+      if (!r.ok) throw new Error('suggest failed');
+      const data = await r.json() as { sentences?: PlanSentence[] };
+      if (data.sentences) {
+        setSentences((prev) => {
+          // Preserve order/index; only take the suggested voiceId/charId/source.
+          const next = prev.map((s, idx) => {
+            const sug = data.sentences![idx];
+            return sug ? { ...s, voiceId: sug.voiceId, charId: sug.charId, source: sug.source } : s;
+          });
+          dirtyRef.current = true;
+          persist(next);
+          return next;
+        });
+      }
+    } catch {
+      /* best-effort */
+    } finally {
+      setSuggesting(false);
+    }
+  }, [bookId, chapterId, persist]);
+
   const stopPreview = useCallback(() => {
     if (audioRef.current) {
       audioRef.current.pause();
@@ -256,6 +448,19 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
     [voices],
   );
 
+  // (b) Legend: one swatch per distinct assigned voice currently in use.
+  const usedVoices = useMemo(() => {
+    const ids = Array.from(new Set(sentences.map((s) => s.voiceId).filter((v): v is string => !!v)));
+    return ids.map((id) => ({ id, label: voiceLabel(id), color: voiceColor(id) }));
+  }, [sentences, voiceLabel]);
+
+  // Clean up the generation poll interval on unmount.
+  useEffect(() => {
+    return () => {
+      if (genPollRef.current) { clearInterval(genPollRef.current); genPollRef.current = null; }
+    };
+  }, []);
+
   const activeSentenceObj = activeSentence !== null ? sentences[activeSentence] : null;
 
   return (
@@ -280,6 +485,9 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
             const c = chapters.find((x) => x.id === id);
             setChapterId(id || null);
             setChapterTitle(c?.title ?? null);
+            setSelected(new Set());
+            setGenStatus('idle');
+            setGenProgress(0);
           }}
           className="max-w-[14rem] rounded-md border border-input bg-background px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-ring"
           aria-label="Chọn chương"
@@ -292,7 +500,7 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
         <SaveStateBadge state={saveState} />
       </header>
 
-      <div className="flex items-center gap-2 border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-2 border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
         <Mic className="h-3.5 w-3.5" />
         <span>
           Mặc định mọi câu đều là <b className="text-foreground">giọng người dẫn chuyện</b>.
@@ -301,7 +509,43 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
         <span className="ml-auto">
           Đã gán: <b className="text-foreground">{assignedCount}</b> / {sentences.length} câu
         </span>
+        <button
+          type="button"
+          onClick={() => { setSelectionMode((v) => !v); setSelected(new Set()); }}
+          className={cn(
+            'rounded-md border px-2 py-1 text-xs font-medium transition-colors',
+            selectionMode
+              ? 'border-primary bg-primary/10 text-primary'
+              : 'border-border hover:bg-accent',
+          )}
+        >
+          {selectionMode ? 'Thoát chọn' : 'Chọn nhiều câu'}
+        </button>
+        <button
+          type="button"
+          onClick={() => void suggestVoices()}
+          disabled={suggesting || !chapterId}
+          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-medium transition-colors hover:bg-accent disabled:opacity-50"
+        >
+          {suggesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
+          AI đề xuất giọng
+        </button>
       </div>
+
+      {/* (b) Legend — one swatch per distinct assigned voice in use */}
+      {usedVoices.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 border-b bg-background px-4 py-1.5 text-xs">
+          {usedVoices.map((v) => (
+            <span key={v.id} className="inline-flex items-center gap-1.5">
+              <span
+                className="inline-block h-3 w-3 rounded-sm ring-1 ring-inset"
+                style={{ backgroundColor: v.color + '33', boxShadow: `inset 0 0 0 1px ${v.color}` }}
+              />
+              <span className="text-muted-foreground">{v.label}</span>
+            </span>
+          ))}
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto">
         {loading ? (
@@ -322,25 +566,79 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
                   const char = s.charId ? characters[s.charId] : null;
                   const assigned = s.voiceId != null;
                   const isCharacter = s.source === 'character' && char;
+                  const isSelected = selected.has(s.i);
+                  const isPlaying = playingSentence === s.i;
+                  const color = assigned ? voiceColor(s.voiceId as string) : null;
+
+                  const handleClick = () => {
+                    if (selectionMode) {
+                      setSelected((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(s.i)) next.delete(s.i); else next.add(s.i);
+                        return next;
+                      });
+                      return;
+                    }
+                    setActiveSentence(s.i);
+                  };
+
                   return (
-                    <button
+                    <span
                       key={s.i}
-                      type="button"
-                      onClick={() => setActiveSentence(s.i)}
-                      title={assigned ? `Giọng: ${voiceLabel(s.voiceId)} — nhấn để đổi` : 'Nhấn để gán giọng'}
                       className={cn(
-                        'group relative mx-0.5 rounded px-1 py-0.5 text-left transition-colors',
-                        'hover:bg-primary/10',
-                        assigned
-                          ? 'bg-primary/10 ring-1 ring-primary/30'
+                        'group relative mx-0.5 inline rounded px-1 py-0.5 text-left transition-colors',
+                        selectionMode && 'cursor-pointer',
+                        !selectionMode && 'hover:bg-primary/10',
+                        assigned && color
+                          ? ''
                           : isCharacter
                             ? 'underline decoration-dotted decoration-muted-foreground/40'
                             : '',
                       )}
+                      style={
+                        assigned && color
+                          ? { backgroundColor: color + '22', boxShadow: `inset 0 0 0 1px ${color}` }
+                          : undefined
+                      }
                     >
-                      {s.text}
-                      {assigned && (
-                        <span className="ml-1 inline-flex translate-y-[-2px] items-center align-super text-[10px] font-medium text-primary">
+                      {selectionMode && (
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={handleClick}
+                          onClick={(e) => e.stopPropagation()}
+                          className="mr-1 align-super translate-y-[-2px]"
+                          aria-label={`Chọn câu ${s.i + 1}`}
+                        />
+                      )}
+                      <button
+                        type="button"
+                        onClick={handleClick}
+                        title={
+                          assigned
+                            ? `Giọng: ${voiceLabel(s.voiceId)} — nhấn để đổi`
+                            : 'Nhấn để gán giọng'
+                        }
+                        className="text-left"
+                      >
+                        {s.text}
+                      </button>
+                      {/* (a) per-sentence play button */}
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); void playSentence(s); }}
+                        disabled={isPlaying === false && playingSentence !== null}
+                        className={cn(
+                          'ml-1 inline-flex translate-y-[-2px] items-center align-super text-[10px] font-medium transition-opacity',
+                          isPlaying ? 'text-primary opacity-100' : 'text-muted-foreground opacity-0 group-hover:opacity-100',
+                        )}
+                        aria-label={isPlaying ? 'Dừng phát' : 'Nghe thử câu này'}
+                        title={isPlaying ? 'Dừng phát' : 'Nghe thử câu này'}
+                      >
+                        {isPlaying ? <Square className="h-3 w-3" /> : <Play className="h-3 w-3" />}
+                      </button>
+                      {assigned && !isPlaying && (
+                        <span className="ml-0.5 inline-flex translate-y-[-2px] items-center align-super text-[10px] font-medium text-primary">
                           <Volume2 className="h-3 w-3" />
                         </span>
                       )}
@@ -352,7 +650,7 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
                           <User className="h-3 w-3" />
                         </span>
                       )}
-                    </button>
+                    </span>
                   );
                 })}
               </p>
@@ -415,6 +713,112 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
           </DialogBody>
         )}
       </Dialog>
+
+      {/* (c) Batch-assign bottom bar — visible in selection mode */}
+      {selectionMode && (
+        <div className="sticky bottom-0 z-10 flex items-center gap-3 border-t bg-background px-4 py-3 shadow-[0_-2px_8px_rgba(0,0,0,0.06)]">
+          <span className="text-sm font-medium">Đã chọn <b>{selected.size}</b> câu</span>
+          <div className="ml-auto flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setSelected(new Set())}
+              disabled={selected.size === 0}
+            >
+              Bỏ chọn
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => setBatchVoice(NARRATION_VALUE)}
+              disabled={selected.size === 0}
+            >
+              Gán giọng cho {selected.size} câu
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* (c) Batch voice picker dialog */}
+      <Dialog
+        open={batchVoice !== null}
+        onOpenChange={(o) => { if (!o) setBatchVoice(null); }}
+        title={`Gán giọng cho ${selected.size} câu`}
+        description="Chọn một giọng — tất cả câu đã chọn sẽ dùng chung giọng này."
+        widthClass="max-w-md"
+      >
+        <DialogBody>
+          <div className="mb-2 text-xs font-medium text-muted-foreground">Chọn giọng</div>
+          <div className="max-h-72 space-y-1 overflow-y-auto pr-1">
+            <VoiceRow
+              selected={batchVoice === NARRATION_VALUE}
+              onClick={() => assignVoiceMany(selected, NARRATION_VALUE)}
+              icon={<Mic className="h-4 w-4" />}
+              title="Giọng kể (mặc định)"
+              subtitle="Người dẫn chuyện"
+            />
+            {voices.map((v) => {
+              const g = genderBadge(v.gender);
+              return (
+                <VoiceRow
+                  key={v.id}
+                  selected={batchVoice === v.id}
+                  onClick={() => assignVoiceMany(selected, v.id)}
+                  icon={
+                    <span className={cn('inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-semibold', g.cls)}>
+                      {g.label}
+                    </span>
+                  }
+                  title={v.label}
+                  subtitle={v.isCloned ? 'Giọng tùy chỉnh' : (v.gender === 'male' ? 'Nam' : v.gender === 'female' ? 'Nữ' : '')}
+                />
+              );
+            })}
+          </div>
+        </DialogBody>
+      </Dialog>
+
+      {/* (d) Per-chapter audiobook generation */}
+      <div className="border-t bg-muted/20 px-4 py-3">
+        <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">Tạo Audio Book</span>
+            {genStatus === 'generating' && (
+              <span className="inline-flex items-center gap-1 text-xs text-blue-600">
+                <Loader2 className="h-3 w-3 animate-spin" /> {genProgress}%
+              </span>
+            )}
+            {genStatus === 'ready' && (
+              <span className="inline-flex items-center gap-1 text-xs text-green-600">
+                <Check className="h-3 w-3" /> Sẵn sàng
+              </span>
+            )}
+            {genStatus === 'failed' && (
+              <span className="inline-flex items-center gap-1 text-xs text-red-500">
+                <X className="h-3 w-3" /> Lỗi
+              </span>
+            )}
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void generateChapter(false)}
+              disabled={genBusy || !currentChapterFile}
+            >
+              {genStatus === 'generating' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Tạo audio chương này
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => void generateChapter(true)}
+              disabled={genBusy}
+            >
+              Tạo toàn bộ sách
+            </Button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
