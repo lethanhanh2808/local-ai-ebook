@@ -239,23 +239,19 @@ def synthesize(
     ref_text: Optional[str] = None,
     speed: float = 1.0,
     style: str = "doc_truyen",  # accepted for contract compatibility; ignored
-    # 2026-08-31: cfg=2.0 (not 1.0) is the right default once
-    # text_mask_padding=False is in effect — the previous f5_param_search.py
-    # sweep was measured against the buggy mlx port default (mask_padding=True)
-    # which muffled high frequencies, and cfg=1.0 was tuned to compensate for
-    # that. With the mask fix, cfg=2.0 gets spectral centroid 3776 Hz (ref
-    # 3520 Hz) and formant2 energy 10.3% (ref 7%) on the hong-dao test clip;
-    # cfg=1.0 sits at 2716 Hz / 3.9% and sounds toneless. RTF cost is the
-    # same — the cfg term just adds one more transformer forward per step.
-    #
-    # 2026-08-31: steps=8 (not 16) so typical paragraphs (~250 chars) finish
-    # well inside the /api/tts route's AbortSignal.timeout. Wall-time on the
-    # Mac M4 with cfg=2.0: steps=8 ≈ 36s, steps=16 ≈ 77s, steps=32 ≈ 157s.
-    # Quality drop is small — centroid 2455 vs 3776 on the long paragraph
-    # (still Vietnamese-shaped) and the route stops returning 503 mid-
-    # chapter. Callers who want best-quality slow generation can still pass
-    # steps=16/32 explicitly.
-    steps: int = 8,
+    # 2026-08-31: aligned with upstream F5-TTS CLI defaults
+    # (https://github.com/SWivid/F5-TTS/blob/main/src/f5_tts/infer/utils_infer.py).
+    # The weights are hynt/F5-TTS-Vietnamese-ViVoice (= nguyenthienhy on HF) and
+    # were trained from upstream F5-TTS with text_mask_padding=False (matches
+    # the F5TTS_Base.yaml default — see bb7a6540). Upstream CLI defaults:
+    #   nfe_step=32, cfg_strength=2.0, sway_sampling_coef=-1.0,
+    #   target_rms=0.1, ode_method="euler".
+    # The earlier steps=8 + method="rk4" was a wall-time escape hatch; we now
+    # match upstream so the model behaves the same as on the official CLI.
+    # Wall-time on the Mac M4 with cfg=2.0 + euler: steps=32 ≈ 80-100s for a
+    # 250-char Vietnamese paragraph (euler is ~2× faster than rk4). The /api/tts
+    # route's AbortSignal.timeout was raised in tandem to 300_000 ms.
+    steps: int = 32,
     cfg_strength: float = 2.0,
     seed: Optional[int] = None,
 ) -> bytes:
@@ -305,7 +301,11 @@ def synthesize(
         text=pinyin_text,
         duration=duration_frames,
         steps=steps,
-        method="rk4",
+        # ode_method="euler" is the upstream F5-TTS default
+        # (SWivid/F5-TTS/src/f5_tts/infer/utils_infer.py). RK4 is ~2× slower
+        # per step and gives only marginally better sample quality for
+        # short-form TTS; the wall-time difference is what users notice.
+        method="euler",
         cfg_strength=cfg_strength,
         speed=speed,
         sway_sampling_coef=-1.0,
@@ -343,8 +343,8 @@ class SynthesizeRequest(BaseModel):
     ref_text: Optional[str] = None
     speed: Optional[float] = 1.0
     style: Optional[str] = "doc_truyen"    # ignored (no F5 equivalent)
-    steps: Optional[int] = 8
-    cfg_strength: Optional[float] = 2.0
+    steps: Optional[int] = 32              # upstream F5-TTS default (nfe_step)
+    cfg_strength: Optional[float] = 2.0    # upstream F5-TTS default
     seed: Optional[int] = None
 
 

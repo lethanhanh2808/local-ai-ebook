@@ -284,17 +284,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       method: 'POST',
       headers: { 'Content-Type': 'application/json; charset=utf-8' },
       body: bodyBytes,
-      // F5 wall-time scales with paragraph length and steps: cfg=2.0
-      // steps=8 ≈ 36s for a 250-char paragraph on the Mac M4; steps=16
-      // ≈ 77s; steps=32 ≈ 157s. The previous 60s budget caused
-      // mid-chapter 503s for typical web-novel paragraphs — the
-      // 2026-08-31 f5_server.py change drops the *default* steps to 8
-      // so 60s would usually suffice, but callers can still pass steps
-      // explicitly (or fall back to the slow VieNeu path) and we don't
-      // want to 503 those. 180s is the smallest budget that handles the
-      // slowest legitimate config without making the client give up on a
-      // request that's actually close to finishing.
-      signal: AbortSignal.timeout(180_000),
+      // F5 wall-time scales with paragraph length, steps, and ODE method:
+      // cfg=2.0 euler steps=32 ≈ 80-100s for a 250-char Vietnamese
+      // paragraph on the Mac M4. 300s leaves comfortable headroom for
+      // longer paragraphs and slow-request retries while still aborting
+      // a request that's clearly hung. Earlier we had 60s (too tight
+      // even for the old steps=16) and 180s (worked for steps=8); 300s
+      // is the right budget for upstream-default sampling.
+      signal: AbortSignal.timeout(300_000),
     });
     if (!r.ok) {
       const detail = await r.text().catch(() => '');
