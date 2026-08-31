@@ -211,14 +211,19 @@ function buildSpreadCss(
        This makes page-track boundary align exactly with clip edges, so the
        visible area is always exactly 2 columns wide. */
     width: 100%;
-    /* BUGFIX 2026-07-12 — defense-in-depth: clip horizontal overflow on
-       the spread itself. The clip's \`overflow-x: auto\` only clips
-       visually; it doesn't constrain descendant layout. If a future
-       CSS change (or embedded EPUB style) makes any child wider than
-       the spread's 820px box, the content would otherwise leak into
-       the visible clip area as if from the adjacent page track. */
+    /* BUGFIX 2026-07-12 (revised) — MUST stay \`overflow: visible\` (not
+       hidden). With column-count:2 + column-fill:auto + a fixed height, the
+       content paginates into multiple 2-column "page tracks" that overflow
+       the spread horizontally. \`overflow: hidden\` here clips those extra
+       tracks, which (a) hides all content past the first 2 columns and
+       (b) makes the clip's scrollWidth == clientWidth so the pagination
+       script reports only 1 page and can never scroll. The clip's own
+       \`overflow-x: auto\` already clips visually at the clip edge, and the
+       \`max-width: 100%\` below (plus the per-child max-width:100% rules)
+       already prevents any child from exceeding the spread width, so the
+       original "leak" concern is covered without clipping pagination. */
     max-width: 100%;
-    overflow: hidden;
+    overflow: visible;
   }
   /* Truly narrow viewport (phone-width iframe): revert to single-column
      scroll. Threshold lowered to 400px so the 2-column layout stays on
