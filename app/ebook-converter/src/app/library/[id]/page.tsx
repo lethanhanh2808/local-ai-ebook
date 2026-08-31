@@ -69,7 +69,7 @@ export default async function BookDetailPage(props: { params: Promise<{ id: stri
             <img
               src={`/api/library/${book.id}/cover`}
               alt={book.title}
-              className="h-full w-full object-cover"
+              className="h-full w-full object-contain"
             />
           </div>
         </Card>

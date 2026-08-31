@@ -455,6 +455,7 @@ model UserSettings {
   imageProvider   String  @default("none")
   imageApiKey     String?
   imageBaseUrl    String?
+  imageAllowInsecureTls Boolean @default(false) // disable cert validation for private/self-signed image gateways
   imageModel      String  @default("dall-e-3")
   imageStyle      String  @default("bw-anime")
   imageMaxPerBook Int     @default(6)
@@ -526,6 +527,7 @@ model Settings {
   imageProvider   String  @default("none") // none | openai | minimax | custom
   imageApiKey     String? // separate from text API key
   imageBaseUrl    String? // for custom image endpoints
+  imageAllowInsecureTls Boolean @default(false) // disable cert validation for private/self-signed image gateways
   imageModel      String  @default("dall-e-3") // model id
   imageStyle      String  @default("bw-anime") // bw-anime | bw-manga | bw-ink | bw-sketch | ink | sketch | watercolor | manga | none
   // Maximum chapters to auto-illustrate per book. Set to 0 to disable.

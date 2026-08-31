@@ -126,6 +126,7 @@ interface ProviderCfg {
   baseUrl: string;
   apiKey: string;
   model: string;
+  allowInsecureTls: boolean;
 }
 
 async function pickProviderCfg(): Promise<ProviderCfg> {
@@ -133,6 +134,7 @@ async function pickProviderCfg(): Promise<ProviderCfg> {
   const provider = (s.imageProvider ?? 'none') as Provider;
   const model = s.imageModel || (provider === 'minimax' ? 'image-01' : 'dall-e-3');
   const apiKey = s.imageApiKey?.trim() || '';
+  const allowInsecureTls = Boolean(s.imageAllowInsecureTls);
   switch (provider) {
     case 'none':
       throw new Error('Image generation is disabled (imageProvider=none). Configure it in /settings.');
@@ -142,6 +144,7 @@ async function pickProviderCfg(): Promise<ProviderCfg> {
         baseUrl: s.imageBaseUrl?.trim() || 'https://api.openai.com/v1',
         apiKey,
         model,
+        allowInsecureTls,
       };
     case 'minimax':
       // MiniMax image API endpoint: https://api.minimax.io/v1/image_generation
@@ -150,10 +153,11 @@ async function pickProviderCfg(): Promise<ProviderCfg> {
         baseUrl: s.imageBaseUrl?.trim() || 'https://api.minimax.io/v1',
         apiKey,
         model,
+        allowInsecureTls,
       };
     case 'custom':
       if (!s.imageBaseUrl) throw new Error('Custom image provider requires imageBaseUrl');
-      return { provider, baseUrl: s.imageBaseUrl, apiKey, model };
+      return { provider, baseUrl: s.imageBaseUrl, apiKey, model, allowInsecureTls };
   }
 }
 
@@ -203,10 +207,10 @@ export async function generateImage(opts: GenerateImageOptions): Promise<Generat
   const prompt = buildPrompt(opts, style);
 
   if (cfg.provider === 'minimax') {
-    return generateViaMiniMax({ prompt, model: cfg.model, apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, size: opts.size, seed: opts.seed });
+    return generateViaMiniMax({ prompt, model: cfg.model, apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, size: opts.size, seed: opts.seed, allowInsecureTls: cfg.allowInsecureTls });
   }
   // openai + custom both use the OpenAI-compatible /v1/images/generations shape
-  return generateViaOpenAI({ prompt, model: cfg.model, apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, size: opts.size });
+  return generateViaOpenAI({ prompt, model: cfg.model, apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, size: opts.size, allowInsecureTls: cfg.allowInsecureTls });
 }
 
 // ── MiniMax image generation (https://api.minimax.io/v1/image_generation) ──
@@ -217,6 +221,7 @@ async function generateViaMiniMax(args: {
   baseUrl: string;
   size?: ImageSize;
   seed?: number;
+  allowInsecureTls?: boolean;
 }): Promise<GenerateImageResult> {
   const aspect_ratio = sizeToMiniMaxAspect(args.size);
   const body: Record<string, unknown> = {
@@ -236,7 +241,7 @@ async function generateViaMiniMax(args: {
       Authorization: `Bearer ${args.apiKey}`,
     },
     body: JSON.stringify(body),
-  });
+  }, args.allowInsecureTls);
 
   const text = await res.text();
   if (!res.ok) {
@@ -278,6 +283,7 @@ async function generateViaOpenAI(args: {
   apiKey: string;
   baseUrl: string;
   size?: ImageSize;
+  allowInsecureTls?: boolean;
 }): Promise<GenerateImageResult> {
   const body = {
     model: args.model || 'dall-e-3',
@@ -294,7 +300,7 @@ async function generateViaOpenAI(args: {
       Authorization: `Bearer ${args.apiKey}`,
     },
     body: JSON.stringify(body),
-  });
+  }, args.allowInsecureTls);
 
   const text = await res.text();
   if (!res.ok) throw new Error(`Image API ${res.status}: ${friendlyError(text)}`);
@@ -313,11 +319,26 @@ async function generateViaOpenAI(args: {
 }
 
 // ── Shared helpers ──────────────────────────────────────────────────────
-async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+/** Temporarily disable TLS certificate validation (for private/self-signed
+ *  gateways). Restores the previous value afterwards so other requests in
+ *  the same process are unaffected. */
+async function withInsecureTls<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    else process.env.NODE_TLS_REJECT_UNAUTHORIZED = previous;
+  }
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, allowInsecureTls = false): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 120_000);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    const doFetch = () => fetch(url, { ...init, signal: controller.signal });
+    return allowInsecureTls ? await withInsecureTls(doFetch) : await doFetch();
   } finally {
     clearTimeout(timer);
   }

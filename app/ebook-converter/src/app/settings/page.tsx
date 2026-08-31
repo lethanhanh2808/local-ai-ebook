@@ -61,6 +61,7 @@ interface Settings {
   imageProvider: string;
   imageApiKey: string | null;
   imageBaseUrl: string | null;
+  imageAllowInsecureTls: boolean;
   imageModel: string;
   imageStyle: string;
   imageMaxPerBook: number;
@@ -293,6 +294,7 @@ export default function SettingsPage() {
         workerChapterConcurrency: settings.workerChapterConcurrency,
         aiEnhanceConcurrency: settings.aiEnhanceConcurrency ?? 3,
         imageBaseUrl: settings.imageBaseUrl,
+        imageAllowInsecureTls: settings.imageAllowInsecureTls,
         imageModel: settings.imageModel,
         imageStyle: settings.imageStyle,
         imageMaxPerBook: settings.imageMaxPerBook,
@@ -1057,6 +1059,26 @@ export default function SettingsPage() {
                         className="font-mono"
                       />
                     </Field>
+                  )}
+
+                  {settings.imageProvider === 'custom' && (
+                    <div className="rounded-md border border-border bg-muted/20 p-2.5">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <Tooltip content="Use for self-signed or private CA endpoints like gateway/bridge services." side="top">
+                            <span tabIndex={0} className="inline-flex items-center gap-1.5 text-[11px] font-medium cursor-help">
+                              Disable TLS certificate verification
+                              <Info className="h-3 w-3 text-muted-foreground/70" />
+                            </span>
+                          </Tooltip>
+                        </div>
+                        <Switch
+                          checked={!!settings.imageAllowInsecureTls}
+                          onCheckedChange={(v) => update('imageAllowInsecureTls', v)}
+                          aria-label="Disable TLS certificate verification for image provider"
+                        />
+                      </div>
+                    </div>
                   )}
 
                   <Field label="Art style" htmlFor="settings-image-style"

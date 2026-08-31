@@ -98,7 +98,7 @@ function BookListRow({
       {/* Cover */}
       <div className="h-16 w-11 shrink-0 overflow-hidden rounded bg-muted">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={coverUrl} alt={book.title} className="h-full w-full object-cover"
+        <img src={coverUrl} alt={book.title} className="h-full w-full object-contain"
           onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
       </div>
 

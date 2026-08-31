@@ -87,6 +87,7 @@ export async function PUT(req: NextRequest) {
         imageProvider: request.imageProvider,
         imageApiKey: request.imageApiKey,
         imageBaseUrl: request.imageBaseUrl,
+        imageAllowInsecureTls: request.imageAllowInsecureTls,
         imageModel: request.imageModel,
         imageStyle: request.imageStyle,
         imageMaxPerBook: request.imageMaxPerBook,
@@ -164,6 +165,7 @@ export async function PUT(req: NextRequest) {
     if (typeof request.imageProvider === 'string' && ALLOWED_IMAGE_PROVIDERS.has(request.imageProvider)) data.imageProvider = request.imageProvider;
     if (request.imageApiKey === '' || typeof request.imageApiKey === 'string') data.imageApiKey = request.imageApiKey || null;
     if (request.imageBaseUrl === '' || typeof request.imageBaseUrl === 'string') data.imageBaseUrl = request.imageBaseUrl || null;
+    if (typeof request.imageAllowInsecureTls === 'boolean') data.imageAllowInsecureTls = request.imageAllowInsecureTls;
     if (typeof request.imageModel === 'string' && request.imageModel.trim()) data.imageModel = request.imageModel.trim().slice(0, 200);
     if (typeof request.imageStyle === 'string') data.imageStyle = request.imageStyle.trim().slice(0, 80);
     if (typeof request.imageMaxPerBook === 'number' && Number.isFinite(request.imageMaxPerBook)) data.imageMaxPerBook = Math.max(0, Math.min(50, Math.floor(request.imageMaxPerBook)));
