@@ -5143,7 +5143,16 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
             <span className="font-semibold text-sm flex items-center gap-1.5">
               <Headphones className="h-3.5 w-3.5" />Audio
             </span>
-            <button type="button" onClick={() => setAbOpen(false)} aria-label="Đóng bảng Audio" className={cn('rounded p-1', hoverCls)}><X className="h-3.5 w-3.5" /></button>
+            <div className="flex items-center gap-1">
+              <Link
+                href={`/library/${bookId}/assign-voices`}
+                className={cn('rounded p-1 text-xs text-primary hover:underline', hoverCls)}
+                title="Mở trang phân giọng toàn màn hình"
+              >
+                Phân giọng ↗
+              </Link>
+              <button type="button" onClick={() => setAbOpen(false)} aria-label="Đóng bảng Audio" className={cn('rounded p-1', hoverCls)}><X className="h-3.5 w-3.5" /></button>
+            </div>
           </div>
           {/* Tabs */}
           <div className={cn('flex border-b shrink-0', dividerCls)} role="tablist" aria-label="Audio tools">

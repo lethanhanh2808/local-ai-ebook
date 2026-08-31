@@ -30,8 +30,8 @@ describe('splitParagraphIntoSentences', () => {
 describe('serialize / deserialize round-trip', () => {
   it('preserves sentence fields', () => {
     const sentences: VoicePlanSentence[] = [
-      { i: 0, text: 'A.', charId: 'c1', voiceId: 'v1', source: 'character' },
-      { i: 1, text: 'B.', charId: null, voiceId: null, source: 'narration' },
+      { i: 0, text: 'A.', charId: 'c1', voiceId: 'v1', source: 'character', para: 0 },
+      { i: 1, text: 'B.', charId: null, voiceId: null, source: 'narration', para: 0 },
     ];
     const plan = { bookId: 'b', chapterIndex: 3, sentences, sourceMtime: 123 };
     const json = serializePlan(plan);

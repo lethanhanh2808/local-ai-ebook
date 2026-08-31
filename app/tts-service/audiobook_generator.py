@@ -630,17 +630,33 @@ BUILTIN_VIENEU = {
 # (Cô / Anh / Em / Chị / Ông / Bà …) to the most recently mentioned
 # same-gender character. Mirrors VIENEU_PROFILES in TS
 # (app/ebook-converter/src/lib/ai/voice-selector.ts) — keep in sync.
+# Canonical VieNeu builtin voices (22 presets in voices_v3_turbo.json).
+# Kept in sync with app/ebook-converter/src/lib/tts/vieneu-voices.ts.
 VIENEU_GENDER = {
-    "Ngọc Linh": "female",
-    "Ngọc Lan":  "female",
-    "Mỹ Duyên":  "female",
-    "Trúc Ly":   "female",
-    "Bình An":   "male",
-    "Gia Bảo":   "male",
-    "Đức Trí":   "male",
-    "Thái Sơn":  "male",
-    "Trọng Hữu": "male",
-    "Xuân Vĩnh": "male",
+    # Female
+    "Trúc Ly":    "female",
+    "Ngọc Linh":  "female",
+    "Đoan Trang": "female",
+    "Mai Anh":    "female",
+    "Thục Đoan":  "female",
+    "Hồng Đào":   "female",
+    "Thùy Dung":  "female",
+    "Ngọc Trân":  "female",
+    "Mỹ Duyên":   "female",
+    "Quỳnh Anh":  "female",
+    "Kim Thanh":  "female",
+    "Ngọc Huyền": "female",
+    # Male
+    "Phạm Tuyên": "male",
+    "Xuân Vĩnh":  "male",
+    "Thái Sơn":   "male",
+    "Thanh Bình": "male",
+    "Minh Đức":   "male",
+    "Ngọc Ngạn":  "male",
+    "Minh Triết": "male",
+    "Quang Sơn":  "male",
+    "Đức Trí":    "male",
+    "Adam":       "male",
 }
 
 def _voice_gender(voice_name: str) -> str:

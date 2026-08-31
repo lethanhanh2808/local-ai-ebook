@@ -20,6 +20,7 @@ interface PlanSentence {
   charId: string | null;
   voiceId: string | null;
   source: 'narration' | 'character' | 'manual';
+  para?: number;
 }
 
 interface VoiceOption {

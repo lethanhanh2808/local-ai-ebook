@@ -163,6 +163,7 @@ export async function PUT(
     source: s.source === 'manual' || s.source === 'character' || s.source === 'narration'
       ? s.source
       : 'manual',
+    para: typeof s.para === 'number' ? s.para : 0,
   }));
 
   await prisma.chapterVoicePlan.upsert({

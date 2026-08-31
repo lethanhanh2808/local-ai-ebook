@@ -39,6 +39,8 @@ export interface VoicePlanSentence {
   voiceId: string | null;
   /** How the charId was decided. `manual` means the user overrode it. */
   source: SentenceSource;
+  /** 0-based paragraph index this sentence belongs to (for visual grouping). */
+  para: number;
 }
 
 export interface VoicePlan {
@@ -139,6 +141,7 @@ export function buildSuggestedVoicePlan(params: {
         charId: suggestedCharId,
         voiceId: null, // default: narration voice until the user assigns one
         source: suggestedCharId ? 'character' : 'narration',
+        para: p.index,
       });
     }
   }
@@ -155,6 +158,7 @@ export function serializePlan(plan: VoicePlan): string {
       charId: s.charId,
       voiceId: s.voiceId,
       source: s.source,
+      para: s.para,
     })),
   );
 }
@@ -172,6 +176,7 @@ export function deserializePlan(
     charId: string | null;
     voiceId: string | null;
     source: SentenceSource;
+    para?: number;
   }>;
   return {
     bookId,
@@ -183,6 +188,7 @@ export function deserializePlan(
       charId: s.charId,
       voiceId: s.voiceId,
       source: s.source,
+      para: typeof s.para === 'number' ? s.para : 0,
     })),
   };
 }

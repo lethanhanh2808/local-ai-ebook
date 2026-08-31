@@ -42,6 +42,12 @@ export const VIENEU_PROFILES: readonly VoiceProfile[] = [
   // ── Hồng Đào: user-preset enrolled 2026-08-31 from
   // reference/audio-voice-sample/Hong-Dao-(Female).wav.
   { name: 'Hồng Đào',   gender: 'female', tone: 'cheerful', age: 'mature', energy: 'high',   description: 'Nữ — Nam — tự nhiên' },
+  { name: 'Thùy Dung',  gender: 'female', tone: 'serious',  age: 'mature', energy: 'medium', description: 'Nữ — Nam — tin tức' },
+  { name: 'Ngọc Trân',  gender: 'female', tone: 'cheerful', age: 'young',  energy: 'high',   description: 'Nữ — Trung — tự nhiên' },
+  { name: 'Mỹ Duyên',   gender: 'female', tone: 'calm',     age: 'mature', energy: 'low',    description: 'Nữ — Nam — đọc truyện' },
+  { name: 'Quỳnh Anh',  gender: 'female', tone: 'calm',     age: 'mature', energy: 'low',    description: 'Nữ — Bắc — đọc truyện' },
+  { name: 'Kim Thanh',  gender: 'female', tone: 'calm',     age: 'mature', energy: 'low',    description: 'Nữ — Nam — đọc truyện' },
+  { name: 'Ngọc Huyền', gender: 'female', tone: 'cheerful', age: 'young',  energy: 'high',   description: 'Nữ — Bắc — tự nhiên' },
   // ── Male ──────────────────────────────────────────────────────────────────
   { name: 'Phạm Tuyên', gender: 'male',   tone: 'cheerful', age: 'young',  energy: 'high',   description: 'Nam — Bắc — tự nhiên' },
   { name: 'Xuân Vĩnh',  gender: 'male',   tone: 'cheerful', age: 'young',  energy: 'high',   description: 'Nam — Nam — tự nhiên' },
@@ -51,6 +57,10 @@ export const VIENEU_PROFILES: readonly VoiceProfile[] = [
   // ── Ngọc Ngạn: user-preset enrolled 2026-08-31 from
   // reference/audio-voice-sample/Ngoc-Ngan-(Male).wav.
   { name: 'Ngọc Ngạn',  gender: 'male',   tone: 'cheerful', age: 'mature', energy: 'high',   description: 'Nam — Nam — tự nhiên' },
+  { name: 'Minh Triết', gender: 'male',   tone: 'serious',  age: 'mature', energy: 'medium', description: 'Nam — Nam — tin tức' },
+  { name: 'Quang Sơn',  gender: 'male',   tone: 'cheerful', age: 'young',  energy: 'high',   description: 'Nam — Trung — tự nhiên' },
+  { name: 'Đức Trí',    gender: 'male',   tone: 'calm',     age: 'mature', energy: 'low',    description: 'Nam — Nam — đọc truyện' },
+  { name: 'Adam',       gender: 'male',   tone: 'cheerful', age: 'young',  energy: 'high',   description: 'Nam — Nam — tự nhiên' },
 ] as const;
 
 /** Just the name list, ordered for stable iteration. */
