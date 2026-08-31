@@ -7,6 +7,13 @@ This file tracks the major product changes and cleanup steps. It is intentionall
 - Consolidated repo documentation to one active source of truth.
 - Archived historical plans, debug notes, and expired research into docs/archive.
 - Kept the product docs aligned to the current app and TTS architecture.
+- **AI cover generation is now fully working and user-triggerable:**
+  - Fixed the image model name (`minimax` → `nexus-image`) so the custom OpenAI-compatible gateway actually generates images.
+  - `cover/generate` now accepts `force: true` to skip EPUB cover extraction and always produce a fresh AI cover (previously it only generated when extraction failed, so books with embedded covers never got an AI cover).
+  - Added a visible "Generate cover" button + "Generating…" badge so users know when a cover is being generated in the background (grid, list, and Dashboard).
+  - Added a `hasCover` flag (checks the cover file on disk) so missing covers surface a clear action instead of a silent placeholder.
+  - Fixed cover cache-busting: the URL now uses the book's `updatedAt` instead of a local counter that reset on remount, so generated covers persist across navigation and on the Dashboard.
+  - Library covers use `object-fill` to fill the card area.
 
 ## Recent milestones
 

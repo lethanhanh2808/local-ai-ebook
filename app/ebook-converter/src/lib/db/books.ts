@@ -1,5 +1,6 @@
 // src/lib/db/books.ts
 // CRUD helpers for the Book (library) model
+import fs from 'fs';
 import { prisma } from './client';
 
 export interface CreateBookInput {
@@ -289,5 +290,12 @@ function hydrateBook(book: {
     addedAt: book.addedAt.toISOString(),
     updatedAt: book.updatedAt.toISOString(),
     lastRead: book.lastRead?.toISOString() ?? null,
+    // `hasCover` lets the UI surface a visible "Generate cover" action on
+    // books whose cover file is missing on disk (e.g. the cover was still
+    // being extracted when the book was registered, or extraction failed).
+    // We resolve the stored path and check the file exists rather than
+    // trusting the non-null `coverPath`, because a stale/placeholder SVG is
+    // served when the file is absent — the user sees no cover at all.
+    hasCover: book.coverPath ? fs.existsSync(book.coverPath) : false,
   };
 }

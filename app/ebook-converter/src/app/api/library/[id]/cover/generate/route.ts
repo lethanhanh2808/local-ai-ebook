@@ -33,11 +33,16 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
 
   // Parse optional body fields. We accept JSON or fall back to no body.
   // `genre` is the explicit theme hint; `seed` lets users reroll.
-  let body: { genre?: string | null; seed?: number } = {};
+  // `force` skips EPUB cover extraction and always generates a fresh
+  // AI cover (used by the "Generate cover" button so the user gets a new
+  // AI illustration even when the EPUB already ships a cover).
+  let body: { genre?: string | null; seed?: number; force?: boolean } = {};
   try {
     const raw = await req.text();
     body = raw ? JSON.parse(raw) : {};
   } catch { /* ignore — empty/invalid body just means defaults */ }
+
+  const forceAi = Boolean(body.force);
 
   const destBase = coverPath(book.id);
   const bookPath = await resolveBookPath(book);
@@ -56,7 +61,9 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   });
 
   // 1. Try to extract existing cover from the EPUB
-  if (fs.existsSync(bookPath)) {
+  //    Skip this entirely when `force` is requested — the user explicitly
+  //    wants a fresh AI-generated cover, not the publisher's embedded one.
+  if (!forceAi && fs.existsSync(bookPath)) {
     try {
       const extracted = await extractCoverFromEpub(bookPath, destBase);
       if (extracted) {

@@ -304,7 +304,7 @@ function ContinueReadingCard({ book }: { book: BookSummary }) {
         {/* Cover */}
         <div className="aspect-[2/3] w-full bg-muted overflow-hidden relative">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={`/api/library/${book.id}/cover`} alt={book.title} className="h-full w-full object-cover"
+          <img src={`/api/library/${book.id}/cover?v=${book.updatedAt ? new Date(book.updatedAt).getTime() : 0}`} alt={book.title} className="h-full w-full object-cover"
             onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
           {/* Progress bar overlay */}
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-foreground/15">
@@ -331,7 +331,7 @@ function RecentBookCard({ book }: { book: BookSummary }) {
       <Card className="flex flex-col rounded-lg border overflow-hidden transition-all hover:bg-muted/30 hover:border-primary/30">
         <div className="aspect-[2/3] bg-muted overflow-hidden">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={`/api/library/${book.id}/cover`} alt={book.title} className="h-full w-full object-cover"
+          <img src={`/api/library/${book.id}/cover?v=${book.updatedAt ? new Date(book.updatedAt).getTime() : 0}`} alt={book.title} className="h-full w-full object-cover"
             onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
         </div>
         <div className="p-2">

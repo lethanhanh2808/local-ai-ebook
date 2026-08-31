@@ -30,7 +30,9 @@ export interface BookSummary {
   isFavorite: boolean;
   notes?: string | null;
   addedAt: string;
+  updatedAt?: string;
   coverPath?: string | null;
+  hasCover?: boolean;
 }
 
 interface BookCardProps {
@@ -45,22 +47,20 @@ export function BookCard({ book: initialBook, onDelete, onUpdate, onEnhanced, co
   const toast = useToast();
   const [book, setBook] = useState(initialBook);
   const [deleting, setDeleting] = useState(false);
-  const [coverKey, setCoverKey] = useState(0);
-  // BUGFIX 2026-07-11: when the parent's `book.coverPath` flips from
-  // null/old → new (e.g. after the user navigates back to the library
-  // page and the parent's cached list now reflects the freshly
-  // generated cover), bump coverKey so the <img> re-fetches. Without
-  // this, the BookCard mounts with coverKey=0 and the browser may serve
-  // the OLD cached response for the same ?v=0 URL — showing the SVG
-  // placeholder ("default cover") even though the DB has the new path.
-  useEffect(() => {
-    setCoverKey((k) => k + 1);
-  }, [book.coverPath]);
+  // Cache-buster for the cover URL. We derive it from `updatedAt` (which
+  // Prisma bumps on every cover regen via updateBook) rather than a local
+  // counter — a local counter resets to 0 on remount (e.g. navigating
+  // away and back to the Library), so the browser would re-use the cached
+  // placeholder for the same ?v=0 URL. Using updatedAt makes the URL
+  // stable per-cover-version and change whenever the cover is regenerated,
+  // so a freshly generated cover persists across navigation and shows
+  // correctly on the Dashboard too.
+  const coverVersion = book.updatedAt ? new Date(book.updatedAt).getTime() : 0;
   const [generatingCover, setGeneratingCover] = useState(false);
   const [coverError, setCoverError] = useState(false);
   const [enhancing, setEnhancing] = useState(false);
   const [showMeta, setShowMeta] = useState(false);
-  const coverUrl = `/api/library/${book.id}/cover?v=${coverKey}`;
+  const coverUrl = `/api/library/${book.id}/cover?v=${coverVersion}`;
 
   const langLabel: Record<string, string> = { vi: 'VI', en: 'EN', mixed: 'MX' };
 
@@ -104,13 +104,28 @@ export function BookCard({ book: initialBook, onDelete, onUpdate, onEnhanced, co
     e.stopPropagation();
     setGeneratingCover(true);
     try {
-      const res = await fetch(`/api/library/${book.id}/cover/generate`, { method: 'POST' });
+      const res = await fetch(`/api/library/${book.id}/cover/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: true }),
+      });
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as { error?: string };
         throw new Error(body.error ?? `Cover generation failed (HTTP ${res.status})`);
       }
-      setCoverKey((k) => k + 1);
       setCoverError(false);
+      // Mark the cover as present so the visible "Generate cover" prompt
+      // disappears after a successful (re)generation. Bumping updatedAt
+      // changes the cover URL cache-buster so the <img> re-fetches the
+      // freshly generated cover immediately (and persists on navigation).
+      const newUpdatedAt = new Date().toISOString();
+      setBook((b) => ({ ...b, hasCover: true, updatedAt: newUpdatedAt }));
+      onUpdate?.({
+        ...book,
+        hasCover: true,
+        coverPath: `/api/library/${book.id}/cover`,
+        updatedAt: newUpdatedAt,
+      } as BookSummary);
       toast.success('Cover updated', { description: book.title });
     } catch (e) {
       toast.error('Cover generation failed', { description: e instanceof Error ? e.message : String(e) });
@@ -191,10 +206,10 @@ export function BookCard({ book: initialBook, onDelete, onUpdate, onEnhanced, co
           {!coverError ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
-              key={coverKey}
+              key={coverVersion}
               src={coverUrl}
               alt={book.title}
-              className="h-full w-full object-contain"
+              className="h-full w-full object-fill"
               onError={() => setCoverError(true)}
             />
           ) : (
@@ -241,6 +256,14 @@ export function BookCard({ book: initialBook, onDelete, onUpdate, onEnhanced, co
             </div>
           )}
 
+          {/* Generating badge — shows while a cover is being generated in the background */}
+          {generatingCover && (
+            <div className="absolute top-1.5 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 rounded-full bg-primary/90 px-2 py-0.5 text-[9px] font-semibold text-primary-foreground shadow backdrop-blur">
+              <Loader2 className="h-2.5 w-2.5 animate-spin" />
+              Generating…
+            </div>
+          )}
+
           {/* Hover overlay */}
           <div className="absolute inset-0 flex items-center justify-center gap-2 bg-modal-overlay/40 opacity-100 transition-colors sm:bg-modal-overlay/0 sm:opacity-0 sm:group-hover:bg-modal-overlay/70 sm:group-hover:opacity-100 sm:group-focus-within:bg-modal-overlay/70 sm:group-focus-within:opacity-100">
             <button
@@ -264,6 +287,22 @@ export function BookCard({ book: initialBook, onDelete, onUpdate, onEnhanced, co
               Edit
             </button>
           </div>
+
+          {/* Visible "Generate cover" prompt when the cover is missing */}
+          {!book.hasCover && (
+            <div className="absolute inset-x-0 bottom-0 flex items-center justify-center bg-gradient-to-t from-black/70 to-transparent p-2 pt-6">
+              <button
+                type="button"
+                onClick={handleGenerateCover}
+                disabled={generatingCover}
+                className="flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[10px] font-semibold text-primary-foreground shadow hover:bg-primary/90 transition-colors disabled:opacity-60"
+                title="Generate a cover for this book"
+              >
+                {generatingCover ? <Loader2 className="h-3 w-3 animate-spin" /> : <ImagePlus className="h-3 w-3" />}
+                {generatingCover ? 'Generating…' : 'Generate cover'}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Info */}

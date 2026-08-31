@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { BookCard, BookSummary } from './BookCard';
 import {
   Search, BookOpen, Heart, Filter, LayoutGrid, List, LayoutList,
-  Star, Download, Trash2, BookMarked, Plus
+  Star, Download, Trash2, BookMarked, Plus, ImagePlus, Loader2
 } from 'lucide-react';
 import { cn, formatDate } from '@/lib/utils';
 import Link from 'next/link';
@@ -93,13 +93,49 @@ function BookListRow({
     });
   };
 
+  const [generatingCover, setGeneratingCover] = useState(false);
+  const handleGenerateCover = async () => {
+    setGeneratingCover(true);
+    try {
+      const res = await fetch(`/api/library/${book.id}/cover/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: true }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `Cover generation failed (HTTP ${res.status})`);
+      onUpdate({ ...book, hasCover: true, coverPath: `/api/library/${book.id}/cover` });
+      toast.success('Cover updated', { description: book.title });
+    } catch (e) {
+      toast.error('Cover generation failed', { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setGeneratingCover(false);
+    }
+  };
+
   return (
     <Card className="flex items-center gap-3 rounded-xl border border-border p-3 hover:bg-muted/30 transition-colors group">
       {/* Cover */}
-      <div className="h-16 w-11 shrink-0 overflow-hidden rounded bg-muted">
+      <div className="relative h-16 w-11 shrink-0 overflow-hidden rounded bg-muted">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={coverUrl} alt={book.title} className="h-full w-full object-contain"
+        <img src={coverUrl} alt={book.title} className="h-full w-full object-fill"
           onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+        {!book.hasCover && (
+          <button
+            type="button"
+            onClick={handleGenerateCover}
+            disabled={generatingCover}
+            title="Generate a cover for this book"
+            aria-label={`Generate cover for ${book.title}`}
+            className="absolute inset-0 flex items-center justify-center bg-black/55 text-[8px] font-semibold text-white hover:bg-black/70 transition-colors disabled:opacity-60"
+          >
+            {generatingCover ? <Loader2 className="h-3 w-3 animate-spin" /> : <ImagePlus className="h-3 w-3" />}
+          </button>
+        )}
+        {generatingCover && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+            <Loader2 className="h-4 w-4 animate-spin text-white" />
+          </div>
+        )}
       </div>
 
       {/* Info */}
