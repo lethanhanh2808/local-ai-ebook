@@ -2,35 +2,31 @@
 //
 // Single source of truth for the *TTS engine* abstraction.
 //
-// Why a registry? The app used to talk to VieNeu directly via a hardcoded
-// VIENEU_BASE_URL. With F5 added, every call site that POSTs to a TTS engine
-// needs the same plumbing in two flavours:
+// Why a registry (even though there's only one engine)? Every call site
+// that POSTs to a TTS engine needs the same plumbing:
 //
 //   - Resolve which engine to use (settings.ttsProvider + env override)
 //   - Get the engine's base URL
-//   - Strip backend-specific bits from input text (F5 would read aloud the
-//     [cười] markers that VieNeu understands as inline emotion tags)
 //   - Decide whether a "voice name" passed by the UI maps to a built-in
-//     preset for the current engine
+//     preset for the engine
 //   - Build the JSON payload the engine's /synthesize expects
-//   - Pass per-engine extras (e.g. speed, language, ref_audio, ref_text,
+//   - Pass per-engine extras (speed, language, ref_audio, ref_text,
 //     emotion markers) the right way
 //
-// Before this registry, the same knowledge was duplicated across
+// Without the registry, the same knowledge was duplicated across
 // `api/tts/route.ts`, `api/tts/preview/route.ts`, `api/tts/health/route.ts`,
-// the three `characters/*` routes, and `voices/[voiceId]/route.ts`. Adding a
-// third engine would have meant touching all six. The registry reduces
-// that to one new entry.
+// the three `characters/*` routes, and `voices/[voiceId]/route.ts`. The
+// shape is kept engine-keyed (`Record<TTSProvider, EngineConfig>`) so
+// swapping in a second engine later is one new entry.
 //
 // The catalog returned by `voices()` is what the UI dropdowns read via
 // /api/tts/voices. For engines whose catalog lives in DB (e.g. cloned
 // voices), the registry only owns the *built-in* catalog — custom voices
-// are added to /api/tts/preview separately by the voices route.
+// are added via the voices API separately by the voices route.
 
 import type { TTSProvider } from '@/lib/db/settings';
 import { getEffectiveSettings } from '@/lib/db/settings';
 import { VIENEU_PROFILES, isBuiltinVieNeuVoice, type VoiceProfile } from './vieneu-voices';
-import { F5_PROFILES } from './f5-voices';
 
 // ── Engine registry ────────────────────────────────────────────────────────
 
@@ -53,13 +49,8 @@ interface EngineConfig {
    * when the engine picks its own default — caller should leave voiceName
    * unset in that case.
    *
-   * 2026-08-31: this was added because F5-TTS is *cloning-only* — it has
-   * no internal default voice, and POSTing `/synthesize` without `voice`
-   * or `ref_audio` produces an instant 502. Without this fallback, pressing
-   * "Bắt đầu đọc" on a freshly opened Vietnamese chapter (no character
-   * detection yet, no UI default voice selected) silently fails with
-   * `Read-aloud: eager prefetch failed`. The eager prefetch loop catches
-   * those errors but the user hears nothing.
+   * Retained in the interface for forward compatibility; the current
+   * single engine (VieNeu) returns null because it picks its own default.
    */
   defaultVoice(): string | null;
   /** Strip engine-incompatible bits from input text. */
@@ -74,9 +65,9 @@ interface EngineConfig {
 
 export interface SynthesizeInput {
   text: string;
-  /** Built-in preset name OR a slug (F5) — resolved via the engine's catalog. */
+  /** Built-in preset name (e.g. "Trúc Ly") — resolved via the engine's catalog. */
   voice?: string | null;
-  /** Path on disk for an ad-hoc cloned voice (VieNeu). F5 ignores this. */
+  /** Path on disk for an ad-hoc cloned voice (VieNeu). */
   refAudio?: string | null;
   /** Exact transcript for the ref audio. Required if refAudio is set. */
   refText?: string | null;
@@ -132,68 +123,8 @@ const VIENEU: EngineConfig = {
   },
 };
 
-// ── F5 config ──────────────────────────────────────────────────────────────
-//
-// F5-TTS is a zero-shot cloning model — it has NO built-in voices of its
-// own. Every "voice" is a reference clip + its exact transcript sitting on
-// the server's filesystem. The TS catalog below mirrors the slugs that
-// `prepare_f5_voices.sh` writes into app/tts-service/F5-TTS/voices/.
-
-const F5_EMOTION_RE = /\[(cười|thở dài|hắng giọng)\]/gi;
-
-function f5EmotionMarker(_emotion?: string | null): string {
-  // F5 has no native emotion marker equivalent. The emotion still affects
-  // speed/jitter via the surrounding voice selector, but the marker tag is
-  // dropped (otherwise F5 reads "[cười]" aloud as Vietnamese words).
-  return '';
-}
-
-const F5: EngineConfig = {
-  label: 'F5-TTS (Vietnamese)',
-  baseUrl: () => (process.env.F5_BASE_URL
-    ?? process.env.UNIFIED_TTS_URL
-    ?? 'http://127.0.0.1:5021').replace(/\/$/, ''),
-  hasBuiltins: true,
-  isCloningOnly: true,
-  builtins: () => F5_PROFILES,
-  isBuiltinName: (name) => {
-    if (!name) return false;
-    return F5_PROFILES.some((p) => p.name === name);
-  },
-  // F5 is cloning-only — there is NO server-side default. Picking the
-  // first profile (Hồng Đào, the female narrator) as the silent default
-  // matches the typical use case: opening a freshly-uploaded Vietnamese
-  // novel and pressing "Bắt đầu đọc" without first running character
-  // detection. The user can override per-character or via the Read aloud
-  // panel's default-voice selector.
-  defaultVoice: () => F5_PROFILES[0]?.name ?? null,
-  // Strip the [cười] / [thở dài] / [hắng giọng] markers — F5 would read them
-  // aloud as Vietnamese words. The regex is the same one f5_server.py uses
-  // server-side, so a UI bug here can't make synthesis sound wrong.
-  sanitizeText: (text) => text.replace(F5_EMOTION_RE, '').trim(),
-  emotionMarker: f5EmotionMarker,
-  headerTag: 'f5',
-  buildSynthesizePayload(input) {
-    // F5 expects ref_audio (file path) + ref_text (exact transcript). Our
-    // catalog slugs map to {voice} on the F5 server; the server resolves
-    // them to <voices>/<slug>/{clip.wav, transcript.txt}.
-    const payload: Record<string, unknown> = {
-      text: input.text,
-      speed: input.speed,
-      language: input.language,
-    };
-    if (input.voice) payload['voice'] = input.voice;
-    if (input.refAudio) {
-      payload['ref_audio'] = input.refAudio;
-      if (input.refText) payload['ref_text'] = input.refText;
-    }
-    return payload;
-  },
-};
-
 const ENGINES: Record<TTSProvider, EngineConfig> = {
   vieneu: VIENEU,
-  f5: F5,
 };
 
 // ── Public API ─────────────────────────────────────────────────────────────
@@ -211,9 +142,6 @@ export async function getActiveTTSEngine(userId?: string): Promise<EngineConfig>
 
 /**
  * Backend-aware membership check used by the characters / voices routes.
- * Pass an unknown engine and it falls back to the legacy VieNeu check so
- * stale DB rows (a previously-saved 'vieneu' voiceId in a now-f5 book)
- * don't 404.
  */
 export function isBuiltinVoiceForEngine(
   engine: EngineConfig,

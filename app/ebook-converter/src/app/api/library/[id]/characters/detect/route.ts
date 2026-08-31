@@ -80,7 +80,7 @@ function resolvePython(): string {
  *  the engine's catalog and returns the best match. `alreadyUsed` is a
  *  hint — we still respect it to avoid two characters in the same book
  *  getting identical voices. `engine` carries the catalog + membership
- *  check so F5 gets its 2-voice pool and VieNeu keeps its 10. */
+ *  check so a future second engine can be slotted in here. */
 function suggestVoice(
   engine: ReturnType<typeof getTTSEngine>,
   gender: string,
@@ -286,8 +286,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   }
 
   // Resolve the active TTS engine once. Voice suggestions and the
-  // available_voices list both follow the active backend, so F5 users
-  // see Hồng Đào / Ngọc Ngân instead of VieNeu's 10 voices.
+  // available_voices list both follow the active backend.
   const engine = await getActiveTTSEngine();
   const isBuiltin = (n: string) => isBuiltinVoiceForEngine(engine, n);
   const availableVoices = voicesForEngine(engine);

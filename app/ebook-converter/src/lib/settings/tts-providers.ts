@@ -10,9 +10,8 @@
 // import cycle introduced when TTS_PROVIDERS was centralized into the DB
 // helper module.
 
-export type TTSProvider = 'vieneu' | 'f5';
+export type TTSProvider = 'vieneu';
 
-export const TTS_PROVIDERS: Array<{ id: TTSProvider; label: string; desc: string }> = [
-  { id: 'vieneu',  label: 'VieNeu-TTS',          desc: 'Vietnamese-native, 10 built-in voices, voice cloning' },
-  { id: 'f5',      label: 'F5-TTS (Vietnamese)', desc: 'Zero-shot cloning — 2 reference voices (Hồng Đào / Ngọc Ngân), runs on this Mac via MLX' },
+export const TTS_PROVIDERS: ReadonlyArray<{ id: TTSProvider; label: string; desc: string }> = [
+  { id: 'vieneu', label: 'VieNeu-TTS', desc: 'Vietnamese-native, 10 built-in voices, voice cloning' },
 ];

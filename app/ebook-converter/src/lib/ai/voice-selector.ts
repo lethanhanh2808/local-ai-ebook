@@ -44,7 +44,6 @@ import {
   VIENEU_PROFILES,
   type VoiceProfile,
 } from '@/lib/tts/vieneu-voices';
-import { F5_PROFILES } from '@/lib/tts/f5-voices';
 
 // Re-export so existing callers (`characters/detect/route.ts`,
 // tests/reassign-character-voices.*.ts) can keep importing
@@ -79,12 +78,12 @@ function scoreVoice(profile: VoiceProfile, char: {
 /** Pick the best built-in voice for a character. Deterministic by name
  *  (so the same character always gets the same voice).
  *
- *  `catalog` defaults to VIENEU_PROFILES so existing callers — which were
- *  written before F5 existed — keep working unchanged. The detect-route
- *  passes F5_PROFILES when the active backend is F5. F5 has only two
- *  profiles, so the score is degenerate (gender match / mismatch); the
- *  deterministic tie-break below is what makes a given character always
- *  land on the same voice. */
+ *  `catalog` defaults to VIENEU_PROFILES so existing callers keep
+ *  working unchanged. The detect-route passes
+ *  `engine.builtins()` so a future engine with a smaller catalog will
+ *  still produce sensible assignments (gender match / mismatch + the
+ *  deterministic tie-break below land a given character on the same
+ *  voice). */
 export function pickBestBuiltInVoice(
   char: {
     name: string;

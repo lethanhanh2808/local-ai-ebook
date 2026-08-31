@@ -3,19 +3,12 @@
 // GET /api/tts/voices — returns the active backend's voice catalog.
 //
 // Why a dedicated endpoint? The reader UI's "Default voice" dropdown
-// (VoicePanel, ReadAloudPanel, EbookReader) used to import
-// `VIENEU_VOICES_LIST` / `VIENEU_TTS_VOICES` straight from
-// `@/lib/tts/vieneu-voices`. That hard-coded the dropdown to VieNeu's
-// 10 names, so flipping settings.ttsProvider to 'f5' would silently
-// keep the old list on screen while synthesis went to F5 — the worst
-// kind of UX bug. This endpoint is the single source of truth that the
-// UI reads; it follows the active engine so the dropdown actually
-// shows Hồng Đào / Ngọc Ngân when F5 is selected.
-//
-// Optional engine-proxy: we also fetch `/voices` from the engine's own
-// FastAPI server and merge any extra entries it reports. The TS-side
-// catalog stays the authority on attributes (gender/age/tone), but a
-// Python-side change can surface new built-ins without a TS redeploy.
+// (VoicePanel, ReadAloudPanel, EbookReader) reads from `@/lib/tts/vieneu-voices`
+// via this endpoint, so a future engine swap is one place to change. We
+// also fetch `/voices` from the engine's own FastAPI server and merge
+// any extra entries — the TS-side catalog stays the authority on
+// attributes (gender/age/tone), but a Python-side change can surface new
+// built-ins without a TS redeploy.
 import { NextResponse } from 'next/server';
 import {
   getActiveTTSEngine,

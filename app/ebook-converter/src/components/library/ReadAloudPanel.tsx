@@ -163,8 +163,8 @@ export function ReadAloudPanel({
   const [builtinVoices, setBuiltinVoices] = useState<BuiltinVoiceEntry[]>([]);
 
   // Fetch the active backend's built-in catalog on mount. The endpoint
-  // follows settings.ttsProvider, so flipping to F5 surfaces Hồng Đào
-  // / Ngọc Ngân without a code change here.
+  // follows settings.ttsProvider so a future engine swap is a one-line
+  // change in lib/tts/provider.ts.
   useEffect(() => {
     let cancelled = false;
     (async () => {

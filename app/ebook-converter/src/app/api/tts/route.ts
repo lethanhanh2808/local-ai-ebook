@@ -4,9 +4,9 @@
 // Speaks a chunk of text using the assigned character's voice (if known) or
 // the book's default voice.
 //
-// 2026-07-12: VieNeu was the only TTS backend (Piper + MOSS-TTS-Nano removed).
-// 2026-08-30: routed through the engine registry — F5-TTS added as a second
-// backend. See lib/tts/provider.ts for the contract.
+// 2026-07-12: VieNeu is the only TTS backend (Piper + MOSS-TTS-Nano removed).
+// The registry shape in lib/tts/provider.ts is kept so a future second
+// engine is one entry away.
 //
 // GET  /api/tts/models      — list available engines (legacy compat shape)
 // POST /api/tts/speak       — { text, chapterId?, character?, speed?, language?, callIdx? } → audio/wav
@@ -167,17 +167,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   let referencePath: string | undefined;
   let voiceSpeed = 1.0;
   let voiceEmotion = 'neutral';
-  // Engine-aware membership check. Critically, this does NOT fall back to
-  // the VieNeu catalog when the active engine is F5 — the previous
-  // back-compat shim accepted 'Xuân Vĩnh' on the F5 path, and the F5
-  // server then rejected it as `unknown voice: Xuân Vĩnh` → 502. The user
-  // sees that as "Read-aloud: eager prefetch failed" the moment they
-  // press "Bắt đầu đọc" if their default UI voice was never updated
-  // when they switched `settings.ttsProvider` to F5. We now reject
-  // engine-mismatched names and let the engine default fallback below
-  // pick something that actually works.
+  // Engine-aware membership check. The legacy back-compat shim accepted
+  // any VieNeu name regardless of engine, which is wrong if a future
+  // engine is added. Today this simplifies to a single VieNeu check.
   const isBuiltinForEngine = (n: string) =>
-    isBuiltinVoiceForEngine(engine, n) || (engine.headerTag === 'vieneu' && isBuiltinVieNeuVoice(n));
+    isBuiltinVoiceForEngine(engine, n) || isBuiltinVieNeuVoice(n);
   if (body.character) {
     const v = await resolveVoiceForCharacter(body.bookId ?? '', body.character, body.callIdx ?? 0);
     if (v) {
@@ -191,10 +185,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       voiceEmotion = v.emotion ?? 'neutral';
     } else if (!body.voice) {
       // No character row AND no explicit UI voice — bail with a clear 400
-      // rather than silently POSTing an empty payload (which the F5 server
-      // then rejects as "either `voice` or `ref_audio`+`ref_text` is
-      // required" → 502). The client treats 400 as a recoverable user
-      // error and shows a helpful message; 502 looks like a server fault.
+      // rather than silently POSTing an empty payload. The client treats
+      // 400 as a recoverable user error and shows a helpful message;
+      // a server-side fault looks like "eager prefetch failed" with no
+      // user action available.
       return NextResponse.json(
         { error: 'No voice assigned for this character and no default voice provided. Set a Default voice in the Read aloud panel, or run character detection to assign voices.' },
         { status: 400 },
@@ -215,9 +209,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         voiceEmotion = voice.defaultEmotion ?? voiceEmotion;
       }
     } else if (isBuiltinForEngine(body.voice)) {
-      // Direct slug like "hong-dao" or "Trúc Ly". Validate it's actually
-      // a voice for the ACTIVE engine — the previous back-compat shim
-      // accepted any VieNeu name on F5, which is the bug we're fixing.
+      // Direct voice name (e.g. "Trúc Ly"). isBuiltinForEngine ensures the
+      // name is part of the active engine's catalog.
       voiceName = body.voice;
     }
     // else: body.voice is a non-UUID string that isn't valid for the
@@ -232,12 +225,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   // Engine-side fallback when no character voice, no UI default, and no
-  // book default was resolved. F5 is cloning-only — POSTing /synthesize
-  // with neither `voice` nor `ref_audio` returns an instant 502, and the
-  // reader's eager prefetch surfaces that as "eager prefetch failed" the
-  // moment the user presses "Bắt đầu đọc" on a chapter with no voice
-  // assignments yet. VieNeu's server has its own internal default, so
-  // its `defaultVoice()` returns null and we leave voiceName unset.
+  // book default was resolved. VieNeu's server has its own internal
+  // default voice, so `defaultVoice()` returns null and we leave
+  // voiceName unset. Kept as a hook for future engines that need an
+  // explicit default.
   if (!voiceName && !referencePath) {
     const fallback = engine.defaultVoice();
     if (fallback) {
@@ -246,15 +237,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
   }
 
-  // Build the engine-specific payload. `buildPayloadForEngine` owns the
-  // difference between VieNeu's `reference_path` (legacy back-compat)
-  // and F5's `ref_audio`/`ref_text` — and knows which keys each engine
-  // expects, so adding a third backend only touches provider.ts.
+  // Build the engine-specific payload. `buildPayloadForEngine` owns
+  // the engine JSON-shape differences (current single engine: VieNeu's
+  // `voice` / `reference_path`).
   const speed = Math.min(3.0, Math.max(0.5, body.speed ?? voiceSpeed));
   const emotion = body.emotion ?? voiceEmotion;
-  // Apply the inline emotion marker ONLY for engines that understand it.
-  // F5 would otherwise read "[cười]" aloud as Vietnamese words. The
-  // engine's `sanitizeText` strips anything it can't render.
   const marked = applyEmotionMarker(text, emotion);
   const cleanText = sanitizeTextForEngine(engine, marked);
   const payload = buildPayloadForEngine(engine, {
@@ -266,9 +253,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     language: body.language ?? 'vi',
     emotion,
   });
-  // VieNeu-only noise params — left out for engines that don't read them.
-  // Adding noise_scale / noise_w to the F5 payload would be a no-op, but
-  // the registry shape stays clean.
+  // VieNeu-only noise params. The registry drops them on engines that
+  // don't read them so adding a second engine is one place to update.
   if (engine.headerTag === 'vieneu') {
     const expressiveness = clampNumber(body.expressiveness ?? body.noiseScale, 0.667, 0.2, 1.0);
     payload['noise_scale'] = expressiveness;
@@ -277,20 +263,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   try {
     let r: Response;
-    // Build body as UTF-8 bytes to be safe with Vietnamese diacritics
+    // Build body as UTF-8 bytes to be safe with Vietnamese diacritics.
     const bodyStr = JSON.stringify(payload);
     const bodyBytes = new TextEncoder().encode(bodyStr);
     r = await fetch(`${engine.baseUrl()}/synthesize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json; charset=utf-8' },
       body: bodyBytes,
-      // F5 wall-time scales with paragraph length, steps, and ODE method:
-      // cfg=2.0 euler steps=32 ≈ 80-100s for a 250-char Vietnamese
-      // paragraph on the Mac M4. 300s leaves comfortable headroom for
-      // longer paragraphs and slow-request retries while still aborting
-      // a request that's clearly hung. Earlier we had 60s (too tight
-      // even for the old steps=16) and 180s (worked for steps=8); 300s
-      // is the right budget for upstream-default sampling.
+      // 300 s covers the wall-time envelope for the longest Vietnamese
+      // paragraphs on the Mac M4 plus retry headroom; keep this loose
+      // enough to surface a true hang as 503 instead of masking it.
       signal: AbortSignal.timeout(300_000),
     });
     if (!r.ok) {

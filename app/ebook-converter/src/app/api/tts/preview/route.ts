@@ -43,10 +43,9 @@ export async function POST(req: NextRequest) {
   const text = (body.text?.trim() || DEFAULT_PREVIEW).slice(0, 1_000);
   const speed = clampSpeechSpeed(body.speed ?? 1.0);
 
-  // Resolve the active engine once. Backend-aware builtin check + the
-  // payload builder keep the differences between VieNeu (`voice` /
-  // `reference_path`) and F5 (`voice` / `ref_audio` / `ref_text`) in one
-  // place.
+  // Resolve the active engine once. The payload builder owns the
+  // differences between engine JSON shapes so this route stays single-
+  // backend with the current VieNeu-only setup.
   const engine = await getActiveTTSEngine();
   const isBuiltin = (n: string) =>
     isBuiltinVoiceForEngine(engine, n) || isBuiltinVieNeuVoice(n);
@@ -94,8 +93,7 @@ export async function POST(req: NextRequest) {
         'Content-Type': 'audio/wav',
         'Content-Length': String(audio.byteLength),
         'Cache-Control': 'no-cache',
-        // Echo which engine served this so the UI can tell F5 from VieNeu.
-        // The Python servers set `X-TTS-Engine`; we rebrand at the proxy so
+        // The Python server sets `X-TTS-Engine`; we rebrand at the proxy so
         // the browser always sees `X-TTS-Backend`.
         'X-TTS-Backend': r.headers.get('X-TTS-Engine') ?? r.headers.get('X-TTS-Backend') ?? engine.headerTag,
       },

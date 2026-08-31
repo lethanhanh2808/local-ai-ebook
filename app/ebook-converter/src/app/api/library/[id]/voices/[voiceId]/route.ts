@@ -105,17 +105,15 @@ export async function POST(
   const speed = clampSpeechSpeed(body.speed ?? voice.defaultSpeed ?? 1.0);
 
   // Route the test synthesis through the engine registry. VieNeu takes
-  // `reference_path` (legacy — kept for back-compat) and F5 takes
-  // `ref_audio` + `ref_text`. The registry owns that distinction, plus
-  // backend-specific text sanitization (F5 would otherwise read the
-  // [cười] markers aloud as Vietnamese words).
+  // `reference_path` (legacy — kept for back-compat). The registry owns
+  // that distinction, plus any backend-specific text sanitization.
   const engine = await getActiveTTSEngine();
   const baseUrl = engine.baseUrl();
 
   // Prefer the explicit builtinName stored on the row; fall back to the
   // display name only when it IS a preset for the active engine. We
-  // still OR with the legacy VieNeu catalog so a stale builtin name
-  // from before the F5 switch doesn't 400 here.
+  // still OR with the legacy VieNeu catalog so a row saved before the
+  // registry landed doesn't 400 here.
   const isBuiltin = (n: string) =>
     isBuiltinVoiceForEngine(engine, n) || isBuiltinVieNeuVoice(n);
   const preset = voice.builtinName ?? (isBuiltin(voice.name) ? voice.name : null);
@@ -130,10 +128,7 @@ export async function POST(
       emotion: voice.defaultEmotion ?? null,
     });
   } else if (voice.refAudioPath && fs.existsSync(voice.refAudioPath)) {
-    // Cloned voice — pass the file path. F5 also needs the transcript;
-    // we don't store one in this row, so the backend will reject if the
-    // engine requires it. The voices/upload endpoint (separate concern)
-    // is the right place to plumb transcripts through.
+    // Cloned voice — pass the file path.
     payload = buildPayloadForEngine(engine, {
       text,
       voice: null,
@@ -149,8 +144,7 @@ export async function POST(
       { status: 400 },
     );
   }
-  // Belt-and-suspenders: drop any engine-incompatible bits the picker
-  // above didn't already strip. F5 would otherwise read "[cười]" aloud.
+  // Belt-and-suspenders: drop any engine-incompatible bits.
   if (typeof payload.text === 'string') {
     payload.text = sanitizeTextForEngine(engine, payload.text);
   }
@@ -177,7 +171,7 @@ export async function POST(
         'Content-Type': 'audio/wav',
         'Content-Length': String(audio.byteLength),
         'X-Voice-Name': voiceHeader,
-        // Echo which engine served this so the UI can tell F5 from VieNeu.
+        // Echo which engine served this.
         'X-TTS-Backend': engine.headerTag,
         'Cache-Control': 'no-cache',
       },

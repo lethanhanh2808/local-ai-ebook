@@ -1,10 +1,7 @@
 // src/app/api/tts/health/route.ts
 // Health summary for the local TTS stack used by reader/audiobook features.
-// 2026-07-12: VieNeu was the sole backend.
-// 2026-08-30: F5-TTS added as a second backend. The route now probes every
-// engine registered in lib/tts/provider.ts, reports the active one, and
-// keeps the legacy `services.vieneu` field for backward compatibility with
-// the existing health UI.
+// 2026-07-12: VieNeu is the sole backend. The `listEngines()` probe still
+// drives `backends[]` so a future engine swap is one line in provider.ts.
 import { NextResponse } from 'next/server';
 import { getActiveTTSEngine, listEngines } from '@/lib/tts/provider';
 
@@ -60,7 +57,6 @@ export async function GET(): Promise<NextResponse> {
       // Legacy field — the health UI still reads it. Derived from the
       // VieNeu probe so the boolean stays honest.
       vieneu: backends.find((b) => b.id === 'vieneu')?.ready ?? false,
-      f5: backends.find((b) => b.id === 'f5')?.ready ?? false,
     },
     backends,
     defaultBackend: activeEngine.headerTag,

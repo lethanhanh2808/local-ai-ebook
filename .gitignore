@@ -67,14 +67,6 @@ app/tts-service/VieNeu-TTS/voices/
 # restore it. This keeps the repo small and avoids touching upstream.
 app/tts-service/VieNeu-TTS/
 
-# F5-TTS is a plain local dir (not a submodule): venv, ~1.3GB weights and the
-# prepared reference clips all stay out of the repo. `vocab.txt` is the one
-# exception — it ships with the checkpoint and cannot be regenerated.
-app/tts-service/F5-TTS/.venv/
-app/tts-service/F5-TTS/models/
-app/tts-service/F5-TTS/voices/
-!app/tts-service/F5-TTS/models/vietnamese/vocab.txt
-
 # Python / Node / app caches
 .venv/
 .venv*/

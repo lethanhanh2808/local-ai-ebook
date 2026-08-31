@@ -28,10 +28,9 @@ interface Voice {
 
 // ── Built-in voices from the active TTS backend ────────────────────────────
 // We fetch from `/api/tts/voices` instead of importing the static VieNeu
-// list, so the dropdown reflects whatever the user picked in /settings:
-// VieNeu's 10 presets or F5's two clones (Hồng Đào / Ngọc Ngân). The
-// shape `{id, label, builtin, gender?, age?, tone?}` comes from the
-// engine registry in lib/tts/provider.ts.
+// list, so the dropdown reflects whatever the active engine reports.
+// The shape `{id, label, builtin, gender?, age?, tone?}` comes from
+// the engine registry in lib/tts/provider.ts.
 interface BuiltinVoice {
   id: string;
   name: string;
@@ -141,8 +140,8 @@ export function VoicePanel({
   useEffect(() => { void fetchAll(); }, [fetchAll]);
 
   // Fetch the active backend's built-in catalog. The endpoint follows
-  // settings.ttsProvider, so flipping to F5 shows Hồng Đào / Ngọc Ngân
-  // without a code change here.
+  // settings.ttsProvider so a future engine swap is a one-line change
+  // in lib/tts/provider.ts.
   const fetchBuiltinCatalog = useCallback(async () => {
     try {
       const r = await fetch('/api/tts/voices');

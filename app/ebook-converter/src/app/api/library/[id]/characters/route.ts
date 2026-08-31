@@ -53,10 +53,9 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   const existingVoices = await listVoices(params.id);
   const voiceByName = new Map(existingVoices.map((v) => [v.name, v]));
 
-  // The active TTS engine decides which built-in names are valid. F5 has
-  // its own 2-voice catalog (hong-dao / ngoc-ngan); VieNeu keeps its 10.
-  // We still accept legacy VieNeu names so a stale voiceId from before the
-  // F5 switch doesn't 400 — the fallback check uses the static catalog.
+  // The active TTS engine decides which built-in names are valid. We
+  // still accept legacy VieNeu names so a row saved before the registry
+  // landed doesn't 400 — the fallback check uses the static catalog.
   const engine = await getActiveTTSEngine();
   const isBuiltin = (n: string) =>
     isBuiltinVoiceForEngine(engine, n) || isBuiltinVieNeuVoice(n);

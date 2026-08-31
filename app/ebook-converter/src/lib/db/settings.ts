@@ -9,8 +9,9 @@ export type AIProvider = 'omlx-local' | 'minimax-cloud' | 'openai' | 'custom';
 // (client-safe — must not pull in Prisma/node:* builtins because
 // src/app/settings/page.tsx is a `'use client'` component).
 // 2026-07-12: Piper and MOSS-TTS-Nano removed.
-// 2026-08-30: F5-TTS (Vietnamese) added as an optional second backend —
-// see lib/tts/provider.ts for the engine registry.
+// 2026-08-31: VieNeu is the only TTS backend. The provider registry in
+// lib/tts/provider.ts is kept so swapping in a second engine is a single
+// entry in tts-providers.ts.
 export type { TTSProvider } from '@/lib/settings/tts-providers';
 export { TTS_PROVIDERS } from '@/lib/settings/tts-providers';
 

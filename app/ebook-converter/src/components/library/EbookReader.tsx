@@ -839,9 +839,9 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
 
   // ── Vietnamese Voice built-in voices (active backend) ────────────────────
   // We fetch from `/api/tts/voices` so the picker follows whatever the
-  // user has selected in /settings (VieNeu's 10 presets, or F5's two
-  // clones). The static VIENEU_TTS_VOICES list is kept as a fallback so
-  // the picker is never empty if the fetch is offline or slow — the
+  // user has selected in /settings. The static VIENEU_TTS_VOICES list
+  // is kept as a fallback so the picker is never empty if the fetch is
+  // offline or slow — the
   // live catalog overwrites it once the response lands.
   const [backendVoices, setBackendVoices] = useState<TtsVoice[]>(
     VIENEU_TTS_VOICES.map((v) => ({ id: v.id, name: v.name })),
@@ -2398,8 +2398,8 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   // Gender is inferred from the character's voice builtin name. Cloned
   // voices fall back to "unknown" (pronoun resolution skips them).
   // The static VIENEU_VOICE_GENDER is the fallback; we merge the active
-  // backend's gender hints on top so F5's voices (hong-dao / ngoc-ngan)
-  // get correct pronouns too.
+  // backend's gender hints on top so a future engine with its own
+  // built-ins still gets correct pronoun resolution.
   const [backendGender, setBackendGender] = useState<Record<string, 'female' | 'male' | 'unknown'>>(
     Object.fromEntries(
       Object.entries(VIENEU_VOICE_GENDER).map(([k, v]) => [k, v as 'female' | 'male' | 'unknown']),
