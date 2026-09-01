@@ -16,6 +16,10 @@
 # The host-side env vars UNIFIED_TTS_URL / OMLX_BASE_URL in .env.local are
 # intentionally overridden here so the same env file works in both contexts.
 
+# Stable project name so `docker compose -p` is never ambiguous across the
+# base / build / pull override files.
+name: ebook-converter
+
 services:
   redis:
     image: redis:7-alpine
@@ -32,7 +36,6 @@ services:
       start_period: 5s
 
   app:
-    build: .
     restart: unless-stopped
     # SQLite needs ~1s to flush the WAL on shutdown; the default 10s
     # SIGKILL would lose the last transaction. 30s is generous.
@@ -50,11 +53,12 @@ services:
       # the legacy Piper+MOSS-Nano aggregator that has since been retired.
       - UNIFIED_TTS_URL=http://host.docker.internal:5020
       - TTS_SERVICE_URL=http://host.docker.internal:5020
-      # VieNeu now runs IN THIS STACK on `tts-vieneu` (see below) — the
-      # VM becomes self-sufficient for read-aloud when the Mac is off.
-      # F5 still runs on the Mac (MLX/GPU-bound) so its URL keeps using
-      # the literal Mac IP set in .env.local.
-      - VIENEU_BASE_URL=http://tts-vieneu:5020
+      # VieNeu runs on the host (Mac) at :5020 — started via
+      # app/tts-service/start_all.sh. The container reaches it through
+      # host.docker.internal. (The in-stack `tts-vieneu` container was
+      # removed: its bind-mounted venv shipped macOS-native wheels that
+      # can't load under the Linux python:3.11-slim image.)
+      - VIENEU_BASE_URL=http://host.docker.internal:5020
       - OMLX_BASE_URL=http://host.docker.internal:8080/v1
       # .env.local sets TTS_PYTHON to a host-machine absolute path
       # (/Library/Frameworks/...) that doesn't exist inside the container;
@@ -102,7 +106,6 @@ services:
     # NOTE: worker is a BullMQ consumer, not an HTTP client. It depends on
     # Redis only — never on `app`. Sharing ./data means app + worker see the
     # same SQLite database.
-    build: .
     restart: unless-stopped
     # Same graceful-shutdown story as `app` — see comment there.
     stop_grace_period: 30s
@@ -114,7 +117,7 @@ services:
       - DATABASE_URL=file:/app/data/ebook-converter.db
       - UNIFIED_TTS_URL=http://host.docker.internal:5020
       - TTS_SERVICE_URL=http://host.docker.internal:5020
-      - VIENEU_BASE_URL=http://tts-vieneu:5020
+      - VIENEU_BASE_URL=http://host.docker.internal:5020
       - OMLX_BASE_URL=http://host.docker.internal:8080/v1
       # Same TTS_PYTHON override as the app service — see comment there.
       - TTS_PYTHON=python3
@@ -134,56 +137,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-
-  # ── tts-vieneu ─────────────────────────────────────────────────────────
-  # Vietnamese-native TTS engine, runs on the VM (CPU inference — no GPU
-  # required, unlike F5). Adds a self-contained read-aloud fallback so the
-  # app keeps working when the Mac is off / unreachable.
-  #
-  # First-time setup (run ONCE on the host, not inside this container):
-  #   bash ../tts-service/scripts/setup_vieneu.sh
-  # That clones thinhlpg/VieNeu-TTS, creates the uv venv with Python 3.11,
-  # and installs the `vieneu` package. We exec the venv's python directly
-  # so the container image stays at python:3.11-slim + zero installs.
-  tts-vieneu:
-    image: python:3.11-slim
-    restart: unless-stopped
-    working_dir: /app/tts-service
-    # Bind to 0.0.0.0 so other containers on the default docker network can
-    # reach us; the previous default (127.0.0.1) was a foot-gun.
-    # The .venv/bin/python symlink targets ~/.local/share/uv/python/...
-    # which lives OUTSIDE the bind mount → exec returns ENOENT inside the
-    # container. The bind-mounted bin/docker-python.sh wrapper execs the
-    # container's /usr/local/bin/python3.11 with PYTHONPATH pointing at
-    # the venv's site-packages, so vieneu + deps resolve correctly.
-    command: ["/app/tts-service/bin/docker-python.sh", "/app/tts-service/vieneu_server.py"]
-    stop_grace_period: 30s
-    stop_signal: SIGTERM
-    environment:
-      - VIENEU_HOST=0.0.0.0
-      - VIENEU_PORT=5020
-      - PYTHONUNBUFFERED=1
-      # Pin the HuggingFace cache into the bind mount so the ~1.2 GB ONNX
-      # v3-turbo weights survive container restarts. Default is
-      # ~/.cache/huggingface → /root/.cache/huggingface inside this
-      # container, which is on the overlay filesystem and gets wiped each
-      # `docker compose up`. Host bind mount keeps it across restarts.
-      - HF_HOME=/app/tts-service/.cache/huggingface
-    volumes:
-      # RW so the `vieneu` package can drop its model-weight cache
-      # (~1.2 GB) into the bind-mounted dir on first run. App + worker
-      # still bind the same path RO; their views stay consistent because
-      # tts-vieneu only writes to the venv-side cache, never to source
-      # files the app reads.
-      - ../tts-service:/app/tts-service
-    healthcheck:
-      test:
-        - 'CMD-SHELL'
-        - "python -c \"import urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:5020/health', timeout=3); sys.exit(0 if r.status==200 else 1)\""
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 120s  # model load is slow on cold cache
 
 volumes:
   redis-data:

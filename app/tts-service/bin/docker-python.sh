@@ -1,6 +1,7 @@
 #!/bin/sh
-# Wrapper used ONLY by the tts-vieneu Docker service (see
-# scripts/setup_vieneu.sh and docker-compose.yml).
+# Wrapper formerly used by the tts-vieneu Docker service (now removed).
+# VieNeu now runs on the host via app/tts-service/start_all.sh, so this
+# file is no longer invoked. Kept for reference only.
 #
 # Inside the python:3.11-slim container the venv's `bin/python` is a
 # symlink to ~/.local/share/uv/python/... which lives outside our bind

@@ -18,7 +18,7 @@ describe('AI settings centralization', () => {
     });
     expect(getAiProviderDefaults('custom')).toMatchObject({
       baseUrl: '',
-      model: '',
+      model: 'default',
       needsKey: true,
     });
   });

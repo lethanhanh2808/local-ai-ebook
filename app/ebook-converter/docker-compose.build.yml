@@ -1,0 +1,30 @@
+# Build-time override for the "build once on the Mac, ship the image" workflow.
+#
+# Usage (on the Mac, where you develop):
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml build
+#   ./scripts/publish-image.sh
+#
+# The base docker-compose.yml intentionally has NO `build:` / `image:` on
+# app/worker (so it is compose-agnostic). This file supplies BOTH:
+#   1. `build: .` — so `docker compose build` knows how to build the image.
+#   2. A registry-qualified `image:` tag for the built artifact.
+#   3. DROPS the `../tts-service` bind-mount. The published image must be
+#      self-contained and reproducible on the VM — character_detector.py is a
+#      sibling repo dir that does not exist inside the build context, so it
+#      cannot be baked in. The VM re-mounts it at pull time (see
+#      docker-compose.pull.yml).
+#
+# NOTE: `app` and `worker` share the same `build: .` (one image). We tag them
+# with distinct image names so the VM can pull/run them independently, but
+# they are byte-identical builds.
+
+services:
+  app:
+    build: .
+    image: ${REGISTRY:-localhost:5005}/ebook-converter-app:latest
+    # No bind-mounts here — the build context is app/ebook-converter only.
+
+  worker:
+    build: .
+    image: ${REGISTRY:-localhost:5005}/ebook-converter-worker:latest
+    # No bind-mounts here — same as above.

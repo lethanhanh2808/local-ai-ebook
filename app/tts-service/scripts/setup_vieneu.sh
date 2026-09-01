@@ -20,7 +20,7 @@
 #
 # After setup:
 #   - run on host:   cd app/tts-service/VieNeu-TTS && uv run python ../vieneu_server.py
-#   - run in docker: docker compose up tts-vieneu   (compose file mounts the dir)
+#   - or:            bash app/tts-service/start_all.sh   (starts the host TTS on :5020)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"   # app/tts-service
@@ -62,30 +62,24 @@ uv sync --python 3.11 \
   || { echo "[setup-vieneu] ✗ uv sync failed"; exit 1; }
 
 # ── Make .venv/bin/python Docker-friendly ──────────────────────────────────
+# (Retained for historical reference only — the in-stack `tts-vieneu`
+# container was removed; VieNeu now runs on the host via start_all.sh.)
 # uv creates .venv/bin/python as an absolute symlink to
 # ~/.local/share/uv/python/cpython-3.11-linux-x86_64-gnu/bin/python3.11.
-# That path is OUTSIDE the bind mount we ship to the tts-vieneu container,
-# so the symlink is dangling inside the container → OCI runtime exec fails
-# with ENOENT. The fix is a small wrapper script in app/tts-service/bin/
-# that the tts-vieneu service is configured to call instead. It execs the
-# container's /usr/local/bin/python3.11 (from python:3.11-slim) with
-# PYTHONPATH pointing at the bind-mounted site-packages, so vieneu + its
-# deps resolve. The host-side venv symlink is left untouched so the
-# `cd $VIENEU_DIR && uv run python ...` workflow keeps working.
+# That path is OUTSIDE the bind mount we used to ship to the tts-vieneu
+# container, so the symlink was dangling inside the container → OCI runtime
+# exec failed with ENOENT. The fix was a small wrapper script in
+# app/tts-service/bin/ that exec'd the container's /usr/local/bin/python3.11
+# with PYTHONPATH pointing at the bind-mounted site-packages. The host-side
+# venv symlink is left untouched so the `cd $VIENEU_DIR && uv run python ...`
+# workflow keeps working.
 WRAPPER="$SCRIPT_DIR/bin/docker-python.sh"
 mkdir -p "$(dirname "$WRAPPER")"
 if [ ! -x "$WRAPPER" ] || [ "$WRAPPER" -ot "$0" ]; then
   cat > "$WRAPPER" <<'WRAP'
 #!/bin/sh
-# Wrapper used ONLY by the tts-vieneu Docker service (see
-# scripts/setup_vieneu.sh and docker-compose.yml).
-#
-# Inside the python:3.11-slim container the venv's `bin/python` is a
-# symlink to ~/.local/share/uv/python/... which lives outside our bind
-# mount, so exec-ing it directly returns ENOENT. The container's
-# /usr/local/bin/python3.11 IS available — exec that with PYTHONPATH
-# pointing at the bind-mounted site-packages so vieneu + its deps
-# resolve. pyvenv.cfg next to bin/ also drives site-packages lookup.
+# Wrapper formerly used by the tts-vieneu Docker service (now removed).
+# Kept for reference; not invoked by the current host-based TTS workflow.
 set -e
 VENV_SITE="/app/tts-service/VieNeu-TTS/.venv/lib/python3.11/site-packages"
 VENV_SRC="/app/tts-service/VieNeu-TTS"
@@ -93,7 +87,7 @@ export PYTHONPATH="${VENV_SRC}:${VENV_SITE}${PYTHONPATH:+:$PYTHONPATH}"
 exec /usr/local/bin/python3.11 "$@"
 WRAP
   chmod +x "$WRAPPER"
-  echo "[setup-vieneu] Wrote $WRAPPER (Docker-friendly python wrapper)"
+  echo "[setup-vieneu] Wrote $WRAPPER (legacy Docker wrapper — unused now)"
 fi
 
 # ── Sanity check ──────────────────────────────────────────────────────────

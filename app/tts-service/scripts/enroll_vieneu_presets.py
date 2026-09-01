@@ -159,7 +159,7 @@ def main() -> int:
     print()
     print("[enroll] Restart the TTS server for changes to take effect.")
     print("         On the Mac:    bash app/tts-service/stop_all.sh && bash app/tts-service/start_all.sh")
-    print("         On the VM:     cd app/ebook-converter && docker compose restart tts-vieneu")
+    print("         On the VM:     bash ~/ebook-converter/app/tts-service/stop_all.sh && bash ~/ebook-converter/app/tts-service/start_all.sh")
     return 0
 
 

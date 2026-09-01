@@ -1,0 +1,32 @@
+# Pull-time override for the VM. The VM does NOT build — it pulls the image
+# the Mac published to the local registry and runs it.
+#
+# Usage (on the VM):
+#   docker compose -f docker-compose.yml -f docker-compose.pull.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.pull.yml up -d
+#
+# The base docker-compose.yml has NO `build:` / `image:` on app/worker, so this
+# override only needs to SUPPLY the registry `image:` tags (plus `pull_policy`
+# and the tts-service mount). There is no `build:` key to override — which is
+# exactly why this file is clean and version-proof (older Compose versions
+# reject `build: null` / ignore `build: false`, so we simply never set it).
+#
+#   1. `image:` — the registry tag to pull (set REGISTRY to match what
+#      publish-image.sh used, e.g. REGISTRY=172.16.99.61:5005).
+#   2. `pull_policy: always` — force a fresh pull on every `up`.
+#   3. `../tts-service` bind-mount RE-ADDED — the VM needs
+#      character_detector.py from its local checkout; that file is NOT in the
+#      published image by design.
+
+services:
+  app:
+    image: ${REGISTRY:-localhost:5005}/ebook-converter-app:latest
+    pull_policy: always
+    volumes:
+      - ../tts-service:/app/tts-service:ro
+
+  worker:
+    image: ${REGISTRY:-localhost:5005}/ebook-converter-worker:latest
+    pull_policy: always
+    volumes:
+      - ../tts-service:/app/tts-service:ro

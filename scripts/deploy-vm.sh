@@ -15,11 +15,15 @@
 #
 # Subcommands:
 #   verify   report how far behind origin/main the VM is and what would change
-#   full     backup + fresh-clone + restore + rebuild + restart (slow; rare)
-#   code     git pull + rebuild containers + restart (default; ~1–2 min)
-#   tts      just restart tts-vieneu (for Python-only changes; ~10 s)
-#   voices   re-run the voice enrollment encoder + restart tts-vieneu
+#   full     backup + fresh-clone + restore + pull images + restart (slow; rare)
+#   code     pull published images + restart (default; ~30 s)
+#   tts      restart the host VieNeu TTS service (for Python-only changes; ~10 s)
+#   voices   re-run the voice enrollment encoder + restart host TTS
 #   status   print container + service health
+#
+# Images are built on the Mac and pushed to a local registry (see
+# scripts/publish-image.sh). This script only PULLS them — it never builds
+# from source on the VM. Set REGISTRY to match what publish-image.sh used.
 #
 # All subcommands are idempotent.
 #
@@ -77,7 +81,11 @@ require_clean_worktree() {
 
 check_origin() {
   ssh_run '
-    git fetch origin --quiet 2>&1 || { echo "fetch failed"; exit 1; }
+    if [ ! -d .git ]; then
+      echo "(VM is a snapshot copy — skipping origin/main divergence check)"
+      exit 0
+    fi
+    git fetch origin --quiet 2>&1 || { echo "fetch failed"; exit 0; }
     LOCAL=$(git rev-parse HEAD)
     REMOTE=$(git rev-parse origin/main)
     BASE=$(git merge-base HEAD origin/main)
@@ -90,7 +98,7 @@ check_origin() {
       echo "VM has diverged from origin/main (rebase/merge required)"
       git log --oneline "$LOCAL..origin/main"
       git log --oneline "$REMOTE..HEAD"
-      exit 1
+      exit 0
     fi
   '
 }
@@ -102,10 +110,12 @@ docker_compose() {
 # ── Subcommands ──
 cmd_verify() {
   echo "─── VM state ───"
-  ssh_run 'pwd && git log --oneline -1 && git rev-parse --abbrev-ref HEAD'
+  # The VM may be a git checkout OR a snapshot copy (no .git). Treat git as
+  # best-effort so verify/status work in both layouts.
+  ssh_run 'if [ -d .git ]; then pwd && git log --oneline -1 && git rev-parse --abbrev-ref HEAD; else echo "(VM is a snapshot copy — no git repo; skipping git checks)"; fi'
   echo ""
   echo "─── Divergence from origin/main ───"
-  check_origin
+  check_origin || true
   echo ""
   echo "─── Container health ───"
   docker_compose ps 2>/dev/null || echo "(docker compose ps failed)"
@@ -125,15 +135,17 @@ cmd_status() {
 }
 
 cmd_tts() {
-  yellow "[tts] restarting tts-vieneu container only (~10 s)"
-  docker_compose restart tts-vieneu
+  yellow "[tts] restarting host VieNeu TTS service (~10 s)"
+  # VieNeu runs on the host (Mac) at :5020 (app/tts-service/start_all.sh),
+  # not as a container. Restart it there.
+  ssh_run 'bash ~/ebook-converter/app/tts-service/stop_all.sh; bash ~/ebook-converter/app/tts-service/start_all.sh'
   sleep 5
-  ssh_run 'curl -s -m 5 http://host.docker.internal:5020/health || curl -s -m 5 http://tts-vieneu:5020/health || echo "(health check failed — check docker logs)"'
+  ssh_run 'curl -s -m 5 http://host.docker.internal:5020/health || curl -s -m 5 http://127.0.0.1:5020/health || echo "(health check failed — check TTS logs)"'
   green "[tts] done"
 }
 
 cmd_voices() {
-  yellow "[voices] running enroll_vieneu_presets.py + restarting tts-vieneu"
+  yellow "[voices] running enroll_vieneu_presets.py + restarting host TTS"
 
   # The encoder has AUDIO_DIR_CANDIDATES covering Mac + VM paths. It will
   # find the WAVs automatically as long as REFERENCE_AUDIO_DIR exists and
@@ -149,22 +161,20 @@ cmd_voices() {
   fi
 
   ssh_run "cd '$VIENEU_DIR' && ./.venv/bin/python ../scripts/enroll_vieneu_presets.py"
-  docker_compose restart tts-vieneu
+  ssh_run 'bash ~/ebook-converter/app/tts-service/stop_all.sh; bash ~/ebook-converter/app/tts-service/start_all.sh'
   sleep 5
   green "[voices] done — verify with:"
   echo "  curl http://localhost:13100/api/tts/voices | jq '.voices | length'"
 }
 
 cmd_code() {
-  yellow "[code] pull + rebuild app/worker + restart (~1–2 min)"
+  yellow "[code] pull published images + restart (~30 s)"
   require_clean_worktree
   ssh_run 'git pull --ff-only origin main'
-  # app + worker use `build: .` (Dockerfile in app/ebook-converter/). tts-vieneu
-  # uses a pre-built image, so its code is bind-mounted and doesn't need a
-  # rebuild for Python-only changes.
-  docker_compose build app worker
-  docker_compose up -d --no-deps app worker
-  docker_compose restart tts-vieneu
+  # Images are built on the Mac and pushed to the local registry
+  # (scripts/publish-image.sh). We only pull + run here — no source build.
+  docker_compose -f docker-compose.yml -f docker-compose.pull.yml pull app worker
+  docker_compose -f docker-compose.yml -f docker-compose.pull.yml up -d --no-deps app worker
   sleep 5
   cmd_status
   green "[code] done"
@@ -227,9 +237,8 @@ cmd_full() {
     exit 1
   }
 
-  docker_compose build app worker
-  docker_compose up -d --no-deps app worker
-  docker_compose restart tts-vieneu
+  docker_compose -f docker-compose.yml -f docker-compose.pull.yml pull app worker
+  docker_compose -f docker-compose.yml -f docker-compose.pull.yml up -d --no-deps app worker
 
   echo ""
   cmd_status

@@ -28,8 +28,12 @@ to keep the VM up-to-date as you change code on the Mac.
                                                  │   docker compose:        │
                                                  │   • app (Next.js)        │
                                                  │   • worker (audiobook)   │
-                                                 │   • tts-vieneu           │
                                                  │   • redis                │
+                                                 │                         │
+                                                 │   TTS (VieNeu) runs on  │
+                                                 │   the HOST at :5020     │
+                                                 │   (start_all.sh), not   │
+                                                 │   as a container.       │
                                                  └──────────────────────────┘
 ```
 
@@ -73,8 +77,11 @@ vm$ bash ~/ebook-converter/scripts/deploy-vm.sh code
 ```
 
 `deploy-vm.sh code` does: `git pull` → rebuild `app` + `worker` containers →
-restart `tts-vieneu` → print health. ~1–2 min on a fresh rebuild, ~30 s if
+print health. ~1–2 min on a fresh rebuild, ~30 s if
 nothing under `app/ebook-converter/` actually changed (Docker layer cache).
+The VieNeu TTS engine runs on the host (Mac) at `:5020` via
+`app/tts-service/start_all.sh` — it is not a container, so it is not part of
+the compose rebuild.
 
 ## Subcommands
 
@@ -82,9 +89,9 @@ nothing under `app/ebook-converter/` actually changed (Docker layer cache).
 |---|---|---|---|
 | `verify` | "Am I behind?" | prints commits ahead/behind, no changes | < 5 s |
 | `status` | "Is the VM healthy?" | verify + container status + service health | < 10 s |
-| `code` | default — most iterations | pull + rebuild app/worker + restart all | 30 s – 2 min |
-| `tts` | Python-only change under `app/tts-service/` | restart `tts-vieneu` only (bind-mount picks up new code) | 10 s |
-| `voices` | added a new built-in voice | run `enroll_vieneu_presets.py` + restart `tts-vieneu` | 30 s |
+| `code` | default — most iterations | pull + rebuild app/worker + restart | 30 s – 2 min |
+| `tts` | Python-only change under `app/tts-service/` | restart the host VieNeu TTS service (start_all.sh) | 10 s |
+| `voices` | added a new built-in voice | run `enroll_vieneu_presets.py` + restart host TTS | 30 s |
 | `full` | `code` is broken / first deploy / data corruption | backup → wipe tracked → fresh clone → restore → rebuild → restart | 5–10 min |
 
 For routine development, `code` covers everything. `tts` and `voices` are
@@ -139,23 +146,24 @@ after restore. If you ever restore `data/` manually, do the same.
 
 ### 2. `voices_v3_turbo.json` lives in 3 places
 
-The `tts-vieneu` container reads from its non-editable installed package:
+The host TTS service (started via `app/tts-service/start_all.sh`) reads from
+its installed package:
 
 ```
-$ docker exec ebook-converter-tts-vieneu-1 \
-    python -c "import vieneu, os; print(os.path.dirname(vieneu.__file__))"
-/app/tts-service/VieNeu-TTS/.venv/lib/python3.11/site-packages/vieneu
+$ cd app/tts-service/VieNeu-TTS && ./.venv/bin/python -c "import vieneu, os; print(os.path.dirname(vieneu.__file__))"
+.../VieNeu-TTS/.venv/lib/python3.11/site-packages/vieneu
 ```
 
 That copy is **not** the source-tree file at
 `app/tts-service/VieNeu-TTS/src/vieneu/assets/voices_v3_turbo.json`. Editing
-just the source tree silently fails — the running container keeps the old
+just the source tree silently fails — the running server keeps the old
 catalog and `/api/tts/voices` returns the upstream 20 presets, not your new
 ones.
 
 `app/tts-service/scripts/enroll_vieneu_presets.py` finds every copy on disk
 (via `find_all_voices_jsons()`) and patches all of them. Always use that
-script — never edit the JSON by hand.
+script — never edit the JSON by hand. After running it, restart the host TTS
+(`stop_all.sh && start_all.sh`, or `deploy-vm.sh voices`).
 
 ### 3. Mac is editable install, VM is non-editable
 
@@ -164,9 +172,9 @@ On the Mac, `uv sync` runs with `editable = true` (the default), so
 non-editable, so it copies `vieneu/` into `.venv/lib/python3.11/site-packages/`.
 
 This means a code change under `app/tts-service/VieNeu-TTS/src/vieneu/` is
-picked up on Mac without any rebuild — but on the VM you must `docker compose
-restart tts-vieneu` for it to take effect. (`deploy-vm.sh code` does this
-already.)
+picked up on Mac without any rebuild — but on the VM you must restart the host
+TTS service for it to take effect. (`deploy-vm.sh code` does not touch TTS;
+use `deploy-vm.sh tts` or `voices`.)
 
 ### 4. Reference audio paths
 
@@ -193,6 +201,65 @@ The agent cannot `git push origin main` for you (the auto-mode classifier
 treats it as data exfiltration). Push is always manual on the Mac. If
 `deploy-vm.sh` reports "VM is N commits BEHIND origin/main" but you haven't
 pushed yet, **push first**.
+
+## Build-once / ship-the-image model
+
+The VM does **not** build from source. You build the images once on the Mac,
+push them to a **local Docker registry**, and the VM `docker pull`s the exact
+same artifact. This keeps the VM's build environment out of the equation and
+guarantees the running image matches what you tested locally.
+
+### Flow
+
+```
+ Mac (dev)                              Local registry            Proxmox VM
+ ┌──────────────────┐   push            ┌──────────────┐  pull    ┌────────────────┐
+ │ publish-image.sh │ ───────────────►  │ :5005 (reg)  │ ───────► │ deploy-vm.sh   │
+ │  build app+worker│   app:latest      │              │  app:latest│  code → up -d  │
+ │  tag+push        │   app:git-<sha>   │              │  worker:…  │                │
+ └──────────────────┘   worker:…        └──────────────┘           └────────────────┘
+```
+
+### On the Mac (build + publish)
+
+```bash
+# 1. Develop + test locally (npm run dev on :3100, or docker compose up -d).
+# 2. Build + push to the local registry (auto-starts registry:2 on :5005
+#    — macOS reserves :5000 for Control Center, so we use :5005).
+./scripts/publish-image.sh
+# → builds app+worker, tags :latest + :git-<sha>, pushes to localhost:5005,
+#   prints the VM pull command.
+```
+
+The registry host is configurable: `REGISTRY=172.16.99.61:5005` (VM-reachable
+Mac IP) or `REGISTRY=172.16.125.51:5005` (a registry running on the VM). The
+default `localhost:5005` only works for local testing.
+
+### On the VM (pull + run)
+
+```bash
+# deploy-vm.sh 'code' now PULLS the published images instead of building:
+REGISTRY=172.16.99.61:5005 bash ~/ebook-converter/scripts/deploy-vm.sh code
+```
+
+The VM's Docker daemon must trust the registry as **insecure** (plain HTTP).
+This is already configured in `/etc/docker/daemon.json`:
+
+```json
+{ "insecure-registries": ["172.16.99.61:5005", "localhost:5005"] }
+```
+
+### Compose override files
+
+| File | Used on | Purpose |
+|------|---------|---------|
+| `docker-compose.yml` | both | base services (redis, app, worker) |
+| `docker-compose.build.yml` | Mac | adds `image:` tags, **drops** the `../tts-service` mount (image must be self-contained) |
+| `docker-compose.pull.yml` | VM | `build: null` + `pull_policy: always` + re-adds `../tts-service` mount |
+
+`character_detector.py` lives in the sibling `app/tts-service` repo and is
+**bind-mounted at runtime** (not baked into the image) — both the build
+override (dropped) and pull override (re-added) handle this deliberately.
 
 ## Verifying a deploy
 
