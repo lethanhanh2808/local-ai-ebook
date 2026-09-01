@@ -25,6 +25,24 @@ describe('splitParagraphIntoSentences', () => {
     const out = splitParagraphIntoSentences('Câu đầu. Câu cuối không dấu chấm');
     expect(out).toEqual(['Câu đầu.', 'Câu cuối không dấu chấm']);
   });
+
+  it('keeps a dialogue trailing ellipsis attached to the same sentence', () => {
+    // "…" inside a quote is a soft pause, not a sentence break — the quote
+    // continues, so the whole line of speech must stay one sentence.
+    const out = splitParagraphIntoSentences(
+      '“Ai da…" ” Nhìn thấy một đôi mắt kinh hãi to quá độ ở bên trong, anh biết mình lại tự đào mồ chôn."',
+    );
+    expect(out).toHaveLength(1);
+  });
+
+  it('treats a hard terminator after an ellipsis as a real break', () => {
+    // The ellipsis is followed by a space + more prose (not a closing quote),
+    // so it is a soft pause and the sentence continues until the hard ".".
+    const out = splitParagraphIntoSentences('Cậu tốt nhất nên có chuyện gì quan trọng, nếu không…" Nhâm Thiếu Hoài lạnh lùng cười.');
+    expect(out).toEqual([
+      'Cậu tốt nhất nên có chuyện gì quan trọng, nếu không…" Nhâm Thiếu Hoài lạnh lùng cười.',
+    ]);
+  });
 });
 
 describe('serialize / deserialize round-trip', () => {

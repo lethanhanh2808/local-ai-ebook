@@ -51,19 +51,32 @@ export interface VoicePlan {
 }
 
 /** Split a single cleaned paragraph string into sentences.
- *  Vietnamese sentence terminators: . ! ? … and closing quotes. We keep the
- *  terminator attached to the sentence. Very short fragments (e.g. a lone "Ừ")
- *  are kept as their own sentence so dialogue one-liners stay editable. */
+ *  Hard terminators: . ! ? — these always end a sentence.
+ *  The ellipsis (… / ...) is a SOFT terminator: it ends a sentence only when it
+ *  is NOT immediately followed by a closing quote. Inside dialogue a speaker
+ *  often trails off with "…" and the quote continues, so splitting there would
+ *  break a single line of speech across two "sentences" and look wrong in the
+ *  editor. We keep the ellipsis attached to the current sentence and let the
+ *  following closing quote (or hard terminator) close it instead.
+ *  Very short fragments (e.g. a lone "Ừ") are kept as their own sentence so
+ *  dialogue one-liners stay editable. */
 export function splitParagraphIntoSentences(text: string): string[] {
   const out: string[] = [];
-  // Match a run of text up to and including a sentence terminator. We allow
-  // trailing closing quotes/parens to be captured with the sentence.
-  const re = /[^.!?…]+[.!?…]?(?:["”'’»])?/g;
+  // A "soft" ellipsis run: … possibly repeated, optionally followed by a
+  // straight or curly closing quote that belongs to the SAME sentence.
+  const re = /[^.!?]+(?:[.!?]+(?:["”'’»])?|…+(?!["”'’»]))/g;
   let m: RegExpExecArray | null;
+  let lastIndex = 0;
   while ((m = re.exec(text)) !== null) {
     const s = m[0].trim();
     if (s) out.push(s);
+    lastIndex = m.index + m[0].length;
   }
+  // Anything left after the last hard terminator (no terminator at all, or a
+  // trailing ellipsis that we deliberately did not split on) becomes its own
+  // sentence.
+  const rest = text.slice(lastIndex).trim();
+  if (rest) out.push(rest);
   if (out.length === 0 && text.trim()) out.push(text.trim());
   return out;
 }
