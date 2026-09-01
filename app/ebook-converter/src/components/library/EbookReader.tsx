@@ -23,7 +23,7 @@ import {
   Volume2, VolumeX, Play, Pause, Square, Headphones,
   Mic, Bug, Terminal, Clipboard, Copy, Activity, CheckCircle2, AlertCircle,
   Eye, Filter, ArrowUpDown, User, ChevronDown, MoreVertical, Info, Images,
-  Pin, PinOff,
+  Pin, PinOff, Pencil,
 } from 'lucide-react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
@@ -4446,6 +4446,21 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
               title="Phân giọng (gán giọng cho nhân vật)">
               <User className="h-4 w-4" />
             </Link>
+            {/* Quick-access "Edit chapter" — opens the WYSIWYG EPUB editor
+                on the CURRENT chapter so a typo spotted while reading can
+                be fixed in 2 clicks. The editor also accepts an in-place
+                "Save" that rewrites the EPUB atomically on disk. */}
+            <Link
+              href={`/library/${bookId}/edit?chapter=${encodeURIComponent(chapters[currentIdx]?.id ?? '')}`}
+              aria-label="Sửa chương này (mở editor)"
+              data-testid="edit-current-chapter-quick-btn"
+              className={cn(
+                'flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors',
+                chapters[currentIdx]?.id ? `border-transparent ${hoverCls}` : 'pointer-events-none border-transparent opacity-40',
+              )}
+              title={chapters[currentIdx]?.id ? 'Sửa chương này (mở editor)' : 'Chưa có chương để sửa'}>
+              <Pencil className="h-4 w-4" />
+            </Link>
           </div>
 
           <div className="hidden md:flex items-center gap-1 rounded-xl border border-border/70 bg-background/35 p-1 shadow-sm">
@@ -4653,6 +4668,15 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
                 <Link href={`/library/${bookId}/audio?tab=assign`}>
                   <User className="h-3.5 w-3.5" />
                   <span className="flex-1">Phân giọng</span>
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild className="gap-2">
+                <Link
+                  href={`/library/${bookId}/edit?chapter=${encodeURIComponent(chapters[currentIdx]?.id ?? '')}`}
+                  data-testid="edit-current-chapter-menu-item"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                  <span className="flex-1">Sửa chương này</span>
                 </Link>
               </DropdownMenuItem>
               <DropdownMenuItem
