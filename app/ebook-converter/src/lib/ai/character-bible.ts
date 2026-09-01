@@ -187,11 +187,12 @@ export async function refreshBible(
       // end of JSON input". The bible task doesn't need reasoning.
       enable_thinking: false,
       temperature: 0.2,
-      // 8192 output tokens — Vietnamese character-bible arrays can grow
-      // quickly when a chapter introduces many new characters. Combined
-      // with the 30 k default chapter cap on input, the prompt stays
-      // inside the typical 8–16 k context window most local models use.
-      max_tokens: 8192,
+      // 2026-09-01: honor Settings.aiMaxTokens (via chatJSON fallback)
+      // instead of hardcoding 8192. Vietnamese character-bible arrays can
+      // grow quickly when a chapter introduces many new characters. The
+      // chat() helper clamps to 16384 internally as a safety net so a
+      // user-set "Generous" preset (e.g. for reasoning models) still works
+      // without us picking an arbitrary number per call site.
       model: opts.model,
     });
     tokens = Array.isArray(patches) ? patches.length : 0;

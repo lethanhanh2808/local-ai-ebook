@@ -38,6 +38,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // reflects the latest /settings choice without a server restart).
   const model = await resolveModel();
 
+  // 2026-09-01: honor Settings.aiMaxTokens instead of hardcoding 2000.
+  // Reasoning models (Qwen3, MiniMax-M3) often need more than 2k tokens to
+  // emit both their `reasoning_content` trace AND the final JSON. Clamp to
+  // a sane upper bound so a misconfigured huge value can't OOM the gateway.
+  let maxTokens = 2000;
+  try {
+    const { getEffectiveSettings } = await import('@/lib/db/settings');
+    const s = await getEffectiveSettings();
+    if (typeof s.aiMaxTokens === 'number' && s.aiMaxTokens > 0) {
+      maxTokens = Math.max(256, Math.min(s.aiMaxTokens, 8192));
+    }
+  } catch { /* settings not loaded — keep 2000 default */ }
+
   try {
     const resp = await fetch(`${OMLX_BASE}/chat/completions`, {
       method: 'POST',
@@ -51,7 +64,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           { role: 'system', content: PROMPT_SYSTEM },
           { role: 'user',   content: PROMPT_USER(text) },
         ],
-        max_tokens: 2000,
+        max_tokens: maxTokens,
         temperature: 0.0,
       }),
       // 90 s timeout — the model needs time to reason then output JSON

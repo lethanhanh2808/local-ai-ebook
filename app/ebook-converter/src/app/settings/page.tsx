@@ -694,10 +694,69 @@ export default function SettingsPage() {
                 </Field>
               )}
 
-              <Field label="Max tokens" htmlFor="settings-ai-max-tokens">
-                <Input id="settings-ai-max-tokens" type="number" min={64} max={32000} step={64} value={settings.aiMaxTokens}
-                  onChange={(e) => update('aiMaxTokens', parseInt(e.target.value, 10) || 4096)}
-                />
+              {/* 2026-09-01: Max-tokens UI got preset chips + a tooltip that
+                  lists every code path that respects the value, so the user
+                  sees what their knob actually controls. The actual setting
+                  (aiMaxTokens) is unchanged — only the surrounding UX grew. */}
+              <Field
+                label="Max tokens"
+                htmlFor="settings-ai-max-tokens"
+                tooltip={
+                  <div className="space-y-1 text-left max-w-xs">
+                    <p className="font-medium">Output budget for every AI call.</p>
+                    <p>Higher = longer JSON answers (more characters, more chapters). Lower = faster + cheaper.</p>
+                    <p className="pt-1 text-muted-foreground">Respected by:</p>
+                    <ul className="list-disc pl-4 space-y-0.5">
+                      <li><code className="font-mono">chat()</code> / <code className="font-mono">chatJSON()</code> helper (chapter enhancer, EPUB analyzer, character bible, whole-chapter attribution)</li>
+                      <li>Python <code className="font-mono">character_detector.py</code> (via <code className="font-mono">OMLX_MAX_TOKENS</code>)</li>
+                      <li>Python <code className="font-mono">audiobook_generator.py</code> LLM segmenter + emotion classifier (via <code className="font-mono">OMLX_MAX_TOKENS</code>)</li>
+                      <li>Per-paragraph emotion classifier (<code className="font-mono">/api/tts/analyze</code>)</li>
+                    </ul>
+                    <p className="pt-1 text-muted-foreground">Hardcoded (not user-tunable): tiny outputs like cover titles (600), watermarks (256), test-AI ping (32).</p>
+                    <p className="pt-1 text-amber-600 dark:text-amber-400">⚠ Reasoning models (Qwen3, DeepSeek-R1, MiniMax-M3) spend part of the budget on internal thinking — values below ~4096 often produce empty/garbled output.</p>
+                  </div>
+                }
+                help={
+                  <span className="flex items-center justify-between gap-2">
+                    <span>64 → 32000</span>
+                    <span className="font-mono font-semibold text-foreground">{settings.aiMaxTokens.toLocaleString()} tokens</span>
+                  </span>
+                }
+              >
+                <div className="flex items-center gap-2">
+                  <Input id="settings-ai-max-tokens" type="number" min={64} max={32000} step={64} value={settings.aiMaxTokens}
+                    onChange={(e) => update('aiMaxTokens', Math.max(64, Math.min(32000, parseInt(e.target.value, 10) || 4096)))}
+                    className="flex-1"
+                  />
+                  <div className="flex shrink-0 items-center rounded-md border border-border overflow-hidden text-[10px]">
+                    {[
+                      { value: 4096,  label: '4096',  hint: 'Tiết kiệm' },
+                      { value: 8192,  label: '8192',  hint: 'Cân bằng' },
+                      { value: 16384, label: '16K',   hint: 'Rộng rãi' },
+                      { value: 24576, label: '24K',   hint: 'Reasoning' },
+                    ].map((p) => {
+                      const active = settings.aiMaxTokens === p.value;
+                      return (
+                        <Tooltip key={p.value} content={`${p.value.toLocaleString()} tokens — ${p.hint}`} side="top">
+                          <button
+                            type="button"
+                            onClick={() => update('aiMaxTokens', p.value)}
+                            aria-label={`Đặt Max tokens = ${p.value.toLocaleString()} (${p.hint})`}
+                            aria-pressed={active}
+                            className={cn(
+                              'px-2 py-1.5 font-mono transition-colors',
+                              active
+                                ? 'bg-primary text-primary-foreground'
+                                : 'hover:bg-muted text-muted-foreground',
+                            )}
+                          >
+                            {p.label}
+                          </button>
+                        </Tooltip>
+                      );
+                    })}
+                  </div>
+                </div>
               </Field>
 
               <Field

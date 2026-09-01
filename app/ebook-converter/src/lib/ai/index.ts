@@ -92,8 +92,8 @@ function endpointFor(s: Settings): { baseUrl: string; apiKey: string; model: str
  * caller can return a clear 4xx/5xx instead of a confusing connection-refused
  * error from the dead local OMLX.
  */
-export async function detectorEnvOverrides(): Promise<Record<string, string>> {
-  const s = await getEffectiveSettings();
+export async function detectorEnvOverrides(sessionOverride?: Partial<Settings> | null): Promise<Record<string, string>> {
+  const s = await getEffectiveSettings(undefined, sessionOverride);
   const apiKey = s.aiApiKey?.trim() ?? '';
   const model = s.aiModel?.trim() ?? '';
   // Mirror the app's `aiAllowInsecureTls` Settings flag: when set, the Python
@@ -106,6 +106,7 @@ export async function detectorEnvOverrides(): Promise<Record<string, string>> {
     if (apiKey) overrides.OMLX_API_KEY = apiKey;
     if (model) overrides.OMLX_MODEL = model;
     if (insecureTls) overrides.OMLX_INSECURE_TLS = insecureTls;
+    overrides.OMLX_MAX_TOKENS = String(maxTokensForModel(s, model));
     return overrides;
   }
 
@@ -119,9 +120,34 @@ export async function detectorEnvOverrides(): Promise<Record<string, string>> {
     OMLX_BASE_URL: baseUrl,
     OMLX_API_KEY: apiKey,
     OMLX_MODEL: model,
+    OMLX_MAX_TOKENS: String(maxTokensForModel(s, model)),
   };
   if (insecureTls) overrides.OMLX_INSECURE_TLS = insecureTls;
   return overrides;
+}
+
+/** Compute a safe max_tokens budget for the Python detector.
+ *
+ *  Reasoning models (e.g. MiniMax-M3) spend a chunk of their completion budget
+ *  on internal `reasoning_content` before producing any visible answer — if
+ *  the budget is too low, `content` comes back empty and the detector falls
+ *  back to regex. Bump the cap when the model name hints at reasoning so the
+ *  detector has enough room for both the thinking phase AND the JSON output.
+ *  Honors Settings.aiMaxTokens when set; defaults to 8192.
+ */
+function maxTokensForModel(s: Settings, model: string): number {
+  const base = (s.aiMaxTokens && s.aiMaxTokens > 0) ? s.aiMaxTokens : 8192;
+  const lowered = model.toLowerCase();
+  const looksLikeReasoning =
+    lowered.includes('minimax') ||          // minimax-M3, MiniMax-M3, etc.
+    lowered.includes('r1') ||
+    lowered.includes('reasoning') ||
+    lowered.includes('deepseek-r') ||
+    lowered.includes('qwq');
+  // Reasoning models need ~2x the completion budget so the JSON answer isn't
+  // truncated mid-output. Cap at 16384 — past that the gateway can OOM.
+  const adjusted = looksLikeReasoning ? Math.max(base, 8192) : base;
+  return Math.max(256, Math.min(adjusted, 16384));
 }
 
 /** Result of an AI call including performance stats. */

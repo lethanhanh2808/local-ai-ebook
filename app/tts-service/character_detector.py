@@ -124,6 +124,22 @@ def extract_chapter_samples(epub_path: str, max_chapters: int = MAX_CHAPTERS,
 
 def call_omlx(system: str, user: str, timeout: float = 120.0) -> str:
     """Call OMLX chat completions and return the assistant text."""
+    # BUGFIX 2026-09-01: max_tokens was hardcoded at 1500, which is below the
+    # ~2500-4000 tokens the JSON output needs for a 5-chapter Vietnamese-novel
+    # detection (multiple characters + aliases + sample_lines). Reasoning
+    # models like MiniMax-M3 then burn the whole budget on internal
+    # `reasoning_content` and return empty `content`, forcing the route to
+    # fall back to the regex roster (with the "regex fallback" warning).
+    # Honor `OMLX_MAX_TOKENS` (forwarded from DB Settings.aiMaxTokens by the
+    # Next.js detectorEnvOverrides) and default to 8192 — the same value the
+    # Next.js chat() helper uses. Clamp to a sane range so a misconfigured
+    # huge value can't OOM the gateway.
+    try:
+        max_tokens = int(os.environ.get("OMLX_MAX_TOKENS", "8192"))
+    except (TypeError, ValueError):
+        max_tokens = 8192
+    max_tokens = max(256, min(max_tokens, 16384))
+
     body = {
         "model": OMLX_MODEL,
         "messages": [
@@ -131,7 +147,7 @@ def call_omlx(system: str, user: str, timeout: float = 120.0) -> str:
             {"role": "user", "content": user},
         ],
         "temperature": 0.1,
-        "max_tokens": 1500,
+        "max_tokens": max_tokens,
     }
     headers = {"Content-Type": "application/json"}
     if OMLX_KEY:
@@ -142,12 +158,29 @@ def call_omlx(system: str, user: str, timeout: float = 120.0) -> str:
     # gateways (e.g. a custom OpenAI-compatible endpoint behind an internal CA)
     # where Python's httpx would otherwise raise CERTIFICATE_VERIFY_FAILED.
     verify = not os.environ.get("OMLX_INSECURE_TLS", "").strip() in ("1", "true", "yes")
-    with httpx.Client(timeout=timeout, verify=verify) as client:
-        r = client.post(f"{OMLX_URL}/chat/completions", json=body, headers=headers)
+    try:
+        with httpx.Client(timeout=timeout, verify=verify) as client:
+            r = client.post(f"{OMLX_URL}/chat/completions", json=body, headers=headers)
+    except Exception as e:
+        # RESILIENCE FIX 2026-09-01: a misconfigured / unreachable provider
+        # should not crash the whole detection — return empty so the regex
+        # fallback (which scans the chapter text) can still produce a roster.
+        print(f"[character_detector] OMLX request failed: {e}", file=sys.stderr)
+        return ""
     if r.status_code != 200:
-        raise RuntimeError(f"OMLX error {r.status_code}: {r.text[:300]}")
-    data = r.json()
-    return data["choices"][0]["message"]["content"]
+        print(f"[character_detector] OMLX error {r.status_code}: {r.text[:300]}", file=sys.stderr)
+        return ""
+    try:
+        data = r.json()
+    except Exception:
+        return ""
+    # Some providers return 200 with an empty/non-conforming body when the
+    # model name is invalid or the request is rejected silently.
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        return ""
+    return content or ""
 
 
 def detect_characters(epub_path: str, max_chapters: int = MAX_CHAPTERS,
@@ -259,9 +292,22 @@ def _run_detection(sample_blob: str, scope: str) -> dict:
         # so the UI can warn the user that the LLM path produced nothing
         # parseable. Without this tag the user sees "9 nhân vật" with garbage
         # names and no clue why.
+        #
+        # RESILIENCE FIX 2026-09-01: the LLM may return an EMPTY body (e.g. a
+        # misconfigured / unreachable custom provider). Searching only `raw`
+        # then yields zero names and the whole detection fails. Fall back to
+        # scanning the actual chapter text (`sample_blob`) — it always
+        # contains the real character names — so detection still produces a
+        # useful roster even when the AI backend is down. We prefer names
+        # found in the LLM prose (richer metadata) but union in any names
+        # the chapter text reveals.
         names = _regex_extract_names(raw)
+        if not names and sample_blob:
+            names = _regex_extract_names(sample_blob)
         if names:
-            meta = _extract_metadata_from_prose(raw, names)
+            # Metadata inference prefers the LLM prose when present, but falls
+            # back to the chapter text so gender/age/role are still inferred.
+            meta = _extract_metadata_from_prose(raw or sample_blob, names)
             data = {
                 "characters": [
                     {

@@ -410,6 +410,28 @@ LLM_SEGMENT_RETRY_FACTOR = float(os.environ.get("LLM_SEGMENT_RETRY_FACTOR", "0.6
 # Min chunk size we won't go below — protects against infinite shrinking.
 LLM_SEGMENT_MIN_CHARS = int(os.environ.get("LLM_SEGMENT_MIN_CHARS", "600"))
 
+
+def _segmenter_max_tokens(text_len: int) -> int:
+    """Compute the LLM-segmenter `max_tokens` budget.
+
+    Priority:
+      1. `OMLX_MAX_TOKENS` env var (forwarded from DB Settings.aiMaxTokens
+         by the Next.js detectorEnvOverrides). When set, the user is in
+         control — clamp to a sane range and use it directly.
+      2. Length-based heuristic: long chapters produce 30+ segments with
+         verbatim text fields. ~1 token / 1.5 chars of output plus 30 tokens
+         per segment. Capped at 8192 — 4B models on M-series generate
+         ~50 tokens/sec, so 8K tokens finishes in ~3 min worst case.
+    """
+    try:
+        env_max = int(os.environ.get("OMLX_MAX_TOKENS", ""))
+    except (TypeError, ValueError):
+        env_max = 0
+    if env_max > 0:
+        return max(256, min(env_max, 16384))
+    return min(8192, 1500 + int(text_len * 0.6))
+
+
 # Cache: text → marker (so the same dialogue across chapters isn't re-classified)
 _LLM_EMOTION_CACHE: dict[str, str] = {}
 _LLM_EMOTION_CACHE_MAX = 4096
@@ -1248,10 +1270,12 @@ def _call_omlx_segmenter(plain: str, characters_block: str, chunk_max_chars: int
         # Generous budget — long chapters can produce 30+ segments, and JSON
         # with verbatim text fields is verbose. Estimate ~1 token / 1.5 chars
         # of output plus ~30 tokens / segment for metadata + JSON overhead.
-        # Capped at 8192 — 4B models on M-series can generate ~50 tokens/sec,
-        # so 8K tokens finishes in ~3 min worst case. Bump if you switch to
-        # a faster model.
-        "max_tokens": min(8192, 1500 + int(len(text) * 0.6)),
+        # 2026-09-01: honor OMLX_MAX_TOKENS (forwarded from DB
+        # Settings.aiMaxTokens by the Next.js detectorEnvOverrides) when set;
+        # fall back to the length-based heuristic so direct CLI usage still
+        # produces a sensible budget. Capped at 16384 — past that the
+        # gateway can OOM and a chapter that long needs chunking anyway.
+        "max_tokens": _segmenter_max_tokens(len(text)),
     }
     headers = {"Content-Type": "application/json"}
     if OMLX_KEY:

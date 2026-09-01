@@ -112,8 +112,12 @@ export async function detectChapters(
   // Limit to 200 files to keep the prompt manageable
   const limitedFiles = htmlFiles.slice(0, 200);
   const tocTitles = tocItems.slice(0, 100).map((t) => `${t.title} → ${t.src}`);
+  // 2026-09-01: honor Settings.aiMaxTokens (via chatJSON fallback) instead
+  // of hardcoding 8192. Chapter detection for large EPUBs (200 files, broken
+  // TOCs) can produce 500+ chapter entries — JSON output balloons fast.
+  // chat() clamps internally to 16384 as a safety net so a user-set
+  // "Generous" preset (e.g. for reasoning models) still works.
   return chatJSON({
-    max_tokens: 8192,
     messages: [
       {
         role: 'system',

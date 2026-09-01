@@ -41,6 +41,24 @@ import { kill, killAll, track } from './process-tracker';
 
 const PYTHON = process.env.TTS_PYTHON ?? '/Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11';
 
+/** 2026-09-01: read the user's DB aiMaxTokens for forwarding to the Python
+ *  generator as `OMLX_MAX_TOKENS` (so its LLM-segmenter / emotion classifier
+ *  honor the user's setting instead of falling back to hardcoded defaults).
+ *  Mirrors the `detectorEnvOverrides` pattern used by character detection.
+ *  Clamps to [256, 16384] so a misconfigured huge value can't OOM the gateway.
+ */
+async function resolveAiMaxTokens(): Promise<number> {
+  const fallback = 8192;
+  try {
+    const { getEffectiveSettings } = await import('@/lib/db/settings');
+    const s = await getEffectiveSettings();
+    const v = typeof s.aiMaxTokens === 'number' && s.aiMaxTokens > 0 ? s.aiMaxTokens : fallback;
+    return Math.max(256, Math.min(v, 16384));
+  } catch {
+    return fallback;
+  }
+}
+
 function resolveTtsServiceDir(): string | null {
   const candidates = [
     path.resolve(process.cwd(), '..', 'tts-service'),
@@ -99,6 +117,11 @@ async function runGenerator(opts: {
   charactersJson: string;
   voicePlanJson?: string;
 }): Promise<{ stdout: string; stderr: string; code: number }> {
+  // 2026-09-01: resolve OMLX_MAX_TOKENS BEFORE entering the spawn callback
+  // so we can pass it synchronously to env (the spawn callback isn't async).
+  // Mirrors how detectorEnvOverrides forwards aiMaxTokens to character_detector.py.
+  const maxTokens = await resolveAiMaxTokens();
+
   return new Promise((resolve, reject) => {
     if (!GENERATOR || !fs.existsSync(GENERATOR)) {
       reject(new Error(`audiobook_generator.py not found. TTS_SERVICE=${TTS_SERVICE}`));
@@ -115,7 +138,14 @@ async function runGenerator(opts: {
       '--out-dir', opts.outDir,
     ];
     const proc = spawn(py, args, {
-      env: { ...process.env, VIENEU_URL, UNIFIED_TTS_URL: VIENEU_URL, CHARACTER_MAP: opts.charactersJson, VOICE_PLAN: opts.voicePlanJson ?? '' },
+      env: {
+        ...process.env,
+        VIENEU_URL,
+        UNIFIED_TTS_URL: VIENEU_URL,
+        CHARACTER_MAP: opts.charactersJson,
+        VOICE_PLAN: opts.voicePlanJson ?? '',
+        OMLX_MAX_TOKENS: String(maxTokens),
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const key = generatorKey(opts.bookId, opts.chapterFile);
