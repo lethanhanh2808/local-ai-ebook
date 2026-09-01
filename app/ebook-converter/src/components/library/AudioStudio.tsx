@@ -189,7 +189,7 @@ export function AudioStudio({ bookId, bookTitle }: { bookId: string; bookTitle: 
 
       {/* Segmented tab bar */}
       <div className="flex justify-center border-b border-border/70 bg-background/40 px-4 py-2.5">
-        <div className="inline-flex w-full max-w-2xl items-center gap-1 rounded-xl border border-border/70 bg-muted/40 p-1">
+        <div className="inline-flex w-full max-w-5xl items-center gap-1 rounded-xl border border-border/70 bg-muted/40 p-1">
           {TABS.map((t) => {
             const b = badge(t.id);
             const active = tab === t.id;
@@ -224,7 +224,7 @@ export function AudioStudio({ bookId, bookTitle }: { bookId: string; bookTitle: 
 
       {/* Content — centered, comfortable max width */}
       <div className="flex-1 min-h-0 overflow-y-auto">
-        <div className="mx-auto w-full max-w-3xl px-4 py-6">
+        <div className="mx-auto w-full max-w-5xl px-4 py-6">
           {tab === 'audiobook' && (
             <Suspense fallback={<PanelSkeleton />}>
               <AudiobookPanel bookId={bookId} />
