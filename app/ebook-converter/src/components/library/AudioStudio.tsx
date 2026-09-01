@@ -16,7 +16,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import {
-  ArrowLeft, Headphones, Loader2, Wand2, CheckCircle2, AlertCircle,
+  ArrowLeft, Headphones, Loader2, Wand2, CheckCircle2, AlertCircle, Mic, User,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -127,113 +127,139 @@ export function AudioStudio({ bookId, bookTitle }: { bookId: string; bookTitle: 
   const isGenerating = status?.audiobookStatus === 'generating';
 
   return (
-    <div className="flex h-screen flex-col bg-background text-foreground">
-      <header className="flex items-center gap-3 border-b px-4 py-3">
+    <div className="flex h-screen flex-col bg-gradient-to-b from-muted/40 to-background text-foreground">
+      {/* Header */}
+      <header className="flex items-center gap-3 border-b border-border/70 bg-background/80 px-5 py-3.5 backdrop-blur">
         <Link
           href={`/library/${bookId}/read`}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors hover:bg-accent"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-border/70 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           aria-label="Quay lại đọc"
         >
           <ArrowLeft className="h-4 w-4" />
         </Link>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold">{bookTitle}</div>
-          <div className="truncate text-xs text-muted-foreground">Audio Studio</div>
+          <div className="flex items-center gap-2">
+            <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <Headphones className="h-3.5 w-3.5" />
+            </span>
+            <h1 className="truncate text-[15px] font-semibold tracking-tight">{bookTitle}</h1>
+          </div>
+          <p className="truncate pl-8 text-xs text-muted-foreground">Audio Studio</p>
         </div>
         <Link
           href={`/library/${bookId}/read`}
-          className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-accent"
+          className="inline-flex items-center gap-1.5 rounded-xl border border-border/70 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           <Headphones className="h-3.5 w-3.5" /> Đọc sách
         </Link>
       </header>
 
-      {/* Studio status strip — live cross-panel snapshot */}
+      {/* Status strip — live cross-panel snapshot as elegant chips */}
       {status && (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b bg-muted/30 px-4 py-1.5 text-[11px] text-muted-foreground">
-          <span className="inline-flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-2 border-b border-border/70 bg-background/60 px-5 py-2.5">
+          <span className={cn(
+            'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium',
+            isGenerating
+              ? 'border-blue-500/30 bg-blue-500/10 text-blue-600 dark:text-blue-300'
+              : status.audiobookReady === status.audiobookTotal && status.audiobookTotal > 0
+                ? 'border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-400'
+                : status.audiobookStatus === 'failed'
+                  ? 'border-destructive/30 bg-destructive/10 text-destructive'
+                  : 'border-border/70 bg-muted/50 text-muted-foreground',
+          )}>
             {isGenerating ? (
-              <Loader2 className="h-3 w-3 animate-spin text-blue-500" />
+              <Loader2 className="h-3 w-3 animate-spin" />
             ) : status.audiobookReady === status.audiobookTotal && status.audiobookTotal > 0 ? (
-              <CheckCircle2 className="h-3 w-3 text-green-600" />
+              <CheckCircle2 className="h-3 w-3" />
             ) : status.audiobookStatus === 'failed' ? (
-              <AlertCircle className="h-3 w-3 text-destructive" />
+              <AlertCircle className="h-3 w-3" />
             ) : (
               <Headphones className="h-3 w-3" />
             )}
-            Audiobook: {status.audiobookReady}/{status.audiobookTotal} chương ({status.audiobookPct}%)
+            Audiobook {status.audiobookReady}/{status.audiobookTotal} · {status.audiobookPct}%
           </span>
-          <span>Giọng: {status.voiceCount}</span>
-          <span>Nhân vật: {status.characterAssigned}/{status.characterCount} đã gán</span>
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-muted/50 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+            <Mic className="h-3 w-3" /> {status.voiceCount} giọng
+          </span>
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-muted/50 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+            <User className="h-3 w-3" /> {status.characterAssigned}/{status.characterCount} nhân vật
+          </span>
         </div>
       )}
 
-      <div className={cn('flex border-b shrink-0', 'border-border')} role="tablist" aria-label="Audio Studio">
-        {TABS.map((t) => {
-          const b = badge(t.id);
-          return (
-            <button
-              key={t.id}
-              type="button"
-              role="tab"
-              aria-selected={tab === t.id}
-              onClick={() => setTab(t.id)}
-              className={cn(
-                'relative flex-1 py-2.5 text-sm font-medium transition-colors border-b-2',
-                tab === t.id
-                  ? 'border-primary text-primary'
-                  : 'border-transparent text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {t.label}
-              {b && (
-                <span className={cn(
-                  'ml-1.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold',
-                  tab === t.id ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground',
-                )}>
-                  {b}
-                </span>
-              )}
-            </button>
-          );
-        })}
+      {/* Segmented tab bar */}
+      <div className="flex justify-center border-b border-border/70 bg-background/40 px-4 py-2.5">
+        <div className="inline-flex w-full max-w-2xl items-center gap-1 rounded-xl border border-border/70 bg-muted/40 p-1">
+          {TABS.map((t) => {
+            const b = badge(t.id);
+            const active = tab === t.id;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setTab(t.id)}
+                className={cn(
+                  'relative flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-all',
+                  active
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {t.label}
+                {b && (
+                  <span className={cn(
+                    'rounded-full px-1.5 py-0.5 text-[10px] font-semibold',
+                    active ? 'bg-primary/15 text-primary' : 'bg-background/70 text-muted-foreground',
+                  )}>
+                    {b}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
+      {/* Content — centered, comfortable max width */}
       <div className="flex-1 min-h-0 overflow-y-auto">
-        {tab === 'audiobook' && (
-          <Suspense fallback={<PanelSkeleton />}>
-            <AudiobookPanel bookId={bookId} />
-          </Suspense>
-        )}
-        {tab === 'voices' && (
-          <Suspense fallback={<PanelSkeleton />}>
-            <VoicePanel
-              bookId={bookId}
-              bookLanguage="vi"
-              section="voices"
-            />
-          </Suspense>
-        )}
-        {tab === 'characters' && (
-          <Suspense fallback={<PanelSkeleton />}>
-            <VoicePanel
-              bookId={bookId}
-              bookLanguage="vi"
-              section="characters"
-            />
-          </Suspense>
-        )}
-        {tab === 'assign' && (
-          <Suspense fallback={<PanelSkeleton />}>
-            <VoiceAssignPage bookId={bookId} bookTitle={bookTitle} />
-          </Suspense>
-        )}
+        <div className="mx-auto w-full max-w-3xl px-4 py-6">
+          {tab === 'audiobook' && (
+            <Suspense fallback={<PanelSkeleton />}>
+              <AudiobookPanel bookId={bookId} />
+            </Suspense>
+          )}
+          {tab === 'voices' && (
+            <Suspense fallback={<PanelSkeleton />}>
+              <VoicePanel
+                bookId={bookId}
+                bookLanguage="vi"
+                section="voices"
+              />
+            </Suspense>
+          )}
+          {tab === 'characters' && (
+            <Suspense fallback={<PanelSkeleton />}>
+              <VoicePanel
+                bookId={bookId}
+                bookLanguage="vi"
+                section="characters"
+              />
+            </Suspense>
+          )}
+          {tab === 'assign' && (
+            <Suspense fallback={<PanelSkeleton />}>
+              <VoiceAssignPage bookId={bookId} bookTitle={bookTitle} />
+            </Suspense>
+          )}
+        </div>
       </div>
 
       {/* Cross-tab CTA — generate the audiobook from the current voice/character
           setup without leaving the Phân giọng or Nhân vật tab. */}
       {(tab === 'assign' || tab === 'characters') && (
-        <div className="flex items-center gap-3 border-t bg-background px-4 py-3">
+        <div className="flex items-center gap-3 border-t border-border/70 bg-background/80 px-5 py-3.5 backdrop-blur">
           <div className="min-w-0 flex-1 text-xs text-muted-foreground">
             {isGenerating
               ? `Đang tạo audiobook… ${status?.audiobookPct ?? 0}%`
@@ -243,7 +269,7 @@ export function AudioStudio({ bookId, bookTitle }: { bookId: string; bookTitle: 
             size="sm"
             onClick={() => void generateAudiobook()}
             disabled={generating || isGenerating}
-            className="shrink-0"
+            className="shrink-0 rounded-xl"
           >
             {generating || isGenerating ? (
               <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />Đang tạo…</>
