@@ -1,0 +1,15 @@
+import { chromium } from 'playwright';
+const BOOK_ID = '593bd59a-834a-406a-b9c5-db3ca8f7528c';
+const browser = await chromium.launch({ channel: 'chrome' });
+const ctx = await browser.newContext();
+const page = await ctx.newPage();
+const api = page.context().request;
+const res = await api.post('http://localhost:3100/api/auth/login', { data: { username:'admin', password:'admin123' }, headers:{'Content-Type':'application/json'} });
+const m = res.headers()['set-cookie']?.match(/ebook-auth-session=([^;]+)/);
+if (m) await ctx.addCookies([{ name:'ebook-auth-session', value:m[1], domain:'localhost', path:'/', httpOnly:true, sameSite:'Lax' }]);
+await page.goto(`http://localhost:3100/library/${BOOK_ID}/read`, { waitUntil: 'domcontentloaded' });
+await page.waitForTimeout(3500);
+const btns = await page.locator('header button').evaluateAll(els => els.map(e => ({ aria:e.getAttribute('aria-label'), title:e.getAttribute('title'), text:e.textContent?.trim().slice(0,20) })));
+console.log('HEADER BUTTONS:');
+btns.forEach(b => console.log(JSON.stringify(b)));
+await browser.close();

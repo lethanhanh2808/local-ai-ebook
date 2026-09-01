@@ -15,9 +15,12 @@ import Link from 'next/link';
 import {
   ArrowLeft,
   Check,
+  History,
   Loader2,
   Mic,
   Play,
+  Save,
+  Sparkles,
   Square,
   User,
   Volume2,
@@ -58,7 +61,16 @@ interface ChapterInfo {
   file: string;
 }
 
+/** A single rolling-history snapshot of the chapter's voice plan. */
+interface HistoryEntry {
+  id: string;
+  label: string;
+  createdAt: string;
+  count: number;
+}
+
 const NARRATION_VALUE = '__narration__';
+const HISTORY_CAP = 30;
 
 /** Detect sentences that are actually chapter headings / titles, not prose.
  *  The splitter catches <h1>Chương 1</h1> and the book's title as standalone
@@ -122,6 +134,16 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
   const [error, setError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
+  // (f) AI proposal + history. The AI "đề xuất" only builds a proposal; it is
+  // NOT persisted until the user reviews/edits and explicitly applies it. A
+  // rolling history (max HISTORY_CAP snapshots) is snapshotted BEFORE every
+  // apply / restore / manual save so any change is always reversible.
+  const [proposal, setProposal] = useState<PlanSentence[] | null>(null);
+  const [proposalBusy, setProposalBusy] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
   const [activeSentence, setActiveSentence] = useState<number | null>(null);
   const [previewing, setPreviewing] = useState<string | null>(null);
   const [playingSentence, setPlayingSentence] = useState<number | null>(null);
@@ -138,7 +160,7 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
   const [genBusy, setGenBusy] = useState(false);
   const genPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // (e) AI suggest
+  // (e) AI suggest (proposal mode — does not persist)
   const [suggesting, setSuggesting] = useState(false);
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -192,6 +214,9 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
       setSentences([]);
       return;
     }
+    // A pending AI proposal belongs to the previous chapter — drop it so it
+    // can't be applied to the wrong chapter.
+    setProposal(null);
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -390,10 +415,13 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
     [bookId, currentChapterFile, pollGeneration],
   );
 
-  // (e) AI suggest voices — populate voiceId for character sentences.
+  // (e) AI suggest voices — build a PROPOSAL only. The proposal is NOT
+  // persisted; the user reviews/edits it and explicitly applies it (which
+  // snapshots history first). This avoids accidental overwrites.
   const suggestVoices = useCallback(async () => {
     if (!chapterId) return;
-    setSuggesting(true);
+    setProposalBusy(true);
+    setProposal(null);
     try {
       const r = await fetch(
         `/api/library/${bookId}/chapters/${encodeURIComponent(chapterId)}/voice-plan/suggest`,
@@ -402,23 +430,113 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
       if (!r.ok) throw new Error('suggest failed');
       const data = await r.json() as { sentences?: PlanSentence[] };
       if (data.sentences) {
-        setSentences((prev) => {
-          // Preserve order/index; only take the suggested voiceId/charId/source.
-          const next = prev.map((s, idx) => {
+        // Preserve order/index; only take the suggested voiceId/charId/source.
+        setProposal((prev) => {
+          const base = prev ?? sentences;
+          const next = base.map((s, idx) => {
             const sug = data.sentences![idx];
             return sug ? { ...s, voiceId: sug.voiceId, charId: sug.charId, source: sug.source } : s;
           });
-          dirtyRef.current = true;
-          persist(next);
           return next;
         });
       }
     } catch {
       /* best-effort */
     } finally {
-      setSuggesting(false);
+      setProposalBusy(false);
     }
-  }, [bookId, chapterId, persist]);
+  }, [bookId, chapterId, sentences]);
+
+  // Push the CURRENT plan to history (the safety net before any apply/restore/
+  // manual save). Enforced cap of HISTORY_CAP on the server.
+  const pushHistory = useCallback(
+    async (label: string) => {
+      if (!chapterId || sentences.length === 0) return;
+      try {
+        await fetch(
+          `/api/library/${bookId}/chapters/${encodeURIComponent(chapterId)}/voice-plan/history`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sentences, label }),
+          },
+        );
+      } catch {
+        /* best-effort — history is a safety net, never block the main action */
+      }
+    },
+    [bookId, chapterId, sentences],
+  );
+
+  // Load the history list (newest first).
+  const refreshHistory = useCallback(async () => {
+    if (!chapterId) return;
+    setHistoryLoading(true);
+    try {
+      const r = await fetch(
+        `/api/library/${bookId}/chapters/${encodeURIComponent(chapterId)}/voice-plan/history`,
+      );
+      if (!r.ok) return;
+      const data = await r.json() as { history?: HistoryEntry[] };
+      setHistory(data.history ?? []);
+    } catch {
+      /* best-effort */
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [bookId, chapterId]);
+
+  // Open the history dialog and refresh its contents.
+  const openHistory = useCallback(() => {
+    setHistoryOpen(true);
+    void refreshHistory();
+  }, [refreshHistory]);
+
+  // Apply the AI proposal: snapshot current plan to history, then load the
+  // proposal into the editable area (dirty) so the user can still tweak before
+  // the explicit Save. We persist immediately here too so the proposal is
+  // committed; the user can still edit afterwards (each edit re-persists).
+  const applyProposal = useCallback(async () => {
+    if (!proposal || !chapterId) return;
+    await pushHistory('Trước AI đề xuất');
+    setSentences(proposal);
+    dirtyRef.current = true;
+    persist(proposal);
+    setProposal(null);
+    await refreshHistory();
+  }, [proposal, chapterId, pushHistory, persist, refreshHistory]);
+
+  const discardProposal = useCallback(() => {
+    setProposal(null);
+  }, []);
+
+  // Manual "save a version" — snapshot current plan to history without changing
+  // anything. Lets the user checkpoint before risky manual edits.
+  const saveVersion = useCallback(async () => {
+    await pushHistory('Lưu thủ công');
+    await refreshHistory();
+  }, [pushHistory, refreshHistory]);
+
+  // Restore a history snapshot: snapshot the CURRENT plan first (so restore is
+  // itself reversible), then load the snapshot into the editable area + persist.
+  const restoreHistory = useCallback(
+    async (historyId: string) => {
+      if (!chapterId) return;
+      await pushHistory('Trước khôi phục');
+      const r = await fetch(
+        `/api/library/${bookId}/chapters/${encodeURIComponent(chapterId)}/voice-plan/history/${historyId}`,
+      );
+      if (!r.ok) return;
+      const data = await r.json() as { sentences?: PlanSentence[] };
+      if (data.sentences) {
+        setSentences(data.sentences);
+        dirtyRef.current = true;
+        persist(data.sentences);
+        setHistoryOpen(false);
+      }
+    },
+    [bookId, chapterId, pushHistory, persist],
+  );
 
   const stopPreview = useCallback(() => {
     if (audioRef.current) {
@@ -567,13 +685,68 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
         <button
           type="button"
           onClick={() => void suggestVoices()}
-          disabled={suggesting || !chapterId}
+          disabled={proposalBusy || !chapterId}
           className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-medium transition-colors hover:bg-accent disabled:opacity-50"
         >
-          {suggesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
+          {proposalBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
           AI đề xuất giọng
         </button>
+        <button
+          type="button"
+          onClick={() => void saveVersion()}
+          disabled={!chapterId || sentences.length === 0}
+          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-medium transition-colors hover:bg-accent disabled:opacity-50"
+          title="Lưu phiên bản hiện tại vào lịch sử (tối đa 30, tự động đè lên cũ nhất)"
+        >
+          <Save className="h-3.5 w-3.5" />
+          Lưu phiên bản
+        </button>
+        <button
+          type="button"
+          onClick={() => openHistory()}
+          disabled={!chapterId}
+          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-medium transition-colors hover:bg-accent disabled:opacity-50"
+          title="Xem và khôi phục các phiên bản trước"
+        >
+          <History className="h-3.5 w-3.5" />
+          Lịch sử
+          {history.length > 0 && (
+            <span className="ml-0.5 rounded-full bg-muted px-1.5 text-[10px] tabular-nums text-muted-foreground">
+              {history.length}
+            </span>
+          )}
+        </button>
       </div>
+
+      {/* (f) AI proposal banner — shown after "AI đề xuất giọng" returns. The
+          proposal is NOT saved yet; the user reviews/edits then applies it. */}
+      {proposal && (
+        <div className="flex flex-wrap items-center gap-2 border-b bg-primary/5 px-4 py-2 text-xs">
+          <Sparkles className="h-3.5 w-3.5 text-primary" />
+          <span>
+            AI đề xuất <b className="text-foreground">{proposal.filter((s) => s.voiceId != null).length}</b> câu
+            {' '}có giọng. Xem lại, chỉnh sửa nếu cần, rồi nhấn <b className="text-foreground">Áp dụng</b> để lưu.
+          </span>
+          <span className="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void applyProposal()}
+              className="inline-flex items-center gap-1 rounded-md border border-primary bg-primary px-2.5 py-1 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+            >
+              <Check className="h-3.5 w-3.5" />
+              Áp dụng
+            </button>
+            <button
+              type="button"
+              onClick={() => discardProposal()}
+              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-medium transition-colors hover:bg-accent"
+            >
+              <X className="h-3.5 w-3.5" />
+              Hủy
+            </button>
+          </span>
+        </div>
+      )}
 
       {/* (b) Legend — one swatch per distinct assigned voice in use */}
       {usedVoices.length > 0 && (
@@ -849,6 +1022,55 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
               );
             })}
           </div>
+        </DialogBody>
+      </Dialog>
+
+      {/* (f) History dialog — restore a previous snapshot. Every restore first
+          snapshots the CURRENT plan, so it is itself reversible. Capped at 30. */}
+      <Dialog
+        open={historyOpen}
+        onOpenChange={(o) => { if (!o) setHistoryOpen(false); }}
+        title="Lịch sử phiên bản"
+        description="Mỗi phiên bản lưu nguyên trạng thái phân giọng. Khôi phục sẽ chụp bản hiện tại vào lịch sử trước, nên có thể hoàn tác."
+        widthClass="max-w-md"
+      >
+        <DialogBody>
+          {historyLoading ? (
+            <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Đang tải…
+            </div>
+          ) : history.length === 0 ? (
+            <div className="p-4 text-sm text-muted-foreground">
+              Chưa có phiên bản nào. Nhấn <b>Lưu phiên bản</b> hoặc <b>Áp dụng</b> đề xuất AI để tạo bản đầu tiên.
+            </div>
+          ) : (
+            <div className="max-h-80 space-y-1 overflow-y-auto pr-1">
+              {history.map((h) => (
+                <div
+                  key={h.id}
+                  className="flex items-center gap-2 rounded-md border border-border px-2.5 py-2"
+                >
+                  <History className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium">{h.label}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {new Date(h.createdAt).toLocaleString('vi-VN')} · {h.count} câu
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void restoreHistory(h.id)}
+                  >
+                    Khôi phục
+                  </Button>
+                </div>
+              ))}
+              <div className="pt-1 text-center text-[10px] text-muted-foreground">
+                Tối đa {HISTORY_CAP} phiên bản — tự động đè lên bản cũ nhất khi đầy.
+              </div>
+            </div>
+          )}
         </DialogBody>
       </Dialog>
 

@@ -90,6 +90,7 @@ model Book {
   illustrations          Illustration[]
   chapterAttributions    ChapterAttribution[]
   chapterVoicePlans      ChapterVoicePlan[]
+  voicePlanHistories     VoicePlanHistory[]
   characterRelationships CharacterRelationship[]
   pendingBibleDiffs      PendingBibleDiff[]
   bibleRefreshLogs       BibleRefreshLog[]
@@ -646,4 +647,24 @@ model ChapterVoicePlan {
 
   @@unique([bookId, chapterIndex])
   @@index([bookId])
+}
+
+// Rolling history of voice-plan snapshots for a chapter. Before any apply /
+// restore / manual save, the current plan is pushed here so the user can revert
+// to a previous version. Capped at 30 entries per (bookId, chapterIndex); when
+// the cap is exceeded the oldest snapshot is dropped (ring buffer).
+model VoicePlanHistory {
+  id            String   @id @default(uuid())
+  bookId        String
+  chapterIndex  Int
+  // JSON array of sentence entries — same shape as ChapterVoicePlan.sentences.
+  sentences     String
+  // Human-readable label, e.g. "Trước AI đề xuất", "Trước khôi phục",
+  // "Lưu thủ công".
+  label         String   @default("Phiên bản")
+  createdAt     DateTime @default(now())
+
+  book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@index([bookId, chapterIndex])
 }

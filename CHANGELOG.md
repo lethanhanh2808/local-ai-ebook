@@ -35,6 +35,17 @@ This file tracks the major product changes and cleanup steps. It is intentionall
   - New `ChapterVoicePlan` Prisma model stores a per-chapter, per-sentence voice
     plan (discovered character + chosen voice) so assignments persist and survive
     navigation.
+  - **AI đề xuất giọng is now propose-only (no auto-save):** the suggestion builds a
+    preview proposal shown in a banner ("AI đề xuất N câu có giọng… Áp dụng / Hủy").
+    The user reviews, edits individual sentences if needed, then presses **Áp dụng**
+    to commit. This prevents accidental overwrites of manual assignments.
+  - **Rolling history (max 30, auto-rotate):** a new `VoicePlanHistory` Prisma model
+    snapshots the current plan **before** every apply / restore / manual save, so any
+    change is always reversible. A **Lịch sử** dialog lists snapshots (label +
+    timestamp + sentence count) with one-click **Khôi phục**; restoring also snapshots
+    the current plan first, so restore is itself undoable. When the 30-entry cap is
+    exceeded the oldest snapshot is dropped (ring buffer). A **Lưu phiên bản** button
+    lets the user checkpoint the current state before risky manual edits.
   - New `GET/PUT /api/library/[id]/chapters/[chapterId]/voice-plan` route derives
     sentence suggestions from the existing attribution engine (default = narration
     voice for every sentence; dialogue quotes attributed to a known character are
