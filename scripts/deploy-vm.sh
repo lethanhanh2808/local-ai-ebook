@@ -1,22 +1,24 @@
 #!/usr/bin/env bash
-# Deploy the latest origin/main to the Proxmox VM (172.16.125.51) and restart
-# the docker stack.
+# Deploy the latest published image to the Proxmox VM (172.16.125.51) and
+# restart the docker stack.
 #
-# Run this ON THE VM. From the Mac, push first:
-#     git push origin main
+# Run this ON THE VM. From the Mac, build + push first:
+#     ./scripts/publish-image.sh
 # then:
 #     ssh -i ~/.../mgmt-admin-ed25519 mgmt-admin@172.16.125.51 \
+#       REGISTRY=172.16.99.61:5005 \
 #       bash /home/mgmt-admin/ebook-converter/scripts/deploy-vm.sh <subcommand>
 #
 # Why a separate VM-side script: the docker-compose stack is bound to the VM's
-# filesystem. Rebuilding on the Mac then `scp`-ing images is much slower than
-# letting the VM pull source + `docker compose build` locally (the VM's docker
-# daemon has its own image cache; copying images bypasses it).
+# filesystem, but the VM does NOT build from source. The Mac builds the image
+# once (for linux/amd64) and pushes it to a local registry; this script only
+# PULLS that artifact and runs it. This guarantees the running image matches
+# what was tested on the Mac and avoids the arm64(Mac) vs amd64(VM) mismatch.
 #
 # Subcommands:
 #   verify   report how far behind origin/main the VM is and what would change
 #   full     backup + fresh-clone + restore + pull images + restart (slow; rare)
-#   code     pull published images + restart (default; ~30 s)
+#   code     pull published images + restart (default; ~30 s; no source build)
 #   tts      restart the host VieNeu TTS service (for Python-only changes; ~10 s)
 #   voices   re-run the voice enrollment encoder + restart host TTS
 #   status   print container + service health
@@ -169,12 +171,18 @@ cmd_voices() {
 
 cmd_code() {
   yellow "[code] pull published images + restart (~30 s)"
-  require_clean_worktree
-  ssh_run 'git pull --ff-only origin main'
+  # The VM may be a git checkout OR a snapshot copy (no .git). Treat git as
+  # best-effort so `code` works in both layouts.
+  ssh_run 'if [ -d .git ]; then git pull --ff-only origin main; else echo "(VM is a snapshot copy — skipping git pull)"; fi'
   # Images are built on the Mac and pushed to the local registry
   # (scripts/publish-image.sh). We only pull + run here — no source build.
-  docker_compose -f docker-compose.yml -f docker-compose.pull.yml pull app worker
-  docker_compose -f docker-compose.yml -f docker-compose.pull.yml up -d --no-deps app worker
+  # REGISTRY must be exported so the pull override's ${REGISTRY:-localhost:5005}
+  # resolves to the Mac's LAN IP (172.16.99.61:5005), which the VM trusts as
+  # an insecure registry.
+  REGISTRY="${REGISTRY:-localhost:5005}" \
+    docker_compose -f docker-compose.yml -f docker-compose.pull.yml pull app worker
+  REGISTRY="${REGISTRY:-localhost:5005}" \
+    docker_compose -f docker-compose.yml -f docker-compose.pull.yml up -d --no-deps app worker
   sleep 5
   cmd_status
   green "[code] done"

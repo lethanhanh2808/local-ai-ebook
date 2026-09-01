@@ -5,17 +5,24 @@
 # This implements the "build once, ship the image" model: the VM no longer
 # runs `docker compose build` from source — it only pulls and runs.
 #
+# IMPORTANT — architecture: the Mac is Apple Silicon (arm64) but the VM is
+# x86_64 (amd64). The build override (docker-compose.build.yml) pins
+# `platform: linux/amd64` so the produced image actually runs on the VM.
+# Building without that override yields an arm64 image that crashes the VM with
+# "exec format error". Always build through this script (which uses the
+# override) — never a bare `docker build`.
+#
 # What it does:
-#   1. Ensures a local registry is running on :5000 (starts `registry:2` if not).
+#   1. Ensures a local registry is running on :5005 (starts `registry:2` if not).
 #   2. Builds `app` + `worker` via the build override (tags them with the
 #      registry host + a `:latest` and a `:git-<sha>` immutable tag).
 #   3. Pushes both tags.
 #   4. Prints the exact pull/run command for the VM.
 #
 # Usage:
-#   ./scripts/publish-image.sh                 # registry on localhost:5000
-#   REGISTRY=172.16.99.61:5000 ./scripts/publish-image.sh   # VM-reachable host IP
-#   REGISTRY=172.16.125.51:5000 ./scripts/publish-image.sh   # push to a registry ON the VM
+#   ./scripts/publish-image.sh                 # registry on localhost:5005
+#   REGISTRY=172.16.99.61:5005 ./scripts/publish-image.sh   # VM-reachable host IP
+#   REGISTRY=172.16.125.51:5005 ./scripts/publish-image.sh   # push to a registry ON the VM
 #
 # The registry host defaults to localhost:5005. (macOS reserves :5000 for the
 # Control Center / AirPlay receiver, so we avoid it.) For the VM to pull, it

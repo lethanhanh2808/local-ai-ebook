@@ -64,22 +64,27 @@ The column `main.Settings.aiAllowInsecureTls` does not exist in the current data
 
 then the database is stale and needs the migrations applied.
 
-The container entrypoint runs `prisma migrate deploy` on every start, so a normal `docker compose up -d` is enough **as long as the migration files are visible to the container**. The compose file bind-mounts `./prisma/migrations` into the container, so simply pulling the latest commits and restarting brings the DB back in sync:
+The container entrypoint runs `prisma migrate deploy` on every start, so a normal `docker compose up -d` is enough **as long as the migration files are visible to the container**. The compose file bind-mounts `./prisma/migrations` into the container, so simply pulling the latest image and restarting brings the DB back in sync:
 
 ```bash
-cd /home/mgmt-admin/ebook-converter
-git pull
-docker compose up -d app worker
-docker compose logs app | grep -E "migrat|All migrations"   # confirm
+# On the Mac — rebuild + push the new image (the VM does NOT build from source)
+cd /Volumes/EXT-SSD/Users/anhl/local-ai-ebook
+./scripts/publish-image.sh
+
+# On the VM — pull the published image + restart
+ssh vm-mgmt
+vm$ REGISTRY=172.16.99.61:5005 bash ~/ebook-converter/scripts/deploy-vm.sh code
+vm$ docker compose -p ebook-converter logs app | grep -E "migrat|All migrations"   # confirm
 ```
 
-If the bind-mount is missing in an older compose file, the recovery on the VM is:
+If you ever need to apply migrations manually on the VM (e.g. the container
+won't start), the recovery is:
 
 ```bash
 cd /home/mgmt-admin/ebook-converter
-docker compose down app worker
+docker compose -p ebook-converter down app worker
 npx prisma migrate deploy --schema ./prisma/schema.prisma
-docker compose up -d app worker
+docker compose -p ebook-converter up -d app worker
 ```
 
 This is required even when the app code is already updated, because the existing SQLite file on disk may not yet have the new column.

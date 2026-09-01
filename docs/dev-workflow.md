@@ -71,17 +71,24 @@ $EDITOR <file>            # edit
 git add -A && git commit -m "..."
 git push origin main       # ALWAYS manual — auto-mode is blocked
 
-# On VM
+# On Mac — build + push the image to the local registry (amd64, VM-ready)
+./scripts/publish-image.sh
+
+# On VM — pull the published image + restart (no source build on the VM)
 ssh vm-mgmt
-vm$ bash ~/ebook-converter/scripts/deploy-vm.sh code
+vm$ REGISTRY=172.16.99.61:5005 bash ~/ebook-converter/scripts/deploy-vm.sh code
 ```
 
-`deploy-vm.sh code` does: `git pull` → rebuild `app` + `worker` containers →
-print health. ~1–2 min on a fresh rebuild, ~30 s if
-nothing under `app/ebook-converter/` actually changed (Docker layer cache).
-The VieNeu TTS engine runs on the host (Mac) at `:5020` via
-`app/tts-service/start_all.sh` — it is not a container, so it is not part of
-the compose rebuild.
+`deploy-vm.sh code` does: `git pull` (best-effort; VM is a snapshot, not a git
+repo) → `docker compose pull` the published `app` + `worker` images → `up -d`
+→ print health. ~30 s. The VieNeu TTS engine runs on the host (Mac) at `:5020`
+via `app/tts-service/start_all.sh` — it is not a container, so it is not part
+of the compose pull.
+
+> The VM **never builds from source**. If you change app/worker code, you MUST
+> run `publish-image.sh` on the Mac first — `deploy-vm.sh code` alone will just
+> re-pull the *old* image. (TTS-only changes under `app/tts-service/` don't
+> need a rebuild — use `deploy-vm.sh tts`.)
 
 ## Subcommands
 
@@ -89,7 +96,7 @@ the compose rebuild.
 |---|---|---|---|
 | `verify` | "Am I behind?" | prints commits ahead/behind, no changes | < 5 s |
 | `status` | "Is the VM healthy?" | verify + container status + service health | < 10 s |
-| `code` | default — most iterations | pull + rebuild app/worker + restart | 30 s – 2 min |
+| `code` | default — most iterations | pull published app/worker images + restart (no build) | 30 s |
 | `tts` | Python-only change under `app/tts-service/` | restart the host VieNeu TTS service (start_all.sh) | 10 s |
 | `voices` | added a new built-in voice | run `enroll_vieneu_presets.py` + restart host TTS | 30 s |
 | `full` | `code` is broken / first deploy / data corruption | backup → wipe tracked → fresh clone → restore → rebuild → restart | 5–10 min |
@@ -202,6 +209,35 @@ treats it as data exfiltration). Push is always manual on the Mac. If
 `deploy-vm.sh` reports "VM is N commits BEHIND origin/main" but you haven't
 pushed yet, **push first**.
 
+### 7. Build for `linux/amd64` — the Mac is arm64, the VM is x86_64
+
+The Mac is Apple Silicon (`uname -m` → `arm64`). The VM is `x86_64`
+(`uname -m` → `x86_64`). If you build the image **without** pinning the
+platform, Docker produces an `arm64` image, and the VM crashes on start with:
+
+```
+exec /usr/local/bin/docker-entrypoint.sh: exec format error
+```
+
+The container then goes into a `Restarting (255)` loop and `:13100` never
+answers. **This is an architecture mismatch, not a code bug.**
+
+The fix is already wired into `docker-compose.build.yml`: both `app` and
+`worker` set `platform: linux/amd64`, so `publish-image.sh` always produces a
+VM-runnable artifact (the build runs under QEMU emulation on the Mac — slower,
+but correct). **Never remove that `platform:` line**, and never build the
+published image with a bare `docker build` / `docker compose build` that
+doesn't go through the build override.
+
+If you ever see `exec format error` on the VM, the image was built for the
+wrong arch — rebuild via `publish-image.sh` (which uses the override) and
+re-pull on the VM. You can confirm the image arch with:
+
+```bash
+docker inspect --format '{{.Architecture}}' 172.16.99.61:5005/ebook-converter-app:latest
+# must print: amd64
+```
+
 ## Build-once / ship-the-image model
 
 The VM does **not** build from source. You build the images once on the Mac,
@@ -238,7 +274,10 @@ default `localhost:5005` only works for local testing.
 ### On the VM (pull + run)
 
 ```bash
-# deploy-vm.sh 'code' now PULLS the published images instead of building:
+# deploy-vm.sh 'code' now PULLS the published images instead of building.
+# REGISTRY must point at the Mac's LAN IP (the VM reaches the Mac there),
+# and it MUST match an entry in the VM's /etc/docker/daemon.json
+# insecure-registries list — otherwise the pull is rejected.
 REGISTRY=172.16.99.61:5005 bash ~/ebook-converter/scripts/deploy-vm.sh code
 ```
 
@@ -249,13 +288,18 @@ This is already configured in `/etc/docker/daemon.json`:
 { "insecure-registries": ["172.16.99.61:5005", "localhost:5005"] }
 ```
 
+> Note: `deploy-vm.sh` itself runs `docker compose -f docker-compose.yml -f
+> docker-compose.pull.yml pull app worker` with `REGISTRY` exported, so the
+> override's `${REGISTRY:-localhost:5005}` resolves to the Mac's IP. If you run
+> the pull manually, pass `REGISTRY=172.16.99.61:5005` the same way.
+
 ### Compose override files
 
 | File | Used on | Purpose |
 |------|---------|---------|
-| `docker-compose.yml` | both | base services (redis, app, worker) |
-| `docker-compose.build.yml` | Mac | adds `image:` tags, **drops** the `../tts-service` mount (image must be self-contained) |
-| `docker-compose.pull.yml` | VM | `build: null` + `pull_policy: always` + re-adds `../tts-service` mount |
+| `docker-compose.yml` | both | base services (redis, app, worker) — has **no** `build:`/`image:` on app/worker |
+| `docker-compose.build.yml` | Mac | adds `build: .` + `image:` tags + `platform: linux/amd64`, **drops** the `../tts-service` mount (image must be self-contained) |
+| `docker-compose.pull.yml` | VM | supplies `image:` tags + `pull_policy: always` + re-adds `../tts-service` mount. **No `build:` key at all** (older Compose rejects `build: null`/`build: false`, so we simply never set it) |
 
 `character_detector.py` lives in the sibling `app/tts-service` repo and is
 **bind-mounted at runtime** (not baked into the image) — both the build

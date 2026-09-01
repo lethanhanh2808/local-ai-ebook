@@ -4,6 +4,27 @@ This file tracks the major product changes and cleanup steps. It is intentionall
 
 ## Unreleased
 
+- **Deployment model changed to build-once / publish-pull (Mac builds, VM pulls):**
+  - The VM no longer runs `docker compose build` from source. The Mac builds the
+    `app` + `worker` images once and pushes them to a local Docker registry
+    (`localhost:5005`); the VM `docker pull`s the exact same artifact via
+    `docker-compose.pull.yml` + `scripts/deploy-vm.sh code`.
+  - Added `scripts/publish-image.sh` (build + tag `:latest` + `:git-<sha>` + push)
+    and `scripts/deploy-vm.sh` (VM-side pull + restart; git-tolerant because the
+    VM is a snapshot, not a git repo).
+  - `docker-compose.yml` (base) now has **no** `build:`/`image:` on `app`/`worker`
+    so it is compose-version-agnostic; `docker-compose.build.yml` (Mac) adds
+    `build: .` + `image:` + `platform: linux/amd64` and drops the `../tts-service`
+    mount; `docker-compose.pull.yml` (VM) supplies `image:` + `pull_policy: always`
+    + re-adds the `../tts-service` mount. **No `build:` key in the pull override**
+    (older Compose rejects `build: null`/`build: false`).
+  - Removed the broken in-stack `tts-vieneu` container; VieNeu TTS runs on the
+    host (Mac) at `:5020` and is reached via `host.docker.internal:5020`.
+  - **Fixed `exec format error` on the VM:** the Mac is arm64 but the VM is
+    amd64, so an unpinned build produced an arm64 image that crashed the VM.
+    `docker-compose.build.yml` now pins `platform: linux/amd64` (QEMU-emulated
+    build on the Mac) so the published image is always VM-runnable. See
+    `docs/dev-workflow.md` "Gotchas #7".
 - **Added a Voice Assign Editor (Phân giọng) for per-sentence voice assignment:**
   - New `ChapterVoicePlan` Prisma model stores a per-chapter, per-sentence voice
     plan (discovered character + chosen voice) so assignments persist and survive
