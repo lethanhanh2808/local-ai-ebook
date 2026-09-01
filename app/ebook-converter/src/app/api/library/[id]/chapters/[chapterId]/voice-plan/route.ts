@@ -38,12 +38,18 @@ export async function GET(
   const ref = await loadChapterRef(req, params.id, params.chapterId);
   if ('error' in ref) return NextResponse.json({ error: ref.error }, { status: ref.status });
 
+  // 2026-09-01: `?fresh=1` lets the Phân giọng "Làm mới" button force
+  // re-suggestion when the stored plan looks broken (e.g. only 2 sentences
+  // for a chapter that should have 100+). Without this flag we still
+  // return the cached plan to keep the editor fast for the common case.
+  const forceFresh = req.nextUrl.searchParams.get('fresh') === '1';
+
   // Load existing plan (if any).
   const existing = await prisma.chapterVoicePlan.findUnique({
     where: { bookId_chapterIndex: { bookId: params.id, chapterIndex: ref.chapterIndex } },
   });
 
-  if (existing && Number(existing.sourceMtime) === ref.mtime) {
+  if (existing && Number(existing.sourceMtime) === ref.mtime && !forceFresh) {
     const plan = deserializePlan(params.id, ref.chapterIndex, existing.sentences, ref.mtime);
     return NextResponse.json({ source: 'stored', sentences: plan.sentences });
   }

@@ -4,6 +4,13 @@ This file tracks the major product changes and cleanup steps. It is intentionall
 
 ## Unreleased
 
+- **Fixed "Chương 1 only shows 1 character" on Phân giọng page (cached broken plan):**
+  - Root cause: the per-chapter voice plan was cached in `ChapterVoicePlan.sentences` with only **2 sentences** (the chapter title + a stray `"x"`) for `Bắt Đầu Bị Nữ Đế Đánh Vào Ngục` → Chương 1. The HTML for that chapter actually has 118 paragraphs / ~120 sentences, so the splitter was working correctly when the bad cache was generated — the stale cache just got pinned by `mtime` matching. The Phân giọng page rendered the 2 short sentences, and the user had no way to recover from inside the UI (no "regenerate" button, the `?raw=1` debug query was the only escape).
+  - Fix:
+    - **Cleared the bad cache row** (`DELETE FROM ChapterVoicePlan WHERE chapterIndex=4`) — the route now returns the correct 121-sentence plan and the Phân giọng page renders the full chapter.
+    - **New `?fresh=1` query param** on `GET /api/library/[id]/chapters/[chapterId]/voice-plan` that skips the cache, regenerates from the chapter HTML, and overwrites the stored plan. Lets future recovery be one click.
+    - **New "Làm mới" button** in the Phân giọng toolbar (next to "AI đề xuất giọng") that snapshots the current plan to history first (so it's reversible), then calls `?fresh=1`. The button shows a confirmation dialog before destroying the plan.
+
 - **Made `Max tokens` a real user knob and surfaced where it actually applies:**
   - **Settings UI** (`/settings` → AI tab): the `Max tokens` field now has a tooltip listing every code path that respects the value (chapter enhancer, EPUB analyzer, character bible, attribution, Python character detector, Python audiobook segmenter, TTS emotion classifier) plus the hardcoded tiny outputs that intentionally don't (cover titles, watermark detection, test-AI ping). It also has 4 one-click preset chips — **4096 Tiết kiệm / 8192 Cân bằng / 16384 Rộng rãi / 24576 Reasoning** — so users don't have to guess values for their model. A ⚠ warning reminds users that reasoning models (Qwen3, DeepSeek-R1, MiniMax-M3) need at least ~4096 tokens because part of the budget goes to internal thinking.
   - **Code paths now honoring `Settings.aiMaxTokens`** (via `chat()` helper fallthrough or explicit env forwarding):

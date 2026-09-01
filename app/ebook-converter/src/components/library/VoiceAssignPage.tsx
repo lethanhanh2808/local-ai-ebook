@@ -19,6 +19,7 @@ import {
   Loader2,
   Mic,
   Play,
+  RefreshCw,
   Save,
   Sparkles,
   Square,
@@ -140,6 +141,10 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
   // apply / restore / manual save so any change is always reversible.
   const [proposal, setProposal] = useState<PlanSentence[] | null>(null);
   const [proposalBusy, setProposalBusy] = useState(false);
+  // 2026-09-01: "Làm mới" lets the user force re-suggestion when the stored
+  // plan looks broken (e.g. only 2 sentences for a chapter that should have
+  // 100+). Calls /voice-plan?fresh=1 which deletes + regenerates.
+  const [freshBusy, setFreshBusy] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -492,6 +497,34 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
     void refreshHistory();
   }, [refreshHistory]);
 
+  // 2026-09-01: Force a fresh re-suggest from the chapter HTML. Used by the
+  // "Làm mới" button when the stored plan looks wrong (only 1-2 sentences
+  // for a full chapter). Hits ?fresh=1 which the API honours by skipping
+  // the cache and writing the freshly-built plan back to the DB.
+  const freshPlan = useCallback(async () => {
+    if (!chapterId) return;
+    setFreshBusy(true);
+    try {
+      // Snapshot the current plan first so the destructive action is reversible.
+      await pushHistory('Trước khi làm mới');
+      const r = await fetch(
+        `/api/library/${bookId}/chapters/${encodeURIComponent(chapterId)}/voice-plan?fresh=1`,
+        { cache: 'no-store' },
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json() as { sentences?: PlanSentence[] };
+      setSentences(data.sentences ?? []);
+      setSaveState('saved');
+      setProposal(null);
+      // Refresh history so the snapshot we just took shows up in the list.
+      await refreshHistory();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Lỗi làm mới');
+    } finally {
+      setFreshBusy(false);
+    }
+  }, [bookId, chapterId, pushHistory, refreshHistory]);
+
   // Apply the AI proposal: snapshot current plan to history, then load the
   // proposal into the editable area (dirty) so the user can still tweak before
   // the explicit Save. We persist immediately here too so the proposal is
@@ -690,6 +723,19 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
         >
           {proposalBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
           AI đề xuất giọng
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            if (typeof window !== 'undefined' && !window.confirm('Làm mới sẽ xóa phân giọng đã lưu và tạo lại từ đầu. Phiên bản hiện tại sẽ được lưu vào Lịch sử. Tiếp tục?')) return;
+            void freshPlan();
+          }}
+          disabled={freshBusy || !chapterId}
+          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-medium transition-colors hover:bg-accent disabled:opacity-50"
+          title="Xóa phân giọng đã lưu và tạo lại từ HTML chương — dùng khi chương hiển thị quá ít câu"
+        >
+          {freshBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+          Làm mới
         </button>
         <button
           type="button"
