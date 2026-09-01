@@ -577,9 +577,9 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
         ) : sentences.length === 0 ? (
           <div className="p-6 text-sm text-muted-foreground">Chương này không có câu nào.</div>
         ) : (
-          <article className="mx-auto max-w-3xl px-6 py-8">
+          <article className="mx-auto max-w-3xl px-6 py-10 font-serif text-[18px] leading-8 text-foreground">
             {paragraphs.map((group) => (
-              <p key={group.para} className="mb-5 text-[15px] leading-relaxed">
+              <p key={group.para} className="mb-6 indent-8 text-justify">
                 {group.items.map((s) => {
                   const char = s.charId ? characters[s.charId] : null;
                   const assigned = s.voiceId != null;
@@ -604,7 +604,7 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
                     <span
                       key={s.i}
                       className={cn(
-                        'group relative mx-0.5 inline text-left',
+                        'group/sent relative mx-[1px] inline text-left',
                         selectionMode && 'cursor-pointer',
                       )}
                     >
@@ -620,13 +620,13 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
                       )}
                       <span
                         className={cn(
-                          'inline-flex items-center rounded px-1 py-0.5 text-left transition-colors',
-                          !selectionMode && 'hover:bg-primary/10',
+                          'inline rounded-[3px] px-[3px] py-[1px] text-left transition-colors',
+                          !selectionMode && !assigned && 'hover:bg-primary/10',
                           isCharacter && !assigned && 'underline decoration-dotted decoration-muted-foreground/40',
                         )}
                         style={
                           assigned && color
-                            ? { backgroundColor: color + '22', boxShadow: `inset 0 0 0 1px ${color}` }
+                            ? { backgroundColor: color + '22' }
                             : undefined
                         }
                       >
@@ -638,7 +638,7 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
                               ? `Giọng: ${voiceLabel(s.voiceId)} — nhấn để đổi`
                               : 'Nhấn để gán giọng'
                           }
-                          className="text-left"
+                          className="text-left align-baseline"
                         >
                           {s.text}
                         </button>
@@ -648,17 +648,17 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
                           onClick={(e) => { e.stopPropagation(); void playSentence(s); }}
                           disabled={!isPlaying && playingSentence !== null}
                           className={cn(
-                            'ml-1 inline-flex items-center align-middle text-[10px] font-medium transition-opacity',
+                            'ml-0.5 inline-flex items-center align-baseline text-[10px] font-medium transition-opacity',
                             isPlaying
                               ? 'text-primary opacity-100'
                               : assigned
                                 ? 'text-primary opacity-100'
-                                : 'text-muted-foreground opacity-0 group-hover:opacity-100',
+                                : 'text-muted-foreground opacity-0 group-hover/sent:opacity-100',
                           )}
                           aria-label={isPlaying ? 'Dừng phát' : 'Nghe thử câu này'}
                           title={isPlaying ? 'Dừng phát' : 'Nghe thử câu này'}
                         >
-                          {isPlaying ? <Square className="h-3 w-3" /> : <Volume2 className="h-3 w-3" />}
+                          {isPlaying ? <Square className="h-2.5 w-2.5" /> : <Volume2 className="h-2.5 w-2.5" />}
                         </button>
                       </span>
                       {isCharacter && !assigned && (
