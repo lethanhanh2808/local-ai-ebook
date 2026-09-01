@@ -620,13 +620,13 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
                       )}
                       <span
                         className={cn(
-                          'inline rounded-[3px] px-[3px] py-[1px] text-left transition-colors',
+                          'inline rounded px-1.5 py-0.5 text-left transition-colors',
                           !selectionMode && !assigned && 'hover:bg-primary/10',
                           isCharacter && !assigned && 'underline decoration-dotted decoration-muted-foreground/40',
                         )}
                         style={
                           assigned && color
-                            ? { backgroundColor: color + '22' }
+                            ? { backgroundColor: color + '22', boxShadow: `inset 0 0 0 1px ${color}` }
                             : undefined
                         }
                       >
@@ -638,7 +638,7 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
                               ? `Giọng: ${voiceLabel(s.voiceId)} — nhấn để đổi`
                               : 'Nhấn để gán giọng'
                           }
-                          className="text-left align-baseline"
+                          className="text-left"
                         >
                           {s.text}
                         </button>
@@ -648,7 +648,7 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
                           onClick={(e) => { e.stopPropagation(); void playSentence(s); }}
                           disabled={!isPlaying && playingSentence !== null}
                           className={cn(
-                            'ml-0.5 inline-flex items-center align-baseline text-[10px] font-medium transition-opacity',
+                            'ml-1 inline-flex items-center align-middle text-[10px] font-medium transition-opacity',
                             isPlaying
                               ? 'text-primary opacity-100'
                               : assigned
