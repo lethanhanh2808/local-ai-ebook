@@ -4,6 +4,12 @@ This file tracks the major product changes and cleanup steps. It is intentionall
 
 ## Unreleased
 
+- **Added a dedicated Audio Studio page (`/library/[id]/audio`) and slimmed the reader's Audio panel:**
+  - The reader's right-side Audio panel now hosts only **Read aloud** (synced to the chapter iframe). All audio *production & management* moved to the new full-page Audio Studio: Audiobook generation, Voice library (Giọng), Character detection (Nhân vật), and per-sentence voice assignment (Phân giọng).
+  - Audio Studio shows a live **status strip** (audiobook progress, voice count, character-assigned count) and **tab badges** so state is visible across tabs. A **"Tạo audiobook" CTA** on the Phân giọng / Nhân vật tabs generates the audiobook from the current voice setup and jumps to the Audiobook tab.
+  - The legacy `/library/[id]/assign-voices` route now **redirects** to `/audio?tab=assign` (old links/bookmarks keep working). The rich `VoiceAssignPage` (multi-select, AI suggest, per-sentence play, per-chapter generation) is the Phân giọng tab — the simpler `VoiceAssignEditor` was removed as dead code.
+  - Reader header "Phân giọng ↗" link → "Audio Studio ↗"; the icon-only Phân giọng button and mobile menu item now deep-link to `/audio?tab=assign`.
+
 - **Deployment model changed to build-once / publish-pull (Mac builds, VM pulls):**
   - The VM no longer runs `docker compose build` from source. The Mac builds the
     `app` + `worker` images once and pushes them to a local Docker registry

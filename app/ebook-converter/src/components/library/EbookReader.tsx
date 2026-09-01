@@ -23,6 +23,7 @@ import {
   Volume2, VolumeX, Play, Pause, Square, Headphones,
   Mic, Bug, Terminal, Clipboard, Copy, Activity, CheckCircle2, AlertCircle,
   Eye, Filter, ArrowUpDown, User, ChevronDown, MoreVertical, Info, Images,
+  Pin, PinOff,
 } from 'lucide-react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
@@ -75,7 +76,6 @@ import {
 // ~150kb and surfaces the chapter list a few hundred ms sooner.
 const AudiobookPanel = lazy(() => import('./AudiobookPanel').then((m) => ({ default: m.AudiobookPanel })));
 const ReadAloudPanel  = lazy(() => import('./ReadAloudPanel').then((m) => ({ default: m.ReadAloudPanel })));
-const VoiceAssignEditor = lazy(() => import('./VoiceAssignEditor').then((m) => ({ default: m.VoiceAssignEditor })));
 const VoiceDebugPanel = lazy(() => import('./VoiceDebugPanel').then((m) => ({ default: m.VoiceDebugPanel })));
 
 /** Tiny fallback while a lazy panel chunk resolves. Skeleton instead of a
@@ -688,6 +688,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const [tocSearch, setTocSearch] = useState('');
+  const [tocBookmarkedOnly, setTocBookmarkedOnly] = useState(false);
   const [jumpInput, setJumpInput] = useState('');
   const [bookmarks, setBookmarks] = useState<number[]>([]);
   // Voice-assignment debug panel — shows detected speaker + voice name per
@@ -821,6 +822,10 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   // Keyboard shortcuts overlay (UI Polish §5.3) — opened by pressing
   // '?' anywhere in the reader. Mirrors the legend shown in tooltips.
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  // Quick "Aa" reading popover — one-tap access to font size / theme /
+  // column width without opening the full Settings panel.
+  const [aaPopoverOpen, setAaPopoverOpen] = useState(false);
+  const aaPopoverRef = useRef<HTMLDivElement>(null);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -1105,6 +1110,9 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   const AUDIO_PANEL_MIN_PX = 320;            // 20rem — narrower than this and the tab labels clip
   const AUDIO_PANEL_MAX_RATIO = 0.85;        // never cover more than 85% of viewport
   const [audioPanelWidth, setAudioPanelWidth] = useState<number>(AUDIO_PANEL_DEFAULT_PX);
+  // When true the audio panel floats over the content (overlay) instead of
+  // pushing it; useful on smaller laptops where 480px steals too much width.
+  const [audioPanelOverlay, setAudioPanelOverlay] = useState(false);
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
@@ -1608,6 +1616,18 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     return () => window.removeEventListener('keydown', handler);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentIdx, chapters, bookmarks]);
+
+  // Close the "Aa" quick popover when clicking outside of it.
+  useEffect(() => {
+    if (!aaPopoverOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (aaPopoverRef.current && !aaPopoverRef.current.contains(e.target as Node)) {
+        setAaPopoverOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [aaPopoverOpen]);
 
   /**
    * Close the analyzer modal AND cancel any in-flight SSE stream.  All four
@@ -4186,9 +4206,12 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     ? `/api/library/${bookId}/chapters/${current.id}?theme=${settings.theme}&font=${settings.font}&size=${settings.fontSize}&lh=${settings.lineHeight}&width=${settings.width}&indent=${settings.indent}&padt=${settings.padTop}&padb=${settings.padBottom}&padx=${settings.padInline}`
     : null;
 
-  const filteredChapters = tocSearch
-    ? chapters.filter((c) => c.title.toLowerCase().includes(tocSearch.toLowerCase()))
-    : chapters;
+  const filteredChapters = chapters.filter((c) => {
+    const ri = chapters.findIndex((x) => x.id === c.id);
+    if (tocBookmarkedOnly && !bookmarks.includes(ri)) return false;
+    if (tocSearch && !c.title.toLowerCase().includes(tocSearch.toLowerCase())) return false;
+    return true;
+  });
 
   // CSS classes per theme — token-backed via `readerSurface(...)`. Sepia
   // has bespoke colours because it must look distinctly warm even when
@@ -4244,348 +4267,426 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     <div ref={wrapperRef} className="fixed inset-0 z-50 flex flex-col" style={{ background: themeObj.bg, color: themeObj.text }}>
 
       {/* ── Header ── */}
-      <header className={cn('flex items-center gap-1 px-2 py-1.5 border-b z-30 shrink-0 backdrop-blur-sm', headerCls)}>
-        <Link href="/library" title="Back to library" aria-label="Back to library" className={buttonClasses({ variant: 'ghost', size: 'icon', className: 'h-8 w-8' })}>
-          <Home className="h-4 w-4" />
-        </Link>
-        <Link href={`/library/${bookId}`} title="Thông tin sách & AI Illustrations" aria-label="Thông tin sách" className={buttonClasses({ variant: 'ghost', size: 'icon', className: 'hidden h-8 w-8 md:inline-flex' })}>
-          <Info className="h-4 w-4" />
-        </Link>
-        {/* Gallery of all AI-generated chapter illustrations. Click a
-            thumbnail in the side panel to jump to that chapter. The
-            panel sits on the right so the current chapter stays visible
-            alongside, mirroring the Watermark / Bookmarks / TTS panels. */}
-        <Tooltip content={<span>Gallery ảnh (G)</span>} side="bottom" className="hidden md:inline-flex">
-          <button type="button" onClick={() => { setGalleryOpen((o) => !o); setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); }}
-            aria-label="Image gallery"
-            aria-expanded={galleryOpen}
-            data-testid="gallery-toggle"
-            className={cn('flex h-8 w-8 items-center justify-center rounded-md transition-colors border border-border', galleryOpen ? activeCls : `border-transparent ${hoverCls}`)}
-            title="Gallery ảnh">
-            <Images className="h-4 w-4" />
-          </button>
-        </Tooltip>
-        <Tooltip content={<span className="inline-flex items-center gap-1.5">Mục lục <KbdHint keys={['T']} /></span>} side="bottom">
-          <button type="button" onClick={() => { setTocOpen((o) => !o); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); }}
-            data-testid="toc-toggle"
-            aria-label="Table of Contents"
-            aria-expanded={tocOpen}
-            className={cn('flex h-8 w-8 items-center justify-center rounded-md transition-colors border border-border', tocOpen ? activeCls : `border-transparent ${hoverCls}`)}
-            title="Mục lục (T)">
-            <List className="h-4 w-4" />
-          </button>
-        </Tooltip>
+      <header className={cn('relative z-30 shrink-0 border-b backdrop-blur-sm', headerCls)}>
+        <div className="flex items-center gap-2 px-2 py-2">
+          <div className="flex items-center gap-1 rounded-xl border border-border/70 bg-background/35 p-1 shadow-sm">
+            <Link href="/library" title="Back to library" aria-label="Back to library" className={buttonClasses({ variant: 'ghost', size: 'icon', className: 'h-8 w-8' })}>
+              <Home className="h-4 w-4" />
+            </Link>
+            <Link href={`/library/${bookId}`} title="Thông tin sách & AI Illustrations" aria-label="Thông tin sách" className={buttonClasses({ variant: 'ghost', size: 'icon', className: 'hidden h-8 w-8 md:inline-flex' })}>
+              <Info className="h-4 w-4" />
+            </Link>
+            <Tooltip content={<span>Gallery ảnh (G)</span>} side="bottom" className="hidden md:inline-flex">
+              <button type="button" onClick={() => { setGalleryOpen((o) => !o); setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); }}
+                aria-label="Image gallery"
+                aria-expanded={galleryOpen}
+                data-testid="gallery-toggle"
+                className={cn('flex h-8 w-8 items-center justify-center rounded-md transition-colors border border-border', galleryOpen ? activeCls : `border-transparent ${hoverCls}`)}
+                title="Gallery ảnh">
+                <Images className="h-4 w-4" />
+              </button>
+            </Tooltip>
+            <Tooltip content={<span className="inline-flex items-center gap-1.5">Mục lục <KbdHint keys={['T']} /></span>} side="bottom">
+              <button type="button" onClick={() => { setTocOpen((o) => !o); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); }}
+                data-testid="toc-toggle"
+                aria-label="Table of Contents"
+                aria-expanded={tocOpen}
+                className={cn('flex h-8 w-8 items-center justify-center rounded-md transition-colors border border-border', tocOpen ? activeCls : `border-transparent ${hoverCls}`)}
+                title="Mục lục (T)">
+                <List className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          </div>
 
-        <div className="flex-1 min-w-0 text-center px-2">
-              <h1 className="text-xs font-semibold truncate">{bookTitle}</h1>
-          {current && (
-            <p className={cn('text-[10px] truncate flex items-center justify-center gap-1', mutedCls)}>
-              {current.title}
-              {detectingChapter === current.id && (
-                <span className="inline-flex items-center gap-0.5 text-blue-600 dark:text-blue-400 shrink-0" title="Đang AI phân tích nhân vật và giọng cho chương này…">
-                  <Loader2 className="h-2.5 w-2.5 animate-spin" />
-                </span>
+          <div className="flex min-w-0 flex-1 items-center justify-center px-1">
+            <div className="max-w-[32rem] min-w-0 text-center">
+              <p className={cn('mb-0.5 text-[9px] font-medium uppercase tracking-[0.2em]', mutedCls)}>Reader</p>
+              <h1 className="truncate text-xs font-semibold leading-tight">{bookTitle}</h1>
+              {current && (
+                <p className={cn('mt-0.5 flex items-center justify-center gap-1 truncate text-[10px] leading-tight', mutedCls)}>
+                  {current.title}
+                  {detectingChapter === current.id && (
+                    <span className="inline-flex shrink-0 items-center gap-0.5 text-blue-600 dark:text-blue-400" title="Đang AI phân tích nhân vật và giọng cho chương này…">
+                      <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                    </span>
+                  )}
+                </p>
               )}
-            </p>
-          )}
-        </div>
-
-        {/* Chapter jump */}
-        {chapters.length > 0 && (
-          <form onSubmit={(e) => { e.preventDefault(); const n = parseInt(jumpInput, 10) - 1; if (!isNaN(n)) goToChapter(n); setJumpInput(''); }} className="hidden sm:flex items-center gap-1">
-            <input type="number" min={1} max={chapters.length} value={jumpInput}
-              onChange={(e) => setJumpInput(e.target.value)} placeholder={String(currentIdx + 1)}
-              className={cn('w-12 rounded border border-border text-center text-xs py-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring', inputCls)} title="Jump to chapter" aria-label="Số chương muốn mở" />
-            <span className={cn('text-xs', mutedCls)}>/ {chapters.length}</span>
-          </form>
-        )}
-
-        {/* Reading time */}
-        {chapters.length > 0 && (
-          <span className={cn('hidden lg:flex items-center gap-0.5 text-[10px] shrink-0', mutedCls)}>
-            <Clock className="h-3 w-3 opacity-60" />{estimateReadTime(chapters.length, currentIdx)}
-          </span>
-        )}
-
-        <Tooltip content={<span className="inline-flex items-center gap-1.5">{isBookmarked ? 'Bỏ bookmark' : 'Bookmark'} <KbdHint keys={['B']} /></span>} side="bottom" className="hidden md:inline-flex">
-          <button onClick={toggleBookmark}
-            type="button" aria-label={isBookmarked ? 'Bỏ bookmark chương này' : 'Bookmark chương này'} aria-pressed={isBookmarked}
-            className={cn('flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors', isBookmarked ? activeCls : `border-transparent ${hoverCls}`)}
-            title={isBookmarked ? 'Bỏ bookmark (B)' : 'Bookmark (B)'}>
-            {isBookmarked ? <BookmarkCheck className="h-4 w-4" /> : <Bookmark className="h-4 w-4" />}
-          </button>
-        </Tooltip>
-        <button type="button" onClick={() => { setBookmarksOpen((o) => !o); setTocOpen(false); setSettingsOpen(false); setWmOpen(false); }}
-          aria-label="Danh sách bookmark" aria-expanded={bookmarksOpen}
-          className={cn('hidden md:flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors', bookmarksOpen ? activeCls : `border-transparent ${hoverCls}`)}>
-          <AlignLeft className="h-4 w-4" />
-        </button>
-        <button type="button" onClick={() => { setSettingsOpen((o) => !o); setTocOpen(false); setBookmarksOpen(false); setWmOpen(false); setAbOpen(false); }}
-          aria-label="Cài đặt trình đọc" aria-expanded={settingsOpen}
-          className={cn('hidden md:flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors', settingsOpen ? activeCls : `border-transparent ${hoverCls}`)}>
-          <Settings2 className="h-4 w-4" />
-        </button>
-        <button type="button" onClick={() => { setAbOpen((o) => !o); setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); setTtsSettingsOpen(false); }}
-          aria-label="Audio, đọc thành tiếng và giọng" aria-expanded={abOpen}
-          className={cn('hidden sm:flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors', abOpen ? activeCls : `border-transparent ${hoverCls}`)}
-          title="Audio: Read aloud, Audiobook, Voices">
-          <Headphones className="h-4 w-4" />
-        </button>
-        <button onClick={() => { setVoiceDebugOpen((o) => !o); setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); setAbOpen(false); }}
-          data-testid="voice-debug-toggle"
-          aria-label="Open voice debug panel"
-          className={cn('hidden md:flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors', voiceDebugOpen ? activeCls : `border-transparent ${hoverCls}`)}
-          title="Voice assignment debug (xem ai đang nói, voice nào)">
-          <Bug className="h-4 w-4" />
-        </button>
-        <div
-          ref={analyzerModeBtnRef}
-          // NOTE: no `overflow-hidden` here on purpose — the dropdown
-          // menu (absolutely positioned below) gets clipped by it, which
-          // hid the mode picker entirely. Each child button gets its
-          // own rounded corners so the visual still feels unified.
-          className="relative hidden md:flex items-stretch h-8 rounded-md border border-border border-transparent"
-          data-testid="analyzer-mode-split"
-        >
-          {/* Main button — runs with the currently-selected mode. Shows the
-              mode name so users know what they're about to run AND that
-              there's a mode picker next to it (the ▾ chevron was easy to
-              miss on its own). */}
-          <button
-            onClick={() => { void runFullAnalysis(analyzerMode); }}
-            disabled={analysisInFlight || !chapters[currentIdx]?.id}
-            title={analysisInFlight
-              ? `Đang chạy full analysis (mode = ${analyzerMode})…${analysisProgress ?? ''}`
-              : `Full analysis — mode = ${analyzerMode}. Click ▾ bên phải để đổi mode.`}
-            aria-label={`Run full analysis (mode = ${analyzerMode})`}
-            data-testid="analyzer-run-btn"
-            className={cn(
-              'flex items-center justify-center gap-1.5 px-2.5 rounded-l-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
-              analysisInFlight ? activeCls : hoverCls,
-            )}
-          >
-            {analysisInFlight
-              ? <Loader2 className="h-4 w-4 animate-spin" />
-              : <Wand2 className="h-4 w-4" />}
-            <span className="text-[11px] font-medium capitalize">
-              {analyzerMode === 'combine' ? 'Combine'
-                : analyzerMode === 'full-llm' ? 'Full LLM'
-                : 'Local'}
-            </span>
-          </button>
-          {/* Divider */}
-          <div className={cn('w-px shrink-0', dividerCls)} />
-          {/* Dropdown trigger — opens mode picker. Wider + bordered so it's
-              obviously clickable on its own. */}
-          <button
-            onClick={() => setAnalyzerModePickerOpen((o) => !o)}
-            disabled={analysisInFlight}
-            aria-label="Pick analyzer mode"
-            aria-haspopup="menu"
-            aria-expanded={analyzerModePickerOpen}
-            data-testid="analyzer-mode-toggle"
-            title={`Đổi mode (hiện tại: ${analyzerMode})`}
-            className={cn(
-              'flex items-center justify-center w-7 rounded-r-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
-              analyzerModePickerOpen ? activeCls : hoverCls,
-            )}
-          >
-            <ChevronDown className={cn(
-              'h-3.5 w-3.5 transition-transform',
-              analyzerModePickerOpen ? 'rotate-180' : '',
-            )} />
-          </button>
-          {/* Dropdown menu */}
-          {analyzerModePickerOpen && (
-            <div
-              role="menu"
-              data-testid="analyzer-mode-menu"
-              className={cn(
-                'absolute right-0 top-9 z-50 w-72 rounded-md border border-border shadow-xl p-1',
-                panelCls,
-                dividerCls,
-                'animate-in fade-in slide-in-from-top-2',
-              )}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className={cn('px-3 py-2 text-[10px] uppercase tracking-wide', mutedCls)}>
-                Chọn mode cho Full Analyzer
-              </div>
-              {ANALYZE_MODES.map((opt) => {
-                const isSelected = analyzerMode === opt.id;
-                return (
-                  <button
-                    key={opt.id}
-                    role="menuitemradio"
-                    aria-checked={isSelected}
-                    data-testid={`analyzer-mode-${opt.id}`}
-                    onClick={() => {
-                      setAnalyzerModePersist(opt.id);
-                      setAnalyzerModePickerOpen(false);
-                    }}
-                    className={cn(
-                      'w-full text-left rounded px-3 py-2 flex flex-col gap-0.5 transition-colors',
-                      isSelected ? 'bg-primary/15 ring-1 ring-primary/40' : hoverCls,
-                    )}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium">{opt.label}</span>
-                      <span className={cn('text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded', opt.hintCls)}>
-                        {opt.hint}
-                      </span>
-                      {isSelected && (
-                        <Check className="h-3 w-3 ml-auto text-primary" />
-                      )}
-                    </div>
-                    <div className={cn('text-[11px] leading-snug', mutedCls)}>
-                      {opt.desc}
-                    </div>
-                  </button>
-                );
-              })}
             </div>
-          )}
-        </div>
-        <button type="button" onClick={toggleFullscreen} aria-label={fullscreen ? 'Thoát toàn màn hình' : 'Toàn màn hình'} aria-pressed={fullscreen} className={cn('hidden sm:flex h-8 w-8 items-center justify-center rounded-md border border-border border-transparent', hoverCls)}>
-          {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-        </button>
-        <button
-          type="button"
-          onClick={toggleVoiceControl}
-          disabled={!voiceControlSupported}
-          title={voiceControlSupported ? (voiceControlOn ? 'Tắt nghe lệnh giọng nói' : 'Bật nghe lệnh giọng nói') : 'Trình duyệt không hỗ trợ nhận lệnh giọng nói'}
-          aria-label={voiceControlOn ? 'Tắt điều khiển giọng nói' : 'Bật điều khiển giọng nói'}
-          aria-pressed={voiceControlOn}
-          className={cn('hidden md:flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
-            voiceControlOn ? activeCls : `border-transparent ${hoverCls}`)}>
-          <Mic className="h-4 w-4" />
-        </button>
-        <ServiceHealth showWorker={false} className="hidden md:inline-flex" />
-        {/* TTS toggle — opens settings panel when idle, stops when active. Visual
-            hierarchy: filled primary when actively reading, outlined when
-            idle, so the eye finds the most-used action first. */}
-        <button
-          onClick={() => {
-            if (ttsState === 'idle') {
-              void loadTtsContext();
-              setAbTab('readAloud');
-              setAbOpen(true);
-              setTtsSettingsOpen(false);
-            } else {
-              stopTts();
-            }
-          }}
-          title={ttsState === 'idle' ? 'Read aloud controls' : 'Stop reading'}
-          aria-label={ttsState === 'idle' ? 'Open read aloud controls' : 'Stop reading aloud'}
-          aria-pressed={ttsState !== 'idle'}
-          className={cn(
-            'flex h-8 items-center gap-1.5 rounded-md border border-border px-2 transition-colors shrink-0',
-            ttsState === 'playing'
-              ? 'bg-primary text-primary-foreground border-primary shadow-sm'
-              : ttsState === 'loading'
-                ? 'bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30'
-                : ttsState !== 'idle'
-                  ? `${activeCls} border-primary/40`
-                  : `border-transparent ${hoverCls}`,
-          )}>
-          {ttsState === 'loading'
-            ? <Loader2 className="h-4 w-4 animate-spin" />
-            : ttsState !== 'idle'
-            ? <VolumeX className="h-4 w-4" />
-            : <Volume2 className="h-4 w-4" />}
-          <span className="hidden sm:inline text-[11px] font-medium">
-            {ttsState === 'playing' ? 'Dừng' : ttsState === 'paused' ? 'Tiếp' : ttsState === 'loading' ? '…' : 'Đọc'}
-          </span>
-        </button>
+          </div>
 
-        {/* Mobile overflow menu — surfaces the secondary controls we hid
-            below the `md:` breakpoint. Tap outside / ESC dismisses via
-            Radix. Mirrors desktop actions without duplicating handlers. */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
+          {/* Quick-access cluster: shortcuts help + "Aa" reading popover.
+              Sits between the title and the bookmark group so it's always
+              visible (no breakpoint hiding) and keeps reading controls one tap
+              away without opening the full Settings panel. */}
+          <div className="hidden sm:flex items-center gap-1 rounded-xl border border-border/70 bg-background/35 p-1 shadow-sm">
+            <Tooltip content={<span className="inline-flex items-center gap-1.5">Phím tắt <KbdHint keys={['?']} /></span>} side="bottom" className="inline-flex">
+              <button type="button" onClick={() => setShortcutsOpen(true)}
+                aria-label="Phím tắt"
+                className={cn('flex h-8 w-8 items-center justify-center rounded-md border border-transparent transition-colors', hoverCls)}>
+                <span className="text-sm font-semibold leading-none">?</span>
+              </button>
+            </Tooltip>
+            <div className="relative" ref={aaPopoverRef}>
+              <button type="button" onClick={() => setAaPopoverOpen((o) => !o)}
+                aria-label="Cài đặt nhanh (cỡ chữ, giao diện, khổ)"
+                aria-expanded={aaPopoverOpen}
+                data-testid="aa-quick-btn"
+                className={cn('flex h-8 w-8 items-center justify-center rounded-md border border-transparent transition-colors', aaPopoverOpen ? activeCls : hoverCls)}>
+                <span className="text-[13px] font-semibold leading-none">Aa</span>
+              </button>
+              {aaPopoverOpen && (
+                <div
+                  role="dialog"
+                  aria-label="Cài đặt đọc nhanh"
+                  onClick={(e) => e.stopPropagation()}
+                  className={cn(
+                    'absolute right-0 top-10 z-50 w-64 rounded-xl border border-border shadow-2xl p-3 space-y-3',
+                    panelCls,
+                  )}
+                >
+                  {/* Theme */}
+                  <div>
+                    <p className={cn('mb-1.5 text-[10px] font-semibold uppercase tracking-widest', mutedCls)}>Giao diện</p>
+                    <div className="flex gap-1.5">
+                      {THEMES.map((t) => (
+                        <button key={t.id} type="button" onClick={() => updateSetting('theme', t.id)} aria-pressed={settings.theme === t.id}
+                          className={cn('flex-1 rounded-lg border border-border py-1.5 text-[11px] font-medium transition-all', settings.theme === t.id ? 'ring-2' : 'opacity-60')}
+                          style={{ background: t.bg, color: t.text }}>
+                          {t.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {/* Font size */}
+                  <div>
+                    <div className="flex justify-between mb-1">
+                      <p className={cn('text-[10px] font-semibold uppercase tracking-widest', mutedCls)}>Cỡ chữ</p>
+                      <span className="text-[11px] font-mono">{settings.fontSize}px</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button type="button" onClick={() => updateSetting('fontSize', Math.max(12, settings.fontSize - 1))} aria-label="Giảm cỡ chữ"
+                        className={cn('flex h-7 w-7 items-center justify-center rounded border border-border', hoverCls)}><Minus className="h-3.5 w-3.5" /></button>
+                      <input type="range" min={12} max={28} step={1} value={settings.fontSize}
+                        onChange={(e) => updateSetting('fontSize', parseInt(e.target.value, 10))} className="flex-1" style={{ accentColor }} aria-label="Cỡ chữ" aria-valuetext={`${settings.fontSize}px`} />
+                      <button type="button" onClick={() => updateSetting('fontSize', Math.min(28, settings.fontSize + 1))} aria-label="Tăng cỡ chữ"
+                        className={cn('flex h-7 w-7 items-center justify-center rounded border border-border', hoverCls)}><Plus className="h-3.5 w-3.5" /></button>
+                    </div>
+                  </div>
+                  {/* Column width */}
+                  <div>
+                    <p className={cn('mb-1.5 text-[10px] font-semibold uppercase tracking-widest', mutedCls)}>Khổ trang</p>
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {WIDTHS.map((w) => (
+                        <button key={w.px} type="button" onClick={() => updateSetting('width', w.px)} aria-pressed={settings.width === w.px}
+                          className={cn('rounded-lg border border-border py-1.5 text-[10px] font-medium transition-all bg-transparent', settings.width === w.px ? activeCls : `${hoverCls} opacity-70`)}>
+                          {w.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <button type="button" onClick={() => { setSettingsOpen(true); setAaPopoverOpen(false); }}
+                    className={cn('w-full flex items-center justify-center gap-1.5 rounded-lg border border-border py-1.5 text-[11px]', hoverCls)}>
+                    <Settings2 className="h-3.5 w-3.5" /> Tất cả cài đặt
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="hidden xl:flex items-center gap-1.5 rounded-xl border border-border/70 bg-background/35 p-1 shadow-sm">
+            {chapters.length > 0 && (
+              <form onSubmit={(e) => { e.preventDefault(); const n = parseInt(jumpInput, 10) - 1; if (!isNaN(n)) goToChapter(n); setJumpInput(''); }} className="flex items-center gap-1.5">
+                <input type="number" min={1} max={chapters.length} value={jumpInput}
+                  onChange={(e) => setJumpInput(e.target.value)} placeholder={String(currentIdx + 1)}
+                  className={cn('w-12 rounded-md border border-border bg-transparent text-center text-xs py-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring', inputCls)} title="Jump to chapter" aria-label="Số chương muốn mở" />
+                <span className={cn('text-[10px]', mutedCls)}>/ {chapters.length}</span>
+              </form>
+            )}
+            {chapters.length > 0 && (
+              <span className={cn('inline-flex items-center gap-0.5 text-[10px] font-medium', mutedCls)}>
+                <Clock className="h-3 w-3 opacity-60" />{estimateReadTime(chapters.length, currentIdx)}
+              </span>
+            )}
+          </div>
+
+          <div className="hidden md:flex items-center gap-1 rounded-xl border border-border/70 bg-background/35 p-1 shadow-sm">
+            <Tooltip content={<span className="inline-flex items-center gap-1.5">{isBookmarked ? 'Bỏ bookmark' : 'Bookmark'} <KbdHint keys={['B']} /></span>} side="bottom" className="inline-flex">
+              <button onClick={toggleBookmark}
+                type="button" aria-label={isBookmarked ? 'Bỏ bookmark chương này' : 'Bookmark chương này'} aria-pressed={isBookmarked}
+                className={cn('flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors', isBookmarked ? activeCls : `border-transparent ${hoverCls}`)}
+                title={isBookmarked ? 'Bỏ bookmark (B)' : 'Bookmark (B)'}>
+                {isBookmarked ? <BookmarkCheck className="h-4 w-4" /> : <Bookmark className="h-4 w-4" />}
+              </button>
+            </Tooltip>
+            <button type="button" onClick={() => { setBookmarksOpen((o) => !o); setTocOpen(false); setSettingsOpen(false); setWmOpen(false); }}
+              aria-label="Danh sách bookmark" aria-expanded={bookmarksOpen}
+              className={cn('flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors', bookmarksOpen ? activeCls : `border-transparent ${hoverCls}`)}>
+              <AlignLeft className="h-4 w-4" />
+            </button>
+            <button type="button" onClick={() => { setSettingsOpen((o) => !o); setTocOpen(false); setBookmarksOpen(false); setWmOpen(false); setAbOpen(false); }}
+              aria-label="Cài đặt trình đọc" aria-expanded={settingsOpen}
+              className={cn('flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors', settingsOpen ? activeCls : `border-transparent ${hoverCls}`)}>
+              <Settings2 className="h-4 w-4" />
+            </button>
+            <button onClick={() => { setVoiceDebugOpen((o) => !o); setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); setAbOpen(false); }}
+              data-testid="voice-debug-toggle"
+              aria-label="Open voice debug panel"
+              className={cn('flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors', voiceDebugOpen ? activeCls : `border-transparent ${hoverCls}`)}
+              title="Voice assignment debug (xem ai đang nói, voice nào)">
+              <Bug className="h-4 w-4" />
+            </button>
+            {/* Quick-access "Phân giọng" (voice assignment) — opens the
+                dedicated Audio Studio on the assignment tab. */}
+            <Link
+              href={`/library/${bookId}/audio?tab=assign`}
+              aria-label="Phân giọng (gán giọng cho nhân vật)"
+              data-testid="assign-voices-quick-btn"
+              className={cn('flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors', `border-transparent ${hoverCls}`)}
+              title="Phân giọng (gán giọng cho nhân vật)">
+              <User className="h-4 w-4" />
+            </Link>
+          </div>
+
+          <div className="hidden md:flex items-center gap-1 rounded-xl border border-border/70 bg-background/35 p-1 shadow-sm">
+            <button type="button" onClick={() => { setAbOpen((o) => !o); setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); setTtsSettingsOpen(false); }}
+              aria-label="Audio, đọc thành tiếng và giọng" aria-expanded={abOpen}
+              className={cn('flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors', abOpen ? activeCls : `border-transparent ${hoverCls}`)}
+              title="Audio: Read aloud, Audiobook, Voices">
+              <Headphones className="h-4 w-4" />
+            </button>
+            <div
+              ref={analyzerModeBtnRef}
+              className="relative flex items-stretch h-8 rounded-md border border-border border-transparent"
+              data-testid="analyzer-mode-split"
+            >
+              <button
+                onClick={() => { void runFullAnalysis(analyzerMode); }}
+                disabled={analysisInFlight || !chapters[currentIdx]?.id}
+                title={analysisInFlight
+                  ? `Đang chạy full analysis (mode = ${analyzerMode})…${analysisProgress ?? ''}`
+                  : `Full analysis — mode = ${analyzerMode}. Click ▾ bên phải để đổi mode.`}
+                aria-label={`Run full analysis (mode = ${analyzerMode})`}
+                data-testid="analyzer-run-btn"
+                className={cn(
+                  'flex items-center justify-center gap-1.5 px-2.5 rounded-l-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+                  analysisInFlight ? activeCls : hoverCls,
+                )}
+              >
+                {analysisInFlight ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+                <span className="text-[11px] font-medium capitalize">
+                  {analyzerMode === 'combine' ? 'Combine'
+                    : analyzerMode === 'full-llm' ? 'Full LLM'
+                    : 'Local'}
+                </span>
+              </button>
+              <div className={cn('w-px shrink-0', dividerCls)} />
+              <button
+                onClick={() => setAnalyzerModePickerOpen((o) => !o)}
+                disabled={analysisInFlight}
+                aria-label="Pick analyzer mode"
+                aria-haspopup="menu"
+                aria-expanded={analyzerModePickerOpen}
+                data-testid="analyzer-mode-toggle"
+                title={`Đổi mode (hiện tại: ${analyzerMode})`}
+                className={cn(
+                  'flex items-center justify-center w-7 rounded-r-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+                  analyzerModePickerOpen ? activeCls : hoverCls,
+                )}
+              >
+                <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', analyzerModePickerOpen ? 'rotate-180' : '')} />
+              </button>
+              {analyzerModePickerOpen && (
+                <div
+                  role="menu"
+                  data-testid="analyzer-mode-menu"
+                  className={cn(
+                    'absolute right-0 top-9 z-50 w-72 rounded-md border border-border shadow-xl p-1',
+                    panelCls,
+                    dividerCls,
+                    'animate-in fade-in slide-in-from-top-2',
+                  )}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className={cn('px-3 py-2 text-[10px] uppercase tracking-wide', mutedCls)}>
+                    Chọn mode cho Full Analyzer
+                  </div>
+                  {ANALYZE_MODES.map((opt) => {
+                    const isSelected = analyzerMode === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        role="menuitemradio"
+                        aria-checked={isSelected}
+                        data-testid={`analyzer-mode-${opt.id}`}
+                        onClick={() => {
+                          setAnalyzerModePersist(opt.id);
+                          setAnalyzerModePickerOpen(false);
+                        }}
+                        className={cn(
+                          'w-full text-left rounded px-3 py-2 flex flex-col gap-0.5 transition-colors',
+                          isSelected ? 'bg-primary/15 ring-1 ring-primary/40' : hoverCls,
+                        )}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium">{opt.label}</span>
+                          <span className={cn('text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded', opt.hintCls)}>
+                            {opt.hint}
+                          </span>
+                          {isSelected && <Check className="h-3 w-3 ml-auto text-primary" />}
+                        </div>
+                        <div className={cn('text-[11px] leading-snug', mutedCls)}>{opt.desc}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <button type="button" onClick={toggleFullscreen} aria-label={fullscreen ? 'Thoát toàn màn hình' : 'Toàn màn hình'} aria-pressed={fullscreen} className={cn('flex h-8 w-8 items-center justify-center rounded-md border border-border border-transparent', hoverCls)}>
+              {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+            </button>
             <button
               type="button"
-              aria-label="Mở menu công cụ khác"
-              className={cn(
-                'md:hidden flex h-8 w-8 items-center justify-center rounded-md border border-border border-transparent shrink-0',
-                hoverCls,
-              )}
-              title="Mở menu công cụ khác"
-            >
-              <MoreVertical className="h-4 w-4" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-[14rem]">
-            <DropdownMenuItem asChild className="gap-2">
-              <Link href={`/library/${bookId}`}>
-                <Info className="h-3.5 w-3.5" /> Thông tin sách
-              </Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => { setGalleryOpen(true); setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); }}
-              className="gap-2"
-            >
-              <Images className="h-3.5 w-3.5" /> Gallery ảnh
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={toggleBookmark} className="gap-2">
-              {isBookmarked ? <BookmarkCheck className="h-3.5 w-3.5" /> : <Bookmark className="h-3.5 w-3.5" />}
-              {isBookmarked ? 'Bỏ bookmark chương này' : 'Bookmark chương này'}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => { setBookmarksOpen(true); setTocOpen(false); setSettingsOpen(false); setWmOpen(false); }}
-              className="gap-2"
-            >
-              <AlignLeft className="h-3.5 w-3.5" /> Danh sách bookmark
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => { setSettingsOpen(true); setTocOpen(false); setBookmarksOpen(false); setWmOpen(false); setAbOpen(false); }}
-              className="gap-2"
-            >
-              <Settings2 className="h-3.5 w-3.5" /> Cài đặt trình đọc
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => {
-                setVoiceDebugOpen((o) => !o);
-                setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false);
-                setWmOpen(false); setAbOpen(false);
-              }}
-              className="gap-2"
-            >
-              <Bug className="h-3.5 w-3.5" />
-              <span className="flex-1">Voice debug</span>
-              {voiceDebugOpen && <Check className="h-3 w-3 text-primary" />}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => { void runFullAnalysis(analyzerMode); }}
-              disabled={analysisInFlight || !chapters[currentIdx]?.id}
-              className="gap-2"
-            >
-              {analysisInFlight
-                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                : <Wand2 className="h-3.5 w-3.5" />}
-              <span className="flex-1 capitalize">
-                {analysisInFlight ? 'Đang chạy' : `Full Analyzer (${analyzerMode})`}
-              </span>
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={toggleVoiceControl}
+              onClick={toggleVoiceControl}
               disabled={!voiceControlSupported}
-              className="gap-2"
-            >
-              <Mic className="h-3.5 w-3.5" />
-              <span className="flex-1">Điều khiển giọng nói</span>
-              {voiceControlOn && <Check className="h-3 w-3 text-primary" />}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={toggleFullscreen}
-              className="gap-2"
-            >
-              {fullscreen
-                ? <><Minimize2 className="h-3.5 w-3.5" />Thoát toàn màn hình</>
-                : <><Maximize2 className="h-3.5 w-3.5" />Toàn màn hình</>}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+              title={voiceControlSupported ? (voiceControlOn ? 'Tắt nghe lệnh giọng nói' : 'Bật nghe lệnh giọng nói') : 'Trình duyệt không hỗ trợ nhận lệnh giọng nói'}
+              aria-label={voiceControlOn ? 'Tắt điều khiển giọng nói' : 'Bật điều khiển giọng nói'}
+              aria-pressed={voiceControlOn}
+              className={cn('flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
+                voiceControlOn ? activeCls : `border-transparent ${hoverCls}`)}>
+              <Mic className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <ServiceHealth showWorker={false} className="hidden md:inline-flex" />
+            <button
+              onClick={() => {
+                if (ttsState === 'idle') {
+                  void loadTtsContext();
+                  setAbTab('readAloud');
+                  setAbOpen(true);
+                  setTtsSettingsOpen(false);
+                } else {
+                  stopTts();
+                }
+              }}
+              title={ttsState === 'idle' ? 'Read aloud controls' : 'Stop reading'}
+              aria-label={ttsState === 'idle' ? 'Open read aloud controls' : 'Stop reading aloud'}
+              aria-pressed={ttsState !== 'idle'}
+              className={cn(
+                'flex h-8 items-center gap-1.5 rounded-md border border-border px-2 transition-colors shrink-0',
+                ttsState === 'playing'
+                  ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                  : ttsState === 'loading'
+                    ? 'bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30'
+                    : ttsState !== 'idle'
+                      ? `${activeCls} border-primary/40`
+                      : `border-transparent ${hoverCls}`,
+              )}>
+              {ttsState === 'loading'
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : ttsState !== 'idle'
+                ? <VolumeX className="h-4 w-4" />
+                : <Volume2 className="h-4 w-4" />}
+              <span className="hidden sm:inline text-[11px] font-medium">
+                {ttsState === 'playing' ? 'Dừng' : ttsState === 'paused' ? 'Tiếp' : ttsState === 'loading' ? '…' : 'Đọc'}
+              </span>
+            </button>
+          </div>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label="Mở menu công cụ khác"
+                className={cn(
+                  'md:hidden flex h-8 w-8 items-center justify-center rounded-md border border-border border-transparent shrink-0',
+                  hoverCls,
+                )}
+                title="Mở menu công cụ khác"
+              >
+                <MoreVertical className="h-4 w-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-[14rem]">
+              <DropdownMenuItem asChild className="gap-2">
+                <Link href={`/library/${bookId}`}>
+                  <Info className="h-3.5 w-3.5" /> Thông tin sách
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => { setGalleryOpen(true); setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); }}
+                className="gap-2"
+              >
+                <Images className="h-3.5 w-3.5" /> Gallery ảnh
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={toggleBookmark} className="gap-2">
+                {isBookmarked ? <BookmarkCheck className="h-3.5 w-3.5" /> : <Bookmark className="h-3.5 w-3.5" />}
+                {isBookmarked ? 'Bỏ bookmark chương này' : 'Bookmark chương này'}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => { setBookmarksOpen(true); setTocOpen(false); setSettingsOpen(false); setWmOpen(false); }}
+                className="gap-2"
+              >
+                <AlignLeft className="h-3.5 w-3.5" /> Danh sách bookmark
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => { setSettingsOpen(true); setTocOpen(false); setBookmarksOpen(false); setWmOpen(false); setAbOpen(false); }}
+                className="gap-2"
+              >
+                <Settings2 className="h-3.5 w-3.5" /> Cài đặt trình đọc
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => {
+                  setVoiceDebugOpen((o) => !o);
+                  setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false);
+                  setWmOpen(false); setAbOpen(false);
+                }}
+                className="gap-2"
+              >
+                <Bug className="h-3.5 w-3.5" />
+                <span className="flex-1">Voice debug</span>
+                {voiceDebugOpen && <Check className="h-3 w-3 text-primary" />}
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild className="gap-2">
+                <Link href={`/library/${bookId}/audio?tab=assign`}>
+                  <User className="h-3.5 w-3.5" />
+                  <span className="flex-1">Phân giọng</span>
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => { void runFullAnalysis(analyzerMode); }}
+                disabled={analysisInFlight || !chapters[currentIdx]?.id}
+                className="gap-2"
+              >
+                {analysisInFlight
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <Wand2 className="h-3.5 w-3.5" />}
+                <span className="flex-1 capitalize">
+                  {analysisInFlight ? 'Đang chạy' : `Full Analyzer (${analyzerMode})`}
+                </span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={toggleVoiceControl}
+                disabled={!voiceControlSupported}
+                className="gap-2"
+              >
+                <Mic className="h-3.5 w-3.5" />
+                <span className="flex-1">Điều khiển giọng nói</span>
+                {voiceControlOn && <Check className="h-3 w-3 text-primary" />}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={toggleFullscreen}
+                className="gap-2"
+              >
+                {fullscreen
+                  ? <><Minimize2 className="h-3.5 w-3.5" />Thoát toàn màn hình</>
+                  : <><Maximize2 className="h-3.5 w-3.5" />Toàn màn hình</>}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </header>
 
       {/* ── Full-LLM soft-warn dialog (added 2026-07-12) ──────────────────
@@ -4829,12 +4930,22 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
             <span className="font-semibold text-sm">Contents</span>
             <span className={cn('text-xs', mutedCls)}>{chapters.length} ch.</span>
           </div>
-          <div className="px-3 py-2 shrink-0">
+          <div className="px-3 py-2 shrink-0 space-y-2">
             <div className="relative">
               <Search className={cn('absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2', mutedCls)} />
               <input type="search" placeholder="Search…" value={tocSearch} onChange={(e) => setTocSearch(e.target.value)} aria-label="Tìm chương"
                 className={cn('w-full rounded-md border border-border pl-8 pr-3 py-1.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring', inputCls)} />
             </div>
+            {bookmarks.length > 0 && (
+              <button type="button" onClick={() => setTocBookmarkedOnly((o) => !o)}
+                aria-pressed={tocBookmarkedOnly}
+                className={cn('flex w-full items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] transition-colors',
+                  tocBookmarkedOnly ? activeCls : `border-border ${hoverCls}`)}>
+                <Bookmark className={cn('h-3 w-3', tocBookmarkedOnly ? 'fill-current' : '')} />
+                <span className="flex-1 text-left">Chỉ bookmark ({bookmarks.length})</span>
+                {tocBookmarkedOnly && <Check className="h-3 w-3" />}
+              </button>
+            )}
           </div>
           <nav className="flex-1 overflow-y-auto">
             <ul className="py-1">
@@ -5106,7 +5217,11 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
         {abOpen && (
         <aside
           onClick={(e) => e.stopPropagation()}
-          className={cn('absolute inset-y-0 right-0 z-20 flex flex-col shadow-2xl transition-transform duration-200 ease-in-out overflow-hidden',
+          className={cn(
+            audioPanelOverlay && !audioPanelMobile
+              ? 'fixed inset-y-0 right-0 z-40'
+              : 'absolute inset-y-0 right-0 z-20',
+            'flex flex-col shadow-2xl transition-transform duration-200 ease-in-out overflow-hidden',
             panelCls,
             'max-w-full border-l',
             'translate-x-0',
@@ -5144,48 +5259,35 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
               <Headphones className="h-3.5 w-3.5" />Audio
             </span>
             <div className="flex items-center gap-1">
+              {!audioPanelMobile && (
+                <Tooltip content={<span>{audioPanelOverlay ? 'Ghim vào khung (đẩy nội dung)' : 'Nổi trên nội dung (overlay)'}</span>} side="bottom" className="inline-flex">
+                  <button
+                    type="button"
+                    onClick={() => setAudioPanelOverlay((o) => !o)}
+                    aria-label={audioPanelOverlay ? 'Ghim bảng Audio vào khung' : 'Bảng Audio nổi trên nội dung'}
+                    aria-pressed={audioPanelOverlay}
+                    title={audioPanelOverlay ? 'Ghim vào khung (đẩy nội dung)' : 'Nổi trên nội dung (overlay)'}
+                    className={cn('flex h-7 w-7 items-center justify-center rounded-md border border-border transition-colors', audioPanelOverlay ? activeCls : `border-transparent ${hoverCls}`)}
+                  >
+                    {audioPanelOverlay ? <Pin className="h-3.5 w-3.5" /> : <PinOff className="h-3.5 w-3.5" />}
+                  </button>
+                </Tooltip>
+              )}
               <Link
-                href={`/library/${bookId}/assign-voices`}
+                href={`/library/${bookId}/audio`}
                 className={cn('rounded p-1 text-xs text-primary hover:underline', hoverCls)}
-                title="Mở trang phân giọng toàn màn hình"
+                title="Mở Audio Studio (Audiobook, Giọng, Nhân vật, Phân giọng)"
               >
-                Phân giọng ↗
+                Audio Studio ↗
               </Link>
               <button type="button" onClick={() => setAbOpen(false)} aria-label="Đóng bảng Audio" className={cn('rounded p-1', hoverCls)}><X className="h-3.5 w-3.5" /></button>
             </div>
           </div>
-          {/* Tabs */}
-          <div className={cn('flex border-b shrink-0', dividerCls)} role="tablist" aria-label="Audio tools">
-            <button type="button" role="tab" aria-selected={abTab === 'readAloud'} onClick={() => setAbTab('readAloud')}
-              className={cn('flex-1 py-2 text-xs font-medium transition-colors border-b-2',
-                abTab === 'readAloud' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')}>
-              Read aloud
-            </button>
-            <button type="button" role="tab" aria-selected={abTab === 'audiobook'} onClick={() => setAbTab('audiobook')}
-              className={cn('flex-1 py-2 text-xs font-medium transition-colors border-b-2',
-                abTab === 'audiobook' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')}>
-              Audiobook
-            </button>
-            <button type="button" role="tab" aria-selected={abTab === 'voices'} onClick={() => setAbTab('voices')}
-              className={cn('flex-1 py-2 text-xs font-medium transition-colors border-b-2',
-                abTab === 'voices' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')}>
-              Giọng
-            </button>
-            <button type="button" role="tab" aria-selected={abTab === 'characters'} onClick={() => setAbTab('characters')}
-              className={cn('flex-1 py-2 text-xs font-medium transition-colors border-b-2',
-                abTab === 'characters' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')}>
-              Nhân vật
-            </button>
-            <button type="button" role="tab" aria-selected={abTab === 'assign'} onClick={() => setAbTab('assign')}
-              className={cn('flex-1 py-2 text-xs font-medium transition-colors border-b-2',
-                abTab === 'assign' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')}>
-              Phân giọng
-            </button>
-          </div>
-          <div className={cn('flex-1 min-h-0 overflow-y-auto', abTab === 'readAloud' ? '' : 'p-4')}>
-            {abTab === 'readAloud' ? (
-              <Suspense fallback={<PanelSkeleton />}>
-                <ReadAloudPanel
+          {/* Read-aloud is the only inline audio tool; the rest live on the
+              dedicated Audio Studio page (opened via the link in the header). */}
+          <div className={cn('flex-1 min-h-0 overflow-y-auto')}>
+            <Suspense fallback={<PanelSkeleton />}>
+              <ReadAloudPanel
                   embedded
                   open
                   onClose={() => setAbOpen(false)}
@@ -5222,7 +5324,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
                   onStopPreview={stopVoicePreview}
                   previewingVoice={previewingVoice}
                   bookId={bookId}
-                  onOpenVoiceLibrary={() => { setAbOpen(true); setAbTab('voices'); }}
+                  onOpenVoiceLibrary={() => { window.location.href = `/library/${bookId}/audio?tab=voices`; }}
                   accentColor={accentColor}
                   themeCls={panelCls}
                   mutedCls={mutedCls}
@@ -5231,41 +5333,6 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
                   activeCls={activeCls}
                 />
               </Suspense>
-            ) : abTab === 'audiobook' ? (
-              <Suspense fallback={<PanelSkeleton />}>
-                <AudiobookPanel bookId={bookId} />
-              </Suspense>
-            ) : abTab === 'assign' ? (
-              <Suspense fallback={<PanelSkeleton />}>
-                <VoiceAssignEditor
-                  bookId={bookId}
-                  chapterId={chapters[currentIdx]?.id ?? null}
-                  chapterTitle={chapters[currentIdx]?.title ?? null}
-                  panelCls={panelCls}
-                  mutedCls={mutedCls}
-                  dividerCls={dividerCls}
-                  hoverCls={hoverCls}
-                  activeCls={activeCls}
-                  accentColor={accentColor}
-                />
-              </Suspense>
-            ) : abTab === 'voices' ? (
-              <VoicePanel
-                bookId={bookId}
-                bookLanguage="vi"
-                section="voices"
-                useCharacterVoice={ttsUseCharacterVoice}
-                setUseCharacterVoice={setTtsUseCharacterVoice}
-              />
-            ) : (
-              <VoicePanel
-                bookId={bookId}
-                bookLanguage="vi"
-                section="characters"
-                useCharacterVoice={ttsUseCharacterVoice}
-                setUseCharacterVoice={setTtsUseCharacterVoice}
-              />
-            )}
           </div>
         </aside>
         )}
@@ -5351,95 +5418,107 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       </div>
 
       {/* ── Footer ── */}
-      <footer className={cn('flex items-center gap-2 px-3 py-2 border-t shrink-0 backdrop-blur-sm', headerCls)}>
-        <Button variant="outline" size="sm" onClick={handlePrev}
-          disabled={chapters.length === 0 || currentIdx <= 0}
-          style={btnStyle}
-          aria-label="Previous chapter"
-          className="gap-1 text-xs">
-          <ChevronLeft className="h-3.5 w-3.5" /><span className="hidden sm:block">Prev</span>
-        </Button>
+      <footer className={cn('shrink-0 border-t backdrop-blur-sm', headerCls)}>
+        <div className="flex items-center gap-2 px-3 py-2">
+          <Button variant="outline" size="sm" onClick={handlePrev}
+            disabled={chapters.length === 0 || currentIdx <= 0}
+            style={btnStyle}
+            aria-label="Previous chapter"
+            className="gap-1 text-xs">
+            <ChevronLeft className="h-3.5 w-3.5" /><span className="hidden sm:block">Prev</span>
+          </Button>
 
-        <div className="flex-1 flex flex-col items-center gap-1">
-          {chapters.length > 0 && chapters.length <= 80 ? (
-            // ── Condensed dots — ≤80 chapters, each dot 3px (4px active). ──
-            <div className="flex flex-wrap justify-center items-center gap-1 max-w-md">
-              {chapters.map((_, idx) => {
-                const isActive = idx === currentIdx;
-                const isBookmarked = bookmarks.includes(idx);
-                return (
-                  <button key={idx} onClick={() => goToChapter(idx)} title={chapters[idx]?.title}
-                    data-testid={`chapter-dot-${idx}`}
-                    data-chapter-index={idx}
-                    aria-label={`Jump to chapter ${idx + 1}${isBookmarked ? ' (bookmarked)' : ''}`}
-                    aria-current={isActive ? 'true' : undefined}
-                    className="rounded-full transition-all"
-                    style={{
-                      width: isActive ? 4 : 3,
-                      height: isActive ? 4 : 3,
-                      background: isBookmarked ? '#f59e0b' : isActive ? accentColor : 'currentColor',
-                      opacity: isActive ? 1 : isBookmarked ? 0.8 : 0.25,
-                    }} />
-                );
-              })}
-            </div>
-          ) : chapters.length > 80 && chapters.length <= 300 ? (
-            // ── Dot grid (same dots) + DropdownMenu "Jump to…" trigger for
-            //     touch devices where small targets are hard to hit. ──
-            <div className="flex items-center gap-2 max-w-md w-full">
-              <div className="flex flex-wrap justify-center items-center gap-1 flex-1 min-w-0">
-                {chapters.map((_, idx) => {
-                  const isActive = idx === currentIdx;
-                  const isBookmarked = bookmarks.includes(idx);
-                  return (
-                    <button key={idx} onClick={() => goToChapter(idx)} title={chapters[idx]?.title}
-                      data-testid={`chapter-dot-${idx}`}
-                      data-chapter-index={idx}
-                      aria-label={`Jump to chapter ${idx + 1}${isBookmarked ? ' (bookmarked)' : ''}`}
-                      aria-current={isActive ? 'true' : undefined}
-                      className="rounded-full transition-all"
-                      style={{
-                        width: isActive ? 4 : 3,
-                        height: isActive ? 4 : 3,
-                        background: isBookmarked ? '#f59e0b' : isActive ? accentColor : 'currentColor',
-                        opacity: isActive ? 1 : isBookmarked ? 0.8 : 0.25,
-                      }} />
-                  );
-                })}
-              </div>
-              <ChapterJumpMenu
-                chapters={chapters}
-                currentIdx={currentIdx}
-                onJump={goToChapter}
-                mutedCls={mutedCls}
-              />
-            </div>
-          ) : chapters.length > 300 ? (
-            // ── Long books (>300 ch): progress bar + jump menu (mobile). ──
-            <div className="w-full max-w-xs flex items-center gap-2">
-              <div className="flex-1">
-                <div className="h-1.5 rounded-full" style={{ background: `${accentColor}22` }}>
-                  <div className="h-full rounded-full transition-all" style={{ background: accentColor, width: `${chapters.length > 0 ? ((currentIdx + 1) / chapters.length) * 100 : 0}%` }} />
+          <div className="flex-1 rounded-xl border border-border/70 bg-background/35 p-1.5 shadow-sm">
+            <div className="flex flex-col items-center gap-1">
+              {chapters.length > 0 && chapters.length <= 80 ? (
+                <div className="flex flex-col items-center gap-1 w-full">
+                  <div className="flex flex-wrap justify-center items-center gap-1 max-w-md">
+                    {chapters.map((_, idx) => {
+                      const isActive = idx === currentIdx;
+                      const isBookmarked = bookmarks.includes(idx);
+                      return (
+                        <button key={idx} onClick={() => goToChapter(idx)} title={chapters[idx]?.title}
+                          data-testid={`chapter-dot-${idx}`}
+                          data-chapter-index={idx}
+                          aria-label={`Jump to chapter ${idx + 1}${isBookmarked ? ' (bookmarked)' : ''}`}
+                          aria-current={isActive ? 'true' : undefined}
+                          className="rounded-full transition-all"
+                          style={{
+                            width: isActive ? 4 : 3,
+                            height: isActive ? 4 : 3,
+                            background: isBookmarked ? '#f59e0b' : isActive ? accentColor : 'currentColor',
+                            opacity: isActive ? 1 : isBookmarked ? 0.8 : 0.25,
+                            boxShadow: isActive ? `0 0 0 2px ${accentColor}55` : undefined,
+                          }} />
+                      );
+                    })}
+                  </div>
+                  <p className={cn('text-[10px] tabular-nums', mutedCls)}>
+                    Ch. {currentIdx + 1} / {chapters.length} · {Math.round(((currentIdx + 1) / chapters.length) * 100)}%
+                  </p>
                 </div>
-                <p className={cn('text-center text-[10px] mt-0.5', mutedCls)}>{currentIdx + 1} / {chapters.length}</p>
-              </div>
-              <ChapterJumpMenu
-                chapters={chapters}
-                currentIdx={currentIdx}
-                onJump={goToChapter}
-                mutedCls={mutedCls}
-              />
+              ) : chapters.length > 80 && chapters.length <= 300 ? (
+                <div className="flex items-center gap-2 max-w-md w-full">
+                  <div className="flex flex-col items-center gap-1 flex-1 min-w-0">
+                    <div className="flex flex-wrap justify-center items-center gap-1 w-full">
+                      {chapters.map((_, idx) => {
+                        const isActive = idx === currentIdx;
+                        const isBookmarked = bookmarks.includes(idx);
+                        return (
+                          <button key={idx} onClick={() => goToChapter(idx)} title={chapters[idx]?.title}
+                            data-testid={`chapter-dot-${idx}`}
+                            data-chapter-index={idx}
+                            aria-label={`Jump to chapter ${idx + 1}${isBookmarked ? ' (bookmarked)' : ''}`}
+                            aria-current={isActive ? 'true' : undefined}
+                            className="rounded-full transition-all"
+                            style={{
+                              width: isActive ? 4 : 3,
+                              height: isActive ? 4 : 3,
+                              background: isBookmarked ? '#f59e0b' : isActive ? accentColor : 'currentColor',
+                              opacity: isActive ? 1 : isBookmarked ? 0.8 : 0.25,
+                              boxShadow: isActive ? `0 0 0 2px ${accentColor}55` : undefined,
+                            }} />
+                        );
+                      })}
+                    </div>
+                    <p className={cn('text-[10px] tabular-nums', mutedCls)}>
+                      Ch. {currentIdx + 1} / {chapters.length} · {Math.round(((currentIdx + 1) / chapters.length) * 100)}%
+                    </p>
+                  </div>
+                  <ChapterJumpMenu
+                    chapters={chapters}
+                    currentIdx={currentIdx}
+                    onJump={goToChapter}
+                    mutedCls={mutedCls}
+                  />
+                </div>
+              ) : chapters.length > 300 ? (
+                <div className="w-full max-w-xs flex items-center gap-2">
+                  <div className="flex-1">
+                    <div className="h-1.5 rounded-full" style={{ background: `${accentColor}22` }}>
+                      <div className="h-full rounded-full transition-all" style={{ background: accentColor, width: `${chapters.length > 0 ? ((currentIdx + 1) / chapters.length) * 100 : 0}%` }} />
+                    </div>
+                    <p className={cn('text-center text-[10px] mt-0.5', mutedCls)}>{currentIdx + 1} / {chapters.length}</p>
+                  </div>
+                  <ChapterJumpMenu
+                    chapters={chapters}
+                    currentIdx={currentIdx}
+                    onJump={goToChapter}
+                    mutedCls={mutedCls}
+                  />
+                </div>
+              ) : null}
             </div>
-          ) : null}
-        </div>
+          </div>
 
-        <Button variant="outline" size="sm" onClick={handleNext}
-          disabled={chapters.length === 0 || currentIdx >= chapters.length - 1}
-          style={btnStyle}
-          aria-label="Next chapter"
-          className="gap-1 text-xs">
-          <span className="hidden sm:block">Next</span><ChevronRight className="h-3.5 w-3.5" />
-        </Button>
+          <Button variant="outline" size="sm" onClick={handleNext}
+            disabled={chapters.length === 0 || currentIdx >= chapters.length - 1}
+            style={btnStyle}
+            aria-label="Next chapter"
+            className="gap-1 text-xs">
+            <span className="hidden sm:block">Next</span><ChevronRight className="h-3.5 w-3.5" />
+          </Button>
+        </div>
       </footer>
 
       {/* ── Full Analyzer drawer — shown after Wand2 click ──
