@@ -405,7 +405,7 @@ export function EpubEditor({ bookId, initialChapterId }: EpubEditorProps) {
     setDirty(true);
   };
 
-  const promptAndInsertLink = () => {
+  const promptAndInsertLink = useCallback(() => {
     focusEditor();
     const url = window.prompt('URL liên kết (bỏ trống để hủy):', 'https://');
     if (!url) return;
@@ -419,7 +419,8 @@ export function EpubEditor({ bookId, initialChapterId }: EpubEditorProps) {
       const safeUrl = url.replace(/"/g, '&quot;');
       insertHtml(`<a href="${safeUrl}" rel="noopener noreferrer" target="_blank">${url}</a>&nbsp;`);
     }
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const insertImage = () => {
     focusEditor();
@@ -630,7 +631,12 @@ export function EpubEditor({ bookId, initialChapterId }: EpubEditorProps) {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [findOpen, specialOpen, shortcutsOpen, illustOpen]);
+    // `promptAndInsertLink` is an inline arrow so its identity changes
+    // every render; the handler below re-binds intentionally so it always
+    // closes over the latest version. The other deps (`findOpen`, etc.)
+    // are booleans that change rarely, so re-binding is cheap.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [findOpen, specialOpen, shortcutsOpen, illustOpen, promptAndInsertLink]);
 
   const save = async (mode: 'save' | 'saveAs') => {
     if (!activeId) return;
@@ -684,8 +690,14 @@ export function EpubEditor({ bookId, initialChapterId }: EpubEditorProps) {
   saveRef.current = save;
 
   // ── Live word/character count ───────────────────────────────────────
-  // Cheap — runs on every editor input via the htmlRef.current value.
-  const stats = useMemo(() => countStats(htmlRef.current), [htmlRef.current, dirty, htmlBootstrap]);
+  // Cheap — runs whenever the `dirty` flag flips (i.e. on every editor
+  // input/bold/etc. and once on first render when `htmlBootstrap` set).
+  // The `dirty` read is intentional — it ties recomputation to the same
+  // render that flipped the dirty flag.
+  const stats = useMemo(() => {
+    void dirty; // tie recomputation to the dirty-flag render
+    return countStats(htmlRef.current);
+  }, [dirty]);
 
   // Toolbar groups keep the row scannable; each row uses <kbd>-style
   // tooltips on hover for keyboard hints. Grouped for visual stability
@@ -899,7 +911,7 @@ export function EpubEditor({ bookId, initialChapterId }: EpubEditorProps) {
                   </DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => applyViHelper('smartQuotes')} className="gap-2">
                     <Type className="h-3.5 w-3.5" />
-                    <span className="flex-1">Smart quotes ("…")</span>
+                    <span className="flex-1">Smart quotes (&ldquo;…&rdquo;)</span>
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

@@ -265,7 +265,7 @@ export function VoicePanel({
     const builtin = builtinVoices.find((vv) => vv.id === char.voiceId);
     if (builtin) return builtin.name;
     return null;
-  }, [voices]);
+  }, [voices, builtinVoices]);
 
   const stopCharPreview = () => {
     if (charAudioRef.current) {
