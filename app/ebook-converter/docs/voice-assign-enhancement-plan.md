@@ -1,5 +1,68 @@
 # Phân Giọng (Voice Assignment) — Enhancement Plan
 
+> Trạng thái: bản nháp (draft). Tài liệu này mô tả hiện trạng và lộ trình nâng cấp
+> tính năng phân giọng (gán giọng đọc theo câu) trong `ebook-converter`.
+> Mọi tham chiếu mã nguồn đều dựa trên trạng thái thực tế của repo tại thời điểm viết.
+
+---
+
+## 1. Tình trạng hiện tại (Current State)
+
+Tính năng "Phân giọng" cho phép người dùng gán giọng đọc **theo từng câu** (thay vì
+theo đoạn như engine đọc-chính của reader). Mỗi câu mặc định là **giọng người dẫn
+chuyện (narration)**; người dùng chỉ can thiệp khi muốn một câu cụ thể do một nhân
+vật/nhân vật phụ đọc.
+
+Có **hai giao diện** phục vụ cùng một mục đích:
+
+| Giao diện | File | Vị trí |
+|-----------|------|--------|
+| Trang phân giọng toàn màn hình | `src/components/library/VoiceAssignPage.tsx` | `/library/[id]/assign-voices?chapter=chapterXXX` |
+| Tab "Phân giọng" trong panel Audio của reader | `src/components/library/VoiceAssignEditor.tsx` | Panel Audio khi đọc sách |
+
+Cả hai đều gọi chung một API và cùng một module lõi `src/lib/voice-plan.ts`.
+
+### 1.1 Dữ liệu (Data Model)
+
+- `ChapterVoicePlan` — khóa `(bookId, chapterIndex)`. Lưu mảng câu đã serialize
+  (`serializePlan`) + `sourceMtime` để cache-invalidate theo mtime file EPUB.
+- `Voice` — giọng (built-in VieNeu hoặc cloned). Có `isDefault`, `gender`, `kind`.
+- `Character` — nhân vật đã nhận diện, mỗi nhân vật gắn 1 `voiceId` (qua `voice`).
+- `AudiobookChapter` — trạng thái sinh audio theo `chapterFile`.
+
+### 1.2 Luồng đề xuất (Suggestion pipeline)
+
+`buildSuggestedVoicePlan()` trong `voice-plan.ts` tái sử dụng **chính engine phân
+tích nhân vật của reader**:
+
+1. `sliceParagraphs(html)` → tách đoạn.
+2. `attributeByRegex(paragraphs, knownNames)` + `attributeByConversation({...})`
+   → phân tích nhân vật mức đoạn (giống hệt read-aloud).
+3. Mỗi đoạn tách tiếp thành câu qua `splitParagraphIntoSentences()` (ngắt theo
+   `. ! ? …` + dấu ngoặc kép đóng).
+4. Một câu chỉ được gán `charId` khi **(a)** đoạn chứa nó được gán cho nhân vật
+   đã biết **VÀ (b)** câu đó thực sự chứa lời thoại (có dấu ngoặc kép —
+   `sentenceHasQuote`). Nếu không → `source: 'narration'`, `voiceId: null`.
+
+### 1.3 API
+
+| Method | Route | Mô tả |
+|--------|-------|-------|
+| `GET`  | `/api/library/[id]/chapters/[chapterId]/voice-plan` | Trả plan. Nếu chưa có hoặc `sourceMtime` lỗi thời → sinh mới và persist. |
+| `PUT`  | `/api/library/[id]/chapters/[chapterId]/voice-plan` | Lưu plan do user sửa (auto-save). |
+| `POST` | `/api/library/[id]/chapters/[chapterId]/voice-plan/suggest` | Sinh plan **có điền sẵn `voiceId`** cho câu nhân vật (dùng `voiceId` của Character, fallback `pickBestBuiltInVoice`). |
+
+`loadChapterRef()` (`voice-plan-loader.ts`) là helper chung lấy HTML chương + mtime.
+
+---
+
+## 2. Tài liệu triển khai chi tiết (Implementation Plan)
+
+> **Lưu ý:** Phần dưới (từ "> Goal: extend…") là bản kế hoạch triển khai 5 tính năng
+> (a)–(e) đã được viết sẵn, với tham chiếu mã nguồn chính xác. Phần §1 ở trên là
+> tóm tắt hiện trạng để làm nền. Hai phần bổ trợ cho nhau: §1 giải thích "đang có
+> gì & tại sao", phần dưới hướng dẫn "làm gì tiếp theo".
+
 > Goal: extend the full-page **Phân giọng** experience (`src/components/library/VoiceAssignPage.tsx`)
 > with 5 features the user requested. This document is written to be picked up cold in a new session.
 

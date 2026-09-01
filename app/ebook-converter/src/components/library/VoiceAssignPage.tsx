@@ -604,20 +604,9 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
                     <span
                       key={s.i}
                       className={cn(
-                        'group relative mx-0.5 inline rounded px-1 py-0.5 text-left transition-colors',
+                        'group relative mx-0.5 inline text-left',
                         selectionMode && 'cursor-pointer',
-                        !selectionMode && 'hover:bg-primary/10',
-                        assigned && color
-                          ? ''
-                          : isCharacter
-                            ? 'underline decoration-dotted decoration-muted-foreground/40'
-                            : '',
                       )}
-                      style={
-                        assigned && color
-                          ? { backgroundColor: color + '22', boxShadow: `inset 0 0 0 1px ${color}` }
-                          : undefined
-                      }
                     >
                       {selectionMode && (
                         <input
@@ -625,44 +614,56 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
                           checked={isSelected}
                           onChange={handleClick}
                           onClick={(e) => e.stopPropagation()}
-                          className="mr-1 align-super translate-y-[-2px]"
+                          className="mr-1 align-middle"
                           aria-label={`Chọn câu ${s.i + 1}`}
                         />
                       )}
-                      <button
-                        type="button"
-                        onClick={handleClick}
-                        title={
-                          assigned
-                            ? `Giọng: ${voiceLabel(s.voiceId)} — nhấn để đổi`
-                            : 'Nhấn để gán giọng'
-                        }
-                        className="text-left"
-                      >
-                        {s.text}
-                      </button>
-                      {/* (a) per-sentence play button */}
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); void playSentence(s); }}
-                        disabled={isPlaying === false && playingSentence !== null}
+                      <span
                         className={cn(
-                          'ml-1 inline-flex translate-y-[-2px] items-center align-super text-[10px] font-medium transition-opacity',
-                          isPlaying ? 'text-primary opacity-100' : 'text-muted-foreground opacity-0 group-hover:opacity-100',
+                          'inline-flex items-center rounded px-1 py-0.5 text-left transition-colors',
+                          !selectionMode && 'hover:bg-primary/10',
+                          isCharacter && !assigned && 'underline decoration-dotted decoration-muted-foreground/40',
                         )}
-                        aria-label={isPlaying ? 'Dừng phát' : 'Nghe thử câu này'}
-                        title={isPlaying ? 'Dừng phát' : 'Nghe thử câu này'}
+                        style={
+                          assigned && color
+                            ? { backgroundColor: color + '22', boxShadow: `inset 0 0 0 1px ${color}` }
+                            : undefined
+                        }
                       >
-                        {isPlaying ? <Square className="h-3 w-3" /> : <Play className="h-3 w-3" />}
-                      </button>
-                      {assigned && !isPlaying && (
-                        <span className="ml-0.5 inline-flex translate-y-[-2px] items-center align-super text-[10px] font-medium text-primary">
-                          <Volume2 className="h-3 w-3" />
-                        </span>
-                      )}
+                        <button
+                          type="button"
+                          onClick={handleClick}
+                          title={
+                            assigned
+                              ? `Giọng: ${voiceLabel(s.voiceId)} — nhấn để đổi`
+                              : 'Nhấn để gán giọng'
+                          }
+                          className="text-left"
+                        >
+                          {s.text}
+                        </button>
+                        {/* (a) per-sentence speaker / play button */}
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); void playSentence(s); }}
+                          disabled={!isPlaying && playingSentence !== null}
+                          className={cn(
+                            'ml-1 inline-flex items-center align-middle text-[10px] font-medium transition-opacity',
+                            isPlaying
+                              ? 'text-primary opacity-100'
+                              : assigned
+                                ? 'text-primary opacity-100'
+                                : 'text-muted-foreground opacity-0 group-hover:opacity-100',
+                          )}
+                          aria-label={isPlaying ? 'Dừng phát' : 'Nghe thử câu này'}
+                          title={isPlaying ? 'Dừng phát' : 'Nghe thử câu này'}
+                        >
+                          {isPlaying ? <Square className="h-3 w-3" /> : <Volume2 className="h-3 w-3" />}
+                        </button>
+                      </span>
                       {isCharacter && !assigned && (
                         <span
-                          className="ml-1 inline-flex translate-y-[-2px] items-center align-super text-[10px] font-medium text-muted-foreground"
+                          className="ml-1 inline-flex items-center align-middle text-[10px] font-medium text-muted-foreground"
                           title={`Nhân vật: ${char?.name}`}
                         >
                           <User className="h-3 w-3" />
