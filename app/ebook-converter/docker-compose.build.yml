@@ -8,7 +8,12 @@
 # app/worker (so it is compose-agnostic). This file supplies BOTH:
 #   1. `build: .` — so `docker compose build` knows how to build the image.
 #   2. A registry-qualified `image:` tag for the built artifact.
-#   3. DROPS the `../tts-service` bind-mount. The published image must be
+#   3. `platform: linux/amd64` — the VM (172.16.125.51) is x86_64, but the Mac
+#      is Apple Silicon (arm64). Without this, the image is built for arm64 and
+#      the VM fails with "exec format error" at runtime. Building for amd64 on
+#      the Mac uses QEMU emulation (slower, but correct for the VM). If you ever
+#      run the container on an arm64 host too, build multi-arch instead.
+#   4. DROPS the `../tts-service` bind-mount. The published image must be
 #      self-contained and reproducible on the VM — character_detector.py is a
 #      sibling repo dir that does not exist inside the build context, so it
 #      cannot be baked in. The VM re-mounts it at pull time (see
@@ -21,10 +26,12 @@
 services:
   app:
     build: .
+    platform: linux/amd64
     image: ${REGISTRY:-localhost:5005}/ebook-converter-app:latest
     # No bind-mounts here — the build context is app/ebook-converter only.
 
   worker:
     build: .
+    platform: linux/amd64
     image: ${REGISTRY:-localhost:5005}/ebook-converter-worker:latest
     # No bind-mounts here — same as above.
