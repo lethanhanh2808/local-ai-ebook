@@ -60,6 +60,20 @@ interface ChapterInfo {
 
 const NARRATION_VALUE = '__narration__';
 
+/** Detect sentences that are actually chapter headings / titles, not prose.
+ *  The splitter catches <h1>Chương 1</h1> and the book's title as standalone
+ *  "sentences" — they have no terminator so they survive the split, but they
+ *  aren't real reading text. Hidden in the voice plan view so the chapter
+ *  reads like a novel. Detection is intentionally narrow to avoid hiding
+ *  real prose. */
+function isChapterHeading(text: string): boolean {
+  const t = text.trim();
+  if (t.length > 80) return false;
+  return /^(ch[ưu][ơo]ng|ch[ưu][ơo]ng\s+\d+|quy[ểe]n|h[ồo]i|ph[ầa]n|m[ụu]c\s+l[ụu]c)\b/i.test(t)
+      || /^\d+\s*$/.test(t)
+      || /^ch[ưu][ơo]ng\s+\d+[\s\-–—:.]*$/i.test(t);
+}
+
 // Deterministic color from a voice id so each assigned voice gets a stable,
 // distinct highlight. Returns a hex string (e.g. "#d99726") so callers can
 // append an alpha suffix like "+ '22'" to get a valid 8-digit hex (#RRGGBB22).
@@ -445,6 +459,10 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
   const paragraphs = useMemo(() => {
     const groups: { para: number; items: PlanSentence[] }[] = [];
     for (const s of sentences) {
+      // Skip chapter-heading "sentences" so the body reads like a novel.
+      // They still exist in the underlying plan (so audio timing is
+      // unchanged); they're just hidden from the editor view.
+      if (isChapterHeading(s.text)) continue;
       const last = groups[groups.length - 1];
       if (last && last.para === s.para) last.items.push(s);
       else groups.push({ para: s.para, items: [s] });
@@ -453,7 +471,7 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
   }, [sentences]);
 
   const assignedCount = useMemo(
-    () => sentences.filter((s) => s.voiceId != null).length,
+    () => sentences.filter((s) => s.voiceId != null && !isChapterHeading(s.text)).length,
     [sentences],
   );
 
@@ -468,7 +486,14 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
 
   // (b) Legend: one swatch per distinct assigned voice currently in use.
   const usedVoices = useMemo(() => {
-    const ids = Array.from(new Set(sentences.map((s) => s.voiceId).filter((v): v is string => !!v)));
+    const ids = Array.from(
+      new Set(
+        sentences
+          .filter((s) => !isChapterHeading(s.text))
+          .map((s) => s.voiceId)
+          .filter((v): v is string => !!v),
+      ),
+    );
     return ids.map((id) => ({ id, label: voiceLabel(id), color: voiceColor(id) }));
   }, [sentences, voiceLabel]);
 
@@ -579,7 +604,7 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
         ) : (
           <article className="mx-auto max-w-3xl px-6 py-10 font-serif text-[18px] leading-8 text-foreground">
             {paragraphs.map((group) => (
-              <p key={group.para} className="mb-6 indent-8 text-justify">
+              <p key={group.para} className="mb-8 indent-8 text-left">
                 {group.items.map((s) => {
                   const char = s.charId ? characters[s.charId] : null;
                   const assigned = s.voiceId != null;
@@ -604,7 +629,7 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
                     <span
                       key={s.i}
                       className={cn(
-                        'group/sent relative mx-[1px] inline text-left',
+                        'group/sent relative mr-3 inline text-left align-baseline',
                         selectionMode && 'cursor-pointer',
                       )}
                     >
@@ -618,17 +643,21 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
                           aria-label={`Chọn câu ${s.i + 1}`}
                         />
                       )}
-                      {/* Highlight follows the text across line breaks via
-                          box-decoration-break: clone — the rounded background
-                          and ring render on EACH line the sentence wraps to.
-                          The text and the play icon are both true inline
-                          elements (role="button" spans) so they can flow and
-                          break freely between words and after the icon. */}
+                      {/* Per-sentence highlight. The text and play icon are
+                          both true inline elements (role="button" spans) so
+                          they can flow and break freely. box-decoration-break:
+                          clone keeps the assigned-voice background + ring
+                          rendering on EACH line the sentence wraps to.
+                          Unassigned sentences render as plain text — no chip,
+                          no padding — so the chapter reads like a novel.
+                          The trailing mr-2 leaves a real word-space between
+                          sentences. */}
                       <span
                         className={cn(
-                          'inline cursor-pointer rounded px-1.5 py-0.5 text-left transition-colors',
-                          '[box-decoration-break:clone] [-webkit-box-decoration-break:clone]',
-                          !selectionMode && !assigned && 'hover:bg-primary/10',
+                          'inline cursor-pointer text-left transition-colors',
+                          assigned &&
+                            'rounded px-1.5 py-0.5 [box-decoration-break:clone] [-webkit-box-decoration-break:clone]',
+                          !assigned && !selectionMode && 'hover:bg-primary/10',
                           isCharacter && !assigned && 'underline decoration-dotted decoration-muted-foreground/40',
                         )}
                         style={
