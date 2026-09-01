@@ -68,7 +68,13 @@ const MAX_CHAPTER_HTML_BYTES = 5 * 1024 * 1024;
 /** Run character_detector.py with chapter HTML on stdin. No temp file is
  * created, so navigation cancellation and dev-server restarts cannot orphan
  * data/tmp-chars artifacts. */
-function runDetector(htmlText: string, chapterId: string, model: string, signal?: AbortSignal): Promise<any> {
+function runDetector(
+  htmlText: string,
+  chapterId: string,
+  model: string,
+  envOverrides: Record<string, string>,
+  signal?: AbortSignal,
+): Promise<any> {
   const ttsDir = resolveTtsServiceDir();
   if (!ttsDir) throw new Error('character_detector.py not found');
   const detector = path.join(ttsDir, 'character_detector.py');
@@ -82,7 +88,8 @@ function runDetector(htmlText: string, chapterId: string, model: string, signal?
     const proc = spawn(py, [detector, '-', model], {
       env: {
         ...process.env,
-        OMLX_API_KEY: process.env.OMLX_API_KEY ?? '',
+        ...envOverrides,
+        OMLX_MODEL: model,
         CHARACTER_DETECTOR_CHAPTER_ID: chapterId.slice(0, 200),
       },
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -158,29 +165,51 @@ export async function POST(
   const { html } = await chapterResp.json() as { html: string };
   if (!html) return NextResponse.json({ error: 'Chapter has no content' }, { status: 400 });
 
-  // 2. Resolve the user-selected model from Settings DB. Validate against
-  //    the live oMLX model list (5 min cache) so a stale aiModel value
-  //    — e.g. an old Claude session id like "MiniMax-M3" that leaked into
-  //    the DB via the /settings form — doesn't reach oMLX and trigger
-  //    "Model 'X' not found", which forces the detector into its
-  //    regex-fallback branch (orphan-aiModel pattern documented in the
-  //    character-detection-source-tagging memory).
+  // 2. Resolve the AI provider configured in Settings so character detection
+  //    uses the SAME backend as every other AI feature (chat/enhance/format).
+  //    The Python detector reads OMLX_BASE_URL / OMLX_API_KEY / OMLX_MODEL
+  //    from its environment, so we forward the effective provider's endpoint
+  //    here instead of hardcoding the local OMLX (127.0.0.1:8080) that may
+  //    not be running.
   let model = '';
   let modelResolution: 'empty' | 'default' | 'env-fallback' | 'validated' | 'unknown-replaced' = 'empty';
+  let envOverrides: Record<string, string> = {};
   try {
     const { getEffectiveSettings } = await import('@/lib/db/settings');
+    const { detectorEnvOverrides } = await import('@/lib/ai');
     const s = await getEffectiveSettings();
-    const { resolveOmlxModel } = await import('@/lib/ai/omlx-models');
-    const resolved = await resolveOmlxModel(s.aiModel);
-    model = resolved.model;
-    modelResolution = resolved.reason;
-    if (resolved.reason === 'unknown-replaced') {
-      console.warn(
-        `[chapters/detect-characters] settings.aiModel="${resolved.requested}" is not a known oMLX model; ` +
-        `falling back to OMLX default. User should fix /settings.`,
+    envOverrides = await detectorEnvOverrides();
+
+    if (s.aiProvider === 'omlx-local') {
+      // Validate the model against the live oMLX list (5 min cache) so a stale
+      // aiModel value — e.g. an old Claude session id like "MiniMax-M3" that
+      // leaked into the DB via the /settings form — doesn't reach oMLX and
+      // trigger "Model 'X' not found", forcing the detector into its
+      // regex-fallback branch (orphan-aiModel pattern).
+      const { resolveOmlxModel } = await import('@/lib/ai/omlx-models');
+      const resolved = await resolveOmlxModel(s.aiModel);
+      model = resolved.model;
+      modelResolution = resolved.reason;
+      if (resolved.reason === 'unknown-replaced') {
+        console.warn(
+          `[chapters/detect-characters] settings.aiModel="${resolved.requested}" is not a known oMLX model; ` +
+          `falling back to OMLX default. User should fix /settings.`,
+        );
+      }
+    } else {
+      // Cloud providers: trust the model the user picked in /settings.
+      model = s.aiModel?.trim() || '';
+      modelResolution = model ? 'validated' : 'empty';
+    }
+  } catch (e) {
+    // detectorEnvOverrides throws when a cloud provider has no base URL set —
+    // surface that clearly instead of a confusing connection-refused 500.
+    if (e instanceof Error && /requires a base URL/.test(e.message)) {
+      return NextResponse.json(
+        { error: e.message, hint: 'Set the AI provider base URL in /settings.' },
+        { status: 400 },
       );
     }
-  } catch {
     model = process.env.OMLX_MODEL || '';
     modelResolution = model ? 'env-fallback' : 'empty';
   }
@@ -188,7 +217,7 @@ export async function POST(
   // 3. Run detection on this chapter
   let result: any;
   try {
-    result = await runDetector(html, params.chapterId, model, req.signal);
+    result = await runDetector(html, params.chapterId, model, envOverrides, req.signal);
   } catch (e) {
     console.error('[chapters/detect-characters] failed:', e);
     return NextResponse.json({ error: String(e) }, { status: 500 });

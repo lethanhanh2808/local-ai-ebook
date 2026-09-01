@@ -119,7 +119,6 @@ type DetectorOutcome = {
 };
 
 async function runDetector(epubPath: string, signal?: AbortSignal): Promise<DetectorOutcome> {
-  const omlxKey = process.env.OMLX_API_KEY ?? '';
   const py = resolvePython();
   if (!DETECTOR) {
     throw new Error(
@@ -133,35 +132,57 @@ async function runDetector(epubPath: string, signal?: AbortSignal): Promise<Dete
   }
   if (!fs.existsSync(DETECTOR)) throw new Error(`Detector not found at ${DETECTOR}`);
 
+  // Resolve the AI provider configured in Settings so character detection uses
+  // the SAME backend as every other AI feature (chat/enhance/format). The
+  // Python detector reads OMLX_BASE_URL / OMLX_API_KEY / OMLX_MODEL from its
+  // environment, so we forward the effective provider's endpoint here instead
+  // of hardcoding the local OMLX (127.0.0.1:8080) that may not be running.
   let omlxModel: string;
   let modelReason: 'empty' | 'default' | 'env-fallback' | 'validated' | 'unknown-replaced' = 'empty';
+  let envOverrides: Record<string, string> = {};
   try {
     const { getEffectiveSettings } = await import('@/lib/db/settings');
+    const { detectorEnvOverrides } = await import('@/lib/ai');
     const settings = await getEffectiveSettings();
-    // BUGFIX 2026-07-11 + 2026-07-12: validate the settings.aiModel value
-    // against the live oMLX model list before passing it down. Previously
-    // the code only filtered the literal "default" — but any stale value
-    // (e.g. an old Claude session id like "MiniMax-M3" that leaked into
-    // the DB via the /settings form, or a model renamed/removed upstream)
-    // reached oMLX and produced "Model 'X' not found", which forced the
-    // Python detector into its regex-fallback branch (orphan-aiModel
-    // pattern in the character-detection-source-tagging memory).
-    //
-    // resolveOmlxModel() fetches the live model list (5 min TTL) and
-    // replaces unknown values with the empty default + flags a reason
-    // we can surface in the response so the user knows their settings
-    // need updating.
-    const { resolveOmlxModel } = await import('@/lib/ai/omlx-models');
-    const resolved = await resolveOmlxModel(settings.aiModel);
-    omlxModel = resolved.model;
-    modelReason = resolved.reason;
-    if (resolved.reason === 'unknown-replaced') {
-      console.warn(
-        `[characters/detect] settings.aiModel="${resolved.requested}" is not a known oMLX model; ` +
-        `falling back to OMLX default. User should fix /settings.`,
-      );
+    envOverrides = await detectorEnvOverrides();
+
+    if (settings.aiProvider === 'omlx-local') {
+      // BUGFIX 2026-07-11 + 2026-07-12: validate the settings.aiModel value
+      // against the live oMLX model list before passing it down. Previously
+      // the code only filtered the literal "default" — but any stale value
+      // (e.g. an old Claude session id like "MiniMax-M3" that leaked into
+      // the DB via the /settings form, or a model renamed/removed upstream)
+      // reached oMLX and produced "Model 'X' not found", which forced the
+      // Python detector into its regex-fallback branch (orphan-aiModel
+      // pattern in the character-detection-source-tagging memory).
+      //
+      // resolveOmlxModel() fetches the live model list (5 min TTL) and
+      // replaces unknown values with the empty default + flags a reason
+      // we can surface in the response so the user knows their settings
+      // need updating.
+      const { resolveOmlxModel } = await import('@/lib/ai/omlx-models');
+      const resolved = await resolveOmlxModel(settings.aiModel);
+      omlxModel = resolved.model;
+      modelReason = resolved.reason;
+      if (resolved.reason === 'unknown-replaced') {
+        console.warn(
+          `[characters/detect] settings.aiModel="${resolved.requested}" is not a known oMLX model; ` +
+          `falling back to OMLX default. User should fix /settings.`,
+        );
+      }
+    } else {
+      // Cloud providers: the user picked the model in /settings — trust it
+      // directly. (resolveOmlxModel's /models probe is oMLX-specific and
+      // would wrongly blank a valid cloud model.)
+      omlxModel = settings.aiModel?.trim() || '';
+      modelReason = omlxModel ? 'validated' : 'empty';
     }
-  } catch {
+  } catch (e) {
+    // detectorEnvOverrides throws when a cloud provider has no base URL set —
+    // surface that clearly instead of a confusing connection-refused 500.
+    if (e instanceof Error && /requires a base URL/.test(e.message)) {
+      throw e;
+    }
     omlxModel = process.env.OMLX_MODEL || '';
     modelReason = omlxModel ? 'env-fallback' : 'empty';
   }
@@ -173,8 +194,11 @@ async function runDetector(epubPath: string, signal?: AbortSignal): Promise<Dete
     // Falls back to OMLX_MODEL env var only if the DB row is empty.
     // Pass model as a CLI arg (after the epub path) so the Python script
     // gets an explicit value — env-var-only passing was unreliable.
+    // envOverrides forwards the configured provider's OMLX_BASE_URL /
+    // OMLX_API_KEY so the detector hits the right backend (not the dead
+    // local OMLX).
     const proc = spawn(py, [DETECTOR, epubPath, omlxModel], {
-      env: { ...process.env, OMLX_API_KEY: omlxKey, OMLX_MODEL: omlxModel },
+      env: { ...process.env, ...envOverrides, OMLX_MODEL: omlxModel },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = ''; let stderr = '';
@@ -252,6 +276,14 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     modelResolution = outcome.modelResolution;
   } catch (e) {
     console.error('[characters/detect] failed:', e);
+    // A cloud provider selected in Settings but missing its base URL is a
+    // user-config error, not a server fault — return 400 with a clear hint.
+    if (e instanceof Error && /requires a base URL/.test(e.message)) {
+      return NextResponse.json(
+        { error: e.message, hint: 'Set the AI provider base URL in /settings.' },
+        { status: 400 },
+      );
+    }
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }
 

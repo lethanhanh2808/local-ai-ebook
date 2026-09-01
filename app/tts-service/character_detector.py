@@ -137,7 +137,12 @@ def call_omlx(system: str, user: str, timeout: float = 120.0) -> str:
     if OMLX_KEY:
         headers["Authorization"] = f"Bearer {OMLX_KEY}"
 
-    with httpx.Client(timeout=timeout) as client:
+    # OMLX_INSECURE_TLS=1 mirrors the app's `aiAllowInsecureTls` Settings flag:
+    # skip TLS certificate verification. Needed for self-signed / corporate-CA
+    # gateways (e.g. a custom OpenAI-compatible endpoint behind an internal CA)
+    # where Python's httpx would otherwise raise CERTIFICATE_VERIFY_FAILED.
+    verify = not os.environ.get("OMLX_INSECURE_TLS", "").strip() in ("1", "true", "yes")
+    with httpx.Client(timeout=timeout, verify=verify) as client:
         r = client.post(f"{OMLX_URL}/chat/completions", json=body, headers=headers)
     if r.status_code != 200:
         raise RuntimeError(f"OMLX error {r.status_code}: {r.text[:300]}")

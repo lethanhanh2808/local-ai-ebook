@@ -75,6 +75,55 @@ function endpointFor(s: Settings): { baseUrl: string; apiKey: string; model: str
   }
 }
 
+/**
+ * Build the environment overrides to pass to the Python `character_detector.py`
+ * so it uses the AI provider configured in Settings — NOT the hardcoded local
+ * OMLX endpoint. The detector reads `OMLX_BASE_URL` / `OMLX_API_KEY` /
+ * `OMLX_MODEL` from its environment, so we forward the effective provider's
+ * base URL + key here.
+ *
+ * - `omlx-local`: leave `OMLX_BASE_URL` unset so the detector falls back to the
+ *   deployment's `OMLX_BASE_URL` env (default `http://127.0.0.1:8080/v1`). Only
+ *   forward key/model when present.
+ * - cloud providers (`minimax-cloud` / `openai` / `custom`): require
+ *   `aiBaseUrl` in Settings and forward it as `OMLX_BASE_URL`.
+ *
+ * Throws if a cloud provider is selected but no base URL is configured, so the
+ * caller can return a clear 4xx/5xx instead of a confusing connection-refused
+ * error from the dead local OMLX.
+ */
+export async function detectorEnvOverrides(): Promise<Record<string, string>> {
+  const s = await getEffectiveSettings();
+  const apiKey = s.aiApiKey?.trim() ?? '';
+  const model = s.aiModel?.trim() ?? '';
+  // Mirror the app's `aiAllowInsecureTls` Settings flag: when set, the Python
+  // detector skips TLS certificate verification (self-signed / corporate-CA
+  // gateways). The chat() helper applies the same flag via NODE_TLS_REJECT_*.
+  const insecureTls = s.aiAllowInsecureTls ? '1' : '';
+
+  if (s.aiProvider === 'omlx-local') {
+    const overrides: Record<string, string> = {};
+    if (apiKey) overrides.OMLX_API_KEY = apiKey;
+    if (model) overrides.OMLX_MODEL = model;
+    if (insecureTls) overrides.OMLX_INSECURE_TLS = insecureTls;
+    return overrides;
+  }
+
+  const baseUrl = s.aiBaseUrl?.trim();
+  if (!baseUrl) {
+    throw new Error(
+      `AI provider "${s.aiProvider}" requires a base URL. Configure it in /settings.`,
+    );
+  }
+  const overrides: Record<string, string> = {
+    OMLX_BASE_URL: baseUrl,
+    OMLX_API_KEY: apiKey,
+    OMLX_MODEL: model,
+  };
+  if (insecureTls) overrides.OMLX_INSECURE_TLS = insecureTls;
+  return overrides;
+}
+
 /** Result of an AI call including performance stats. */
 export interface ChatResult {
   text: string;
