@@ -618,9 +618,16 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
                           aria-label={`Chọn câu ${s.i + 1}`}
                         />
                       )}
+                      {/* Highlight follows the text across line breaks via
+                          box-decoration-break: clone — the rounded background
+                          and ring render on EACH line the sentence wraps to.
+                          (A plain <button> inside would freeze at the break,
+                          leaving later lines un-highlighted.) The text itself
+                          is a plain inline <span> so it can flow freely. */}
                       <span
                         className={cn(
-                          'inline rounded px-1.5 py-0.5 text-left transition-colors',
+                          'inline cursor-pointer rounded px-1.5 py-0.5 text-left transition-colors',
+                          '[box-decoration-break:clone] [-webkit-box-decoration-break:clone]',
                           !selectionMode && !assigned && 'hover:bg-primary/10',
                           isCharacter && !assigned && 'underline decoration-dotted decoration-muted-foreground/40',
                         )}
@@ -630,9 +637,16 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
                             : undefined
                         }
                       >
-                        <button
-                          type="button"
+                        <span
+                          role="button"
+                          tabIndex={0}
                           onClick={handleClick}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              handleClick();
+                            }
+                          }}
                           title={
                             assigned
                               ? `Giọng: ${voiceLabel(s.voiceId)} — nhấn để đổi`
@@ -641,26 +655,29 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
                           className="text-left"
                         >
                           {s.text}
-                        </button>
-                        {/* (a) per-sentence speaker / play button */}
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); void playSentence(s); }}
-                          disabled={!isPlaying && playingSentence !== null}
-                          className={cn(
-                            'ml-1 inline-flex items-center align-middle text-[10px] font-medium transition-opacity',
-                            isPlaying
-                              ? 'text-primary opacity-100'
-                              : assigned
-                                ? 'text-primary opacity-100'
-                                : 'text-muted-foreground opacity-0 group-hover/sent:opacity-100',
-                          )}
-                          aria-label={isPlaying ? 'Dừng phát' : 'Nghe thử câu này'}
-                          title={isPlaying ? 'Dừng phát' : 'Nghe thử câu này'}
-                        >
-                          {isPlaying ? <Square className="h-2.5 w-2.5" /> : <Volume2 className="h-2.5 w-2.5" />}
-                        </button>
+                        </span>
                       </span>
+                      {/* (a) per-sentence speaker / play button — sits visually
+                          inside the same highlight via a small negative
+                          margin, but lives outside the highlight span so it
+                          doesn't break the wrapping behaviour. */}
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); void playSentence(s); }}
+                        disabled={!isPlaying && playingSentence !== null}
+                        className={cn(
+                          '-ml-1 inline-flex items-center align-middle text-[10px] font-medium transition-opacity',
+                          isPlaying
+                            ? 'text-primary opacity-100'
+                            : assigned
+                              ? 'text-primary opacity-100'
+                              : 'text-muted-foreground opacity-0 group-hover/sent:opacity-100',
+                        )}
+                        aria-label={isPlaying ? 'Dừng phát' : 'Nghe thử câu này'}
+                        title={isPlaying ? 'Dừng phát' : 'Nghe thử câu này'}
+                      >
+                        {isPlaying ? <Square className="h-2.5 w-2.5" /> : <Volume2 className="h-2.5 w-2.5" />}
+                      </button>
                       {isCharacter && !assigned && (
                         <span
                           className="ml-1 inline-flex items-center align-middle text-[10px] font-medium text-muted-foreground"
