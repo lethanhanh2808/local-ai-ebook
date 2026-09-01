@@ -621,9 +621,9 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
                       {/* Highlight follows the text across line breaks via
                           box-decoration-break: clone — the rounded background
                           and ring render on EACH line the sentence wraps to.
-                          (A plain <button> inside would freeze at the break,
-                          leaving later lines un-highlighted.) The text itself
-                          is a plain inline <span> so it can flow freely. */}
+                          The text and the play icon are both true inline
+                          elements (role="button" spans) so they can flow and
+                          break freely between words and after the icon. */}
                       <span
                         className={cn(
                           'inline cursor-pointer rounded px-1.5 py-0.5 text-left transition-colors',
@@ -656,28 +656,38 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
                         >
                           {s.text}
                         </span>
-                      </span>
-                      {/* (a) per-sentence speaker / play button — sits visually
-                          inside the same highlight via a small negative
-                          margin, but lives outside the highlight span so it
-                          doesn't break the wrapping behaviour. */}
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); void playSentence(s); }}
-                        disabled={!isPlaying && playingSentence !== null}
-                        className={cn(
-                          '-ml-1 inline-flex items-center align-middle text-[10px] font-medium transition-opacity',
-                          isPlaying
-                            ? 'text-primary opacity-100'
-                            : assigned
+                        {/* (a) per-sentence speaker / play icon — lives inside
+                            the highlight span so the assigned-voice chip
+                            reads as one unit (text + icon). Using a
+                            role="button" span (not a <button>) keeps the
+                            flow inline so long sentences can wrap freely. */}
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={(e) => { e.stopPropagation(); void playSentence(s); }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              void playSentence(s);
+                            }
+                          }}
+                          aria-label={isPlaying ? 'Dừng phát' : 'Nghe thử câu này'}
+                          title={isPlaying ? 'Dừng phát' : 'Nghe thử câu này'}
+                          aria-disabled={!isPlaying && playingSentence !== null}
+                          className={cn(
+                            'ml-1 inline-flex cursor-pointer items-center align-middle text-[10px] font-medium transition-opacity',
+                            isPlaying
                               ? 'text-primary opacity-100'
-                              : 'text-muted-foreground opacity-0 group-hover/sent:opacity-100',
-                        )}
-                        aria-label={isPlaying ? 'Dừng phát' : 'Nghe thử câu này'}
-                        title={isPlaying ? 'Dừng phát' : 'Nghe thử câu này'}
-                      >
-                        {isPlaying ? <Square className="h-2.5 w-2.5" /> : <Volume2 className="h-2.5 w-2.5" />}
-                      </button>
+                              : assigned
+                                ? 'text-primary opacity-100'
+                                : 'text-muted-foreground opacity-0 group-hover/sent:opacity-100',
+                            !isPlaying && playingSentence !== null && 'pointer-events-none opacity-30',
+                          )}
+                        >
+                          {isPlaying ? <Square className="h-2.5 w-2.5" /> : <Volume2 className="h-2.5 w-2.5" />}
+                        </span>
+                      </span>
                       {isCharacter && !assigned && (
                         <span
                           className="ml-1 inline-flex items-center align-middle text-[10px] font-medium text-muted-foreground"
