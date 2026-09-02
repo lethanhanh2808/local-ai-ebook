@@ -168,6 +168,12 @@ model Character {
   // — additional signal for the picker. Persisted so voice re-selection on
   // the same character stays consistent across sessions.
   tone      String? // calm | cheerful | cold | mysterious | serious | warm | angry | sad | …
+  // ── Per-character voice customization ───────────────────────────────────
+  // Stored on the Character (NOT the shared Voice) so two characters that
+  // happen to share the same voiceId keep independent speed/emotion. The
+  // worker/generator prefers these over Voice.defaultSpeed/defaultEmotion.
+  defaultSpeed   Float? // 0.5 - 2.0
+  defaultEmotion String? // calm | sad | tense | romantic | angry | excited | neutral
   createdAt DateTime @default(now())
 
   book  Book   @relation(fields: [bookId], references: [id], onDelete: Cascade)
@@ -441,6 +447,7 @@ model UserSettings {
   aiModel              String  @default("default")
   aiMaxTokens          Int     @default(4096)
   aiTemperature     Float   @default(0.2)
+  bibleChapterChars Int     @default(12000)
   aiThinkingCombine Boolean @default(true)
   aiThinkingFullLLM Boolean @default(false)
 
@@ -488,6 +495,11 @@ model Settings {
   //   Default 4096 ≈ safe for a 9B-class 4-bit model on Apple Silicon.
   aiMaxTokens       Int     @default(4096)
   aiTemperature     Float   @default(0.2)
+  // Max characters of chapter text fed to the character-bible LLM per chapter
+  // (see refreshBible). Smaller = faster model response (avoids upstream
+  // gateway 504 time-outs on slow models); larger = more context but slower.
+  // User-configurable from the Settings UI. Default 12000.
+  bibleChapterChars Int     @default(12000)
   // Per-mode `enable_thinking` override for the chapter-attribution
   // analyzer. Thinking ON for the chunked Combine mode (small batches,
   // accuracy over speed). Thinking OFF for the whole-chapter 'full-llm'
@@ -546,6 +558,10 @@ model Settings {
   // Within a single conversion, max chapters to deep-format in parallel.
   // 1=sequential (safe for slow providers), 2-4=parallel (faster but more API load).
   workerChapterConcurrency Int @default(1)
+  // Max character-bible analysis chapters to run concurrently. Each chapter
+  // is an independent LLM call; running several in parallel saves wall-clock
+  // time on fast cloud providers. Default 5 (per user request).
+  bibleConcurrency        Int @default(5)
 
   updatedAt DateTime @updatedAt
   createdAt DateTime @default(now())

@@ -34,11 +34,14 @@ export interface TooltipProps {
   /** Wrapped trigger element. Must accept ref + onFocus/onBlur. */
   children: ReactElement;
   className?: string;
+  /** Max height of the bubble in rem. Defaults to 3.75 (60px). Raise it for
+      long, multi-line content like full character descriptions. */
+  maxHeight?: number;
 }
 
 type Coords = { top: number; left: number };
 
-export function Tooltip({ content, side = 'top', children, className }: TooltipProps) {
+export function Tooltip({ content, side = 'top', children, className, maxHeight = 3.75 }: TooltipProps) {
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [coords, setCoords] = useState<Coords>({ top: 0, left: 0 });
@@ -130,7 +133,7 @@ export function Tooltip({ content, side = 'top', children, className }: TooltipP
   // Position is computed in `reposition` (centred over the trigger and
   // clamped to the viewport), so no CSS transform is needed.
   return (
-    <span className={cn('relative inline-flex', className)}>
+    <span className={cn('relative flex w-full', className)}>
       {enhanced}
       {mounted && open && typeof document !== 'undefined' && createPortal(
         <span
@@ -139,7 +142,8 @@ export function Tooltip({ content, side = 'top', children, className }: TooltipP
           id={id}
           style={{ position: 'fixed', top: coords.top, left: coords.left }}
           className={cn(
-            'pointer-events-none z-[100] w-fit max-w-[30rem] max-h-[3.75rem] overflow-hidden whitespace-normal break-words rounded-md border border-border bg-popover px-3 py-2 text-xs leading-snug text-popover-foreground shadow-md',
+            'pointer-events-none z-[100] w-fit max-w-[30rem] overflow-hidden whitespace-normal break-words rounded-md border border-border bg-popover px-3 py-2 text-xs leading-snug text-popover-foreground shadow-md',
+            `max-h-[${maxHeight}rem]`,
             'animate-in fade-in-0',
           )}
         >

@@ -23,6 +23,8 @@ import { cn } from '@/lib/utils';
 const AudiobookPanel = lazy(() => import('./AudiobookPanel').then((m) => ({ default: m.AudiobookPanel })));
 const VoicePanel = lazy(() => import('./VoicePanel').then((m) => ({ default: m.VoicePanel })));
 const VoiceAssignPage = lazy(() => import('./VoiceAssignPage').then((m) => ({ default: m.VoiceAssignPage })));
+const CharactersPanel = lazy(() => import('./CharactersPanel').then((m) => ({ default: m.CharactersPanel })));
+const BibleAnalysisControls = lazy(() => import('./BibleAnalysisControls').then((m) => ({ default: m.BibleAnalysisControls })));
 
 type StudioTab = 'audiobook' | 'voices' | 'characters' | 'assign';
 
@@ -57,6 +59,9 @@ export function AudioStudio({ bookId, bookTitle }: { bookId: string; bookTitle: 
   const [tab, setTab] = useState<StudioTab>(TABS.some((t) => t.id === initialTab) ? initialTab : 'audiobook');
   const [status, setStatus] = useState<StudioStatus | null>(null);
   const [generating, setGenerating] = useState(false);
+  // Bumped after a range analysis completes so CharactersPanel re-fetches the
+  // character grid + relationship graph (otherwise results stay stale).
+  const [charactersRefreshKey, setCharactersRefreshKey] = useState(0);
 
   // Pull a lightweight cross-panel snapshot so the studio header + tab badges
   // reflect real state (audiobook progress, voice/character counts) without
@@ -241,11 +246,20 @@ export function AudioStudio({ bookId, bookTitle }: { bookId: string; bookTitle: 
           )}
           {tab === 'characters' && (
             <Suspense fallback={<PanelSkeleton />}>
-              <VoicePanel
-                bookId={bookId}
-                bookLanguage="vi"
-                section="characters"
-              />
+              <div className="space-y-6">
+                <BibleAnalysisControls
+                  bookId={bookId}
+                  onAnalysisComplete={() => {
+                    void refreshStatus();
+                    setCharactersRefreshKey((k) => k + 1);
+                  }}
+                />
+                <CharactersPanel
+                  bookId={bookId}
+                  bookLanguage="vi"
+                  refreshSignal={charactersRefreshKey}
+                />
+              </div>
             </Suspense>
           )}
           {tab === 'assign' && (

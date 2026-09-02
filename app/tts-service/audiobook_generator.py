@@ -961,14 +961,20 @@ def split_into_segments(html_body: str, cmap: dict) -> list[dict]:
 
 
 def _char_tone_map(cmap: dict) -> dict[str, str]:
-    """Build {canonical_name: voice.defaultEmotion} from the character map."""
+    """Build {canonical_name: defaultEmotion} from the character map.
+
+    Per-character defaultEmotion takes precedence over the shared Voice's
+    defaultEmotion, so two characters sharing a voice keep independent tones.
+    """
     tones: dict[str, str] = {}
     for c in cmap.get("characters", []):
         v_id = c.get("voiceId")
         if not v_id:
             continue
         v = cmap["voices_by_id"].get(v_id, {})
-        tone = v.get("defaultEmotion") if isinstance(v, dict) else None
+        # Character-level emotion wins; fall back to the voice's.
+        tone = (c.get("defaultEmotion") if isinstance(c, dict) else None) \
+            or (v.get("defaultEmotion") if isinstance(v, dict) else None)
         if tone:
             tones[c["name"]] = tone
     return tones
@@ -2364,7 +2370,12 @@ def generate_chapter(
         voice_name = seg.get("voice_name")  # set if character has built-in VieNeu voice
         # If the character has a custom (non-builtin) voice, pass its ref audio
         voice_ref = voice.get("refAudioPath") if voice and not voice.get("isBuiltinVieNeu") else None
-        speed = (voice.get("defaultSpeed") if voice else None) or 1.0
+        # Per-character speed/emotion takes precedence over the shared Voice's
+        # values, so two characters sharing a voice stay independent.
+        char_record = next((c for c in cmap["characters"] if c.get("name") == seg.get("character")), None)
+        char_speed = char_record.get("defaultSpeed") if char_record else None
+        char_emotion = char_record.get("defaultEmotion") if char_record else None
+        speed = char_speed or (voice.get("defaultSpeed") if voice else None) or 1.0
         char_tag = f"[{seg['character']}]" if seg.get("character") else ""
         # Strip emotion markers from the log (they're in the text already)
         log_text = seg["text"][:60].replace("\n", " ")

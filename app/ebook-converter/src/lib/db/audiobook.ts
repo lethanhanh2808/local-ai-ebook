@@ -98,5 +98,41 @@ export async function getAudiobookSummary(bookId: string) {
   const pending = chapters.filter((c) => c.status === 'pending' || c.status === 'generating').length;
   const durationMs = chapters.reduce((s, c) => s + (c.durationMs ?? 0), 0);
   const sizeBytes = chapters.reduce((s, c) => s + (c.sizeBytes ?? 0), 0);
-  return { total, ready, failed, pending, durationMs, sizeBytes, pct: total === 0 ? 0 : Math.round((ready / total) * 100) };
+
+  // Voice-plan coverage: how many chapters have a saved Phân giọng plan, and
+  // how many sentences the AI flagged as uncertain (need manual review). Used
+  // by the Audiobook panel to warn before generation. Computed cheaply from
+  // the stored JSON (no LLM calls).
+  const plans = await prisma.chapterVoicePlan.findMany({
+    where: { bookId },
+    select: { sentences: true },
+  });
+  let plannedChapters = 0;
+  let uncertainSentences = 0;
+  let assignedSentences = 0;
+  for (const p of plans) {
+    let arr: Array<{ voiceId?: string | null; uncertain?: boolean }> = [];
+    try { arr = JSON.parse(p.sentences) as typeof arr; } catch { continue; }
+    if (arr.length > 0) plannedChapters++;
+    for (const s of arr) {
+      if (s.voiceId != null) assignedSentences++;
+      if (s.uncertain) uncertainSentences++;
+    }
+  }
+
+  return {
+    total,
+    ready,
+    failed,
+    pending,
+    durationMs,
+    sizeBytes,
+    pct: total === 0 ? 0 : Math.round((ready / total) * 100),
+    coverage: {
+      plannedChapters,
+      totalChapters: total,
+      assignedSentences,
+      uncertainSentences,
+    },
+  };
 }

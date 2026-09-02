@@ -41,6 +41,13 @@ export interface VoicePlanSentence {
   source: SentenceSource;
   /** 0-based paragraph index this sentence belongs to (for visual grouping). */
   para: number;
+  /** Attribution confidence in [0,1]. Present only when the sentence was
+   *  attributed to a character by the AI/regex engine. Low values (<0.6) are
+   *  surfaced in the UI as "uncertain" so the user can review them. */
+  confidence?: number;
+  /** True when the engine assigned a character but with low confidence. The
+   *  UI highlights these sentences for manual review. */
+  uncertain?: boolean;
 }
 
 export interface VoicePlan {
@@ -141,6 +148,7 @@ export function buildSuggestedVoicePlan(params: {
     const charId = speakerName ? nameToCharId[speakerName.toLowerCase()] ?? null : null;
 
     const paraSentences = splitParagraphIntoSentences(p.text);
+    const paraConfidence = paraAttr?.confidence;
     for (const s of paraSentences) {
       // A sentence is suggested as a character only when the paragraph was
       // attributed to a known character AND the sentence actually contains a
@@ -148,6 +156,7 @@ export function buildSuggestedVoicePlan(params: {
       // trigger that character's voice.
       const isDialogue = sentenceHasQuote(s);
       const suggestedCharId = charId && isDialogue ? charId : null;
+      const uncertain = !!suggestedCharId && typeof paraConfidence === 'number' && paraConfidence < 0.6;
       sentences.push({
         i: i++,
         text: s,
@@ -155,6 +164,8 @@ export function buildSuggestedVoicePlan(params: {
         voiceId: null, // default: narration voice until the user assigns one
         source: suggestedCharId ? 'character' : 'narration',
         para: p.index,
+        confidence: suggestedCharId ? paraConfidence : undefined,
+        uncertain,
       });
     }
   }
@@ -172,6 +183,8 @@ export function serializePlan(plan: VoicePlan): string {
       voiceId: s.voiceId,
       source: s.source,
       para: s.para,
+      confidence: s.confidence,
+      uncertain: s.uncertain,
     })),
   );
 }
@@ -190,6 +203,8 @@ export function deserializePlan(
     voiceId: string | null;
     source: SentenceSource;
     para?: number;
+    confidence?: number;
+    uncertain?: boolean;
   }>;
   return {
     bookId,
@@ -202,6 +217,8 @@ export function deserializePlan(
       voiceId: s.voiceId,
       source: s.source,
       para: typeof s.para === 'number' ? s.para : 0,
+      confidence: typeof s.confidence === 'number' ? s.confidence : undefined,
+      uncertain: s.uncertain ?? false,
     })),
   };
 }

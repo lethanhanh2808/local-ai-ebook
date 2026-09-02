@@ -136,6 +136,12 @@ export async function upsertCharacters(
     /** Detected tone (e.g. calm|cheerful|cold|mysterious|warm). Persisted
      * so the picker stays consistent across sessions. */
     tone?: string | null;
+    /** Per-character voice customization. When the character's voice is a
+     * built-in name that gets a Voice row auto-created on apply, these are
+     * written to that Voice so the audiobook generator uses the user's
+     * chosen pace/emotion. */
+    defaultSpeed?: number;
+    defaultEmotion?: string;
     /** Per-alias confidence + source. Phase 4.4 — optional. When provided,
      *  each entry writes a CharacterAlias row with the given confidence &
      *  source instead of the default (1.0 / 'user'). The string-array
@@ -187,6 +193,25 @@ export async function upsertCharacters(
           ...(c.tone && c.tone !== 'unknown' ? { tone: c.tone } : {}),
         },
       });
+
+      // Persist per-voice customization (speed/emotion) onto the assigned
+      // Voice row so the audiobook generator picks it up. Only write when the
+      // caller explicitly provided a value, to avoid clobbering existing ones.
+      if (c.voiceId && (c.defaultSpeed !== undefined || c.defaultEmotion !== undefined)) {
+        const existing = await tx.voice.findUnique({
+          where: { id: c.voiceId },
+          select: { defaultSpeed: true, defaultEmotion: true },
+        });
+        await tx.voice.update({
+          where: { id: c.voiceId },
+          data: {
+            ...(c.defaultSpeed !== undefined && existing?.defaultSpeed == null
+              ? { defaultSpeed: c.defaultSpeed } : {}),
+            ...(c.defaultEmotion !== undefined && existing?.defaultEmotion == null
+              ? { defaultEmotion: c.defaultEmotion } : {}),
+          },
+        });
+      }
 
       // Sync CharacterAlias rows.
       if (c.aliases && c.aliases.length > 0) {

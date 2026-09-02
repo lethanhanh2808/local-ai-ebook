@@ -443,6 +443,10 @@ async function generateOneChapter(
       aliases: c.aliases ?? [],
       voiceId: c.voiceId,
       gender: c.gender ?? null,
+      // Per-character speed/emotion — preferred over the shared Voice's values
+      // so two characters sharing a voice keep independent settings.
+      defaultSpeed: c.defaultSpeed ?? null,
+      defaultEmotion: c.defaultEmotion ?? null,
     })),
     default_voice_id: defaultVoice?.id ?? null,
   });

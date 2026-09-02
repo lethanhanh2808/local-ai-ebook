@@ -171,14 +171,19 @@ export async function POST(
   //    from its environment, so we forward the effective provider's endpoint
   //    here instead of hardcoding the local OMLX (127.0.0.1:8080) that may
   //    not be running.
+  //
+  //    The DB is authoritative; the `ai-settings-session` cookie is threaded
+  //    in as a fallback only (see mergeEffectiveSettings).
+  const { readSessionOverrides } = await import('@/lib/db/settings');
+  const sessionOverride = readSessionOverrides(req.headers.get('cookie'));
   let model = '';
   let modelResolution: 'empty' | 'default' | 'env-fallback' | 'validated' | 'unknown-replaced' = 'empty';
   let envOverrides: Record<string, string> = {};
   try {
     const { getEffectiveSettings } = await import('@/lib/db/settings');
     const { detectorEnvOverrides } = await import('@/lib/ai');
-    const s = await getEffectiveSettings();
-    envOverrides = await detectorEnvOverrides();
+    const s = await getEffectiveSettings(undefined, sessionOverride);
+    envOverrides = await detectorEnvOverrides(sessionOverride);
 
     if (s.aiProvider === 'omlx-local') {
       // Validate the model against the live oMLX list (5 min cache) so a stale

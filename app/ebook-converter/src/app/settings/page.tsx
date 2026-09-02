@@ -43,6 +43,7 @@ interface Settings {
   aiModel: string;
   aiMaxTokens: number;
   aiTemperature: number;
+  bibleChapterChars: number;
   // Per-mode enable_thinking override for the chapter-attribution analyzer
   // (2026-07-12). Surface as two toggles in the AI section.
   aiThinkingCombine: boolean;
@@ -71,6 +72,8 @@ interface Settings {
   workerChapterConcurrency: number;
   // Live AI-enhancement chapter concurrency (no restart needed)
   aiEnhanceConcurrency: number;
+  // Character-bible analysis concurrency (parallel chapter analysis)
+  bibleConcurrency: number;
 }
 
 interface WatermarkRow {
@@ -282,6 +285,7 @@ export default function SettingsPage() {
         aiModel: settings.aiModel,
         aiMaxTokens: settings.aiMaxTokens,
         aiTemperature: settings.aiTemperature,
+        bibleChapterChars: settings.bibleChapterChars ?? 12000,
         ttsProvider: settings.ttsProvider,
         defaultAiEnhance: settings.defaultAiEnhance,
         defaultAiWatermarkClean: settings.defaultAiWatermarkClean,
@@ -293,6 +297,7 @@ export default function SettingsPage() {
         workerConcurrency: settings.workerConcurrency,
         workerChapterConcurrency: settings.workerChapterConcurrency,
         aiEnhanceConcurrency: settings.aiEnhanceConcurrency ?? 3,
+        bibleConcurrency: settings.bibleConcurrency ?? 5,
         imageBaseUrl: settings.imageBaseUrl,
         imageAllowInsecureTls: settings.imageAllowInsecureTls,
         imageModel: settings.imageModel,
@@ -777,6 +782,60 @@ export default function SettingsPage() {
                 />
               </Field>
 
+              <Field
+                label="Giới hạn ký tự chương (Phân tích nhân vật)"
+                htmlFor="settings-bible-chapter-chars"
+                tooltip={
+                  <div className="space-y-1 text-left max-w-xs">
+                    <p className="font-medium">Số ký tự chương tối đa đưa vào LLM mỗi lần phân tích nhân vật.</p>
+                    <p><strong>Thấp hơn</strong> → model phản hồi nhanh hơn, tránh bị gateway báo <code className="font-mono">504 timeout</code> với model chậm (như MiniMax-M3).</p>
+                    <p><strong>Cao hơn</strong> → nhiều ngữ cảnh hơn nhưng chậm hơn và dễ timeout. Khuyên dùng 6000–16000.</p>
+                  </div>
+                }
+                help={
+                  <span className="flex items-center justify-between gap-2">
+                    <span>2000 → 40000</span>
+                    <span className="font-mono font-semibold text-foreground">{(settings.bibleChapterChars ?? 12000).toLocaleString()} ký tự</span>
+                  </span>
+                }
+              >
+                <div className="flex items-center gap-2">
+                  <Input id="settings-bible-chapter-chars" type="number" min={2000} max={40000} step={1000}
+                    value={settings.bibleChapterChars ?? 12000}
+                    onChange={(e) => update('bibleChapterChars', Math.max(2000, Math.min(40000, parseInt(e.target.value, 10) || 12000)))}
+                    className="flex-1"
+                  />
+                  <div className="flex shrink-0 items-center rounded-md border border-border overflow-hidden text-[10px]">
+                    {[
+                      { value: 6000,  label: '6K',   hint: 'Nhanh' },
+                      { value: 12000, label: '12K',  hint: 'Cân bằng' },
+                      { value: 20000, label: '20K',  hint: 'Rộng' },
+                      { value: 30000, label: '30K',  hint: 'Tối đa cũ' },
+                    ].map((p) => {
+                      const active = (settings.bibleChapterChars ?? 12000) === p.value;
+                      return (
+                        <Tooltip key={p.value} content={`${p.value.toLocaleString()} ký tự — ${p.hint}`} side="top">
+                          <button
+                            type="button"
+                            onClick={() => update('bibleChapterChars', p.value)}
+                            aria-label={`Đặt giới hạn = ${p.value.toLocaleString()} ký tự (${p.hint})`}
+                            aria-pressed={active}
+                            className={cn(
+                              'px-2 py-1.5 font-mono transition-colors',
+                              active
+                                ? 'bg-primary text-primary-foreground'
+                                : 'hover:bg-muted text-muted-foreground',
+                            )}
+                          >
+                            {p.label}
+                          </button>
+                        </Tooltip>
+                      );
+                    })}
+                  </div>
+                </div>
+              </Field>
+
               {/* Per-mode `enable_thinking` toggles (2026-07-12).
                   Combine (chunked, default ON) — small batches where the
                   reasoning trace fits in the output budget AND accuracy
@@ -961,6 +1020,31 @@ export default function SettingsPage() {
                 onChange={(e) => update('aiEnhanceConcurrency', parseInt(e.target.value, 10) || 3)}
                 className="w-full accent-primary" />
             </Field>
+          </Card>
+
+          <Card className="p-5 space-y-4">
+            <h2 className="text-sm font-semibold flex items-center gap-2">
+              <BookOpen className="h-4 w-4 text-primary" /> Phân tích nhân vật
+              <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-normal">
+                (live — no restart)
+              </span>
+            </h2>
+            <Field
+              label="Số chương phân tích song song"
+              htmlFor="settings-bible-concurrency"
+              tooltip="Số chương được AI phân tích nhân vật đồng thời khi chạy 'Phân tích' theo khoảng. Tăng để rút ngắn thời gian (đặc biệt với API cloud nhanh), giảm nếu gateway/local model bị quá tải. Có hiệu lực ngay trên lần chạy tiếp theo."
+              help={
+                <span className="flex items-center justify-between">
+                  <span>1 → 16</span>
+                  <span className="font-mono font-semibold text-foreground">{settings.bibleConcurrency}</span>
+                </span>
+              }
+            >
+              <input id="settings-bible-concurrency" type="range" min={1} max={16} step={1} aria-label="Số chương phân tích song song"
+                value={settings.bibleConcurrency}
+                onChange={(e) => update('bibleConcurrency', parseInt(e.target.value, 10) || 5)}
+                className="w-full accent-primary" />
+              </Field>
           </Card>
 
           <Card className="p-5 space-y-4">

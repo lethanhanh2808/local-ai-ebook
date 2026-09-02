@@ -134,25 +134,79 @@ export function readUserOverrides(cookieHeader?: string | null): Partial<Setting
   return readCookieOverrides(cookieHeader, SETTINGS_USER_COOKIE);
 }
 
+/**
+ * Merge the three settings layers into the effective `Settings` used by
+ * server-side code (chat/detection/enhancement).
+ *
+ * The DATABASE is the single source of truth (`base` = `Settings` singleton,
+ * `userOverride` = `UserSettings` row). The browser `sessionOverride` cookie
+ * is only consulted to fill a gap when the DB has no value for that field —
+ * it can NEVER shadow a DB value. Rationale:
+ *
+ *   1. The session cookie is per-browser and lost on logout / device switch,
+ *      so it must not be allowed to "win" over a value the operator saved
+ *      persistently. That previously produced the "AI 401" bug where the
+ *      operator saved the Custom AI key to the DB but a stale browser cookie
+ *      with `provider=omlx-local` (no key) overrode it, leaving the detector
+ *      talking to the wrong backend with no auth.
+ *
+ *   2. The cookie still acts as a lightweight per-device fallback so a brand
+ *      new install that hasn't written to the DB yet still picks up the
+ *      browser's last-known config without forcing a DB round-trip.
+ *
+ * Merge priority:  userOverride  >  base  >  sessionOverride (gap-fill only).
+ * Empty-string AI keys in the DB are treated as "explicitly cleared" and
+ * win over the cookie — so an intentional clear on /settings isn't
+ * resurrected by a leftover cookie value.
+ */
 export function mergeEffectiveSettings(
   appDefaults: Partial<Settings> | null | undefined,
   userOverride: Partial<Settings> | null | undefined,
   sessionOverride: Partial<Settings> | null | undefined,
 ): Settings {
   const base = { ...(appDefaults ?? {}) } as Settings;
-  const merged = {
-    ...base,
-    ...(userOverride ?? {}),
-    ...(sessionOverride ?? {}),
-  } as Settings;
+  const userLayer = { ...base, ...(userOverride ?? {}) } as Settings;
+  const merged = { ...userLayer };
+  if (sessionOverride) {
+    for (const [key, value] of Object.entries(sessionOverride)) {
+      if (value === undefined) continue;
+      const dbValue = (userLayer as Record<string, unknown>)[key];
+      // Fill null / undefined DB slots with the cookie value. If the DB has
+      // an explicit value (including '' for an AI key the operator cleared),
+      // it wins.
+      if (dbValue === undefined || dbValue === null) {
+        (merged as Record<string, unknown>)[key] = value;
+      }
+    }
+  }
   return merged;
 }
 
+/**
+ * Apply a list of override layers onto a base `Settings` row. Used by
+ * `/api/settings` GET to compose the response. Layers are ordered from
+ * least authoritative to most authoritative; the LAST override wins for
+ * each individual field. Pass overrides in `[userOverride, sessionOverride]`
+ * order to keep "DB-authoritative" semantics identical to
+ * `mergeEffectiveSettings` — the DB row (`base`) always wins over the
+ * session cookie, which is used only to fill null/undefined gaps.
+ */
 export function mergeSettingsWithOverrides(base: Settings, overrides: Array<Partial<Settings> | null | undefined>): Settings {
   let merged = { ...base };
   for (const override of overrides) {
     if (!override || Object.keys(override).length === 0) continue;
-    merged = { ...merged, ...override };
+    const filtered: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(override)) {
+      if (value === undefined) continue;
+      const current = (merged as Record<string, unknown>)[key];
+      // DB-authoritative. Only adopt the override value when the current
+      // (DB) value is null or undefined — so the cookie never shadows the
+      // DB. This keeps "the database is the single source of truth".
+      if (current === undefined || current === null) {
+        filtered[key] = value;
+      }
+    }
+    merged = { ...merged, ...filtered } as Settings;
   }
   return merged;
 }
@@ -266,6 +320,7 @@ export async function getUserSettings(userId?: string): Promise<Partial<Settings
     aiModel: row.aiModel,
     aiMaxTokens: row.aiMaxTokens,
     aiTemperature: row.aiTemperature,
+    bibleChapterChars: row.bibleChapterChars,
     aiThinkingCombine: row.aiThinkingCombine,
     aiThinkingFullLLM: row.aiThinkingFullLLM,
     ttsProvider: row.ttsProvider,
@@ -298,6 +353,7 @@ export async function upsertUserSettings(userId: string | undefined, data: Parti
       aiModel: data.aiModel ?? undefined,
       aiMaxTokens: data.aiMaxTokens ?? undefined,
       aiTemperature: data.aiTemperature ?? undefined,
+      bibleChapterChars: data.bibleChapterChars ?? undefined,
       aiThinkingCombine: data.aiThinkingCombine ?? undefined,
       aiThinkingFullLLM: data.aiThinkingFullLLM ?? undefined,
       ttsProvider: data.ttsProvider ?? undefined,
@@ -325,6 +381,7 @@ export async function upsertUserSettings(userId: string | undefined, data: Parti
       aiModel: data.aiModel ?? 'default',
       aiMaxTokens: data.aiMaxTokens ?? 4096,
       aiTemperature: data.aiTemperature ?? 0.2,
+      bibleChapterChars: data.bibleChapterChars ?? 12000,
       aiThinkingCombine: data.aiThinkingCombine ?? true,
       aiThinkingFullLLM: data.aiThinkingFullLLM ?? false,
       ttsProvider: data.ttsProvider ?? 'vieneu',

@@ -43,6 +43,8 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
       age?: string | null;
       tone?: string;
       gender?: string;
+      defaultSpeed?: number;
+      defaultEmotion?: string;
     }>;
   };
   if (!Array.isArray(body.characters)) {
@@ -68,6 +70,8 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     age?: string | null;
     gender?: string | null;
     tone?: string | null;
+    defaultSpeed?: number;
+    defaultEmotion?: string;
   }> = [];
   for (const c of body.characters) {
     if (!c || typeof c.name !== 'string' || !c.name.trim()) {
@@ -82,6 +86,14 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     }
     if (!voiceId && c.voiceName && isBuiltin(c.voiceName)) {
       let voice = voiceByName.get(c.voiceName);
+      // Per-character voice customization (speed/emotion) the user set before
+      // applying. Only applied when explicitly provided.
+      const pendingSpeed = typeof c.defaultSpeed === 'number' && Number.isFinite(c.defaultSpeed)
+        ? Math.min(2, Math.max(0.5, c.defaultSpeed))
+        : undefined;
+      const pendingEmotion = typeof c.defaultEmotion === 'string' && c.defaultEmotion.trim()
+        ? c.defaultEmotion.trim().slice(0, 40)
+        : undefined;
       if (!voice) {
         // Auto-create a Voice row for the built-in name (no audio file
         // needed because the engine resolves the preset by name).
@@ -94,7 +106,8 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
           isDefault: false,
           kind: 'character',
           builtinName: c.voiceName,
-          defaultEmotion: c.tone && c.tone !== 'unknown' ? c.tone : undefined,
+          defaultEmotion: pendingEmotion ?? (c.tone && c.tone !== 'unknown' ? c.tone : undefined),
+          defaultSpeed: pendingSpeed,
         });
         voiceByName.set(c.voiceName, voice);
       } else if (voice.builtinName !== c.voiceName || voice.kind !== 'character') {
@@ -103,7 +116,8 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
           data: {
             kind: 'character',
             builtinName: c.voiceName,
-            ...(c.tone && c.tone !== 'unknown' && !voice.defaultEmotion ? { defaultEmotion: c.tone } : {}),
+            ...(pendingEmotion && !voice.defaultEmotion ? { defaultEmotion: pendingEmotion } : {}),
+            ...(pendingSpeed !== undefined && voice.defaultSpeed == null ? { defaultSpeed: pendingSpeed } : {}),
           },
         });
         voiceByName.set(c.voiceName, voice);
@@ -118,6 +132,8 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
       age: c.age ?? null,
       gender: c.gender ?? null,
       tone: c.tone ?? null,
+      defaultSpeed: c.defaultSpeed,
+      defaultEmotion: c.defaultEmotion,
     });
   }
 

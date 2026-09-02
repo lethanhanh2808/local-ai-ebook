@@ -264,8 +264,14 @@ def _run_detection(sample_blob: str, scope: str) -> dict:
         "    'Hoàng Thượng' / 'Lão Tổ Vạn Kiếm' if no name is ever given),\n"
         "  pronouns (array of strings — the speaker-pronoun(s) this character uses: "
         "    ['trẫm', 'thiếp'] for the Emperor+consort pair, ['lão phu'] for the elder, etc.),\n"
-        "  aliases (array of strings — every variant of the proper name you saw in narration:\n"
-        "    full name, given name only, surname only, plus any title like 'Bệ Hạ'),\n"
+        "  aliases (array of strings — every DISTINCT way THIS character is named in narration:\n"
+        "    full name, given name only, surname only, the character's title/tước vị\n"
+        "    (e.g. 'Vệ Quốc Công' for Giang Hạo), bí danh / hiệu / tự / nickname.\n"
+        "    DO NOT include generic throne honorifics that refer to WHOEVER holds power\n"
+        "    rather than to this specific person: 'Bệ Hạ', 'trẫm', 'hoàng thượng', 'thiên tử',\n"
+        "    'nữ hoàng', 'đại vương', 'thần', 'thiếp' are NOT aliases of a named character\n"
+        "    unless the narration explicitly calls THIS character by that word as a name.\n"
+        "    Only add a title to aliases if it unambiguously identifies THIS character.)\n"
         "  gender (male|female|unknown), age (young|mature|old|unknown),\n"
         "  tone (calm|cheerful|cold|mysterious|serious|angry|sad|warm|unknown),\n"
         "  role (main|supporting|minor|crowd — main=protagonist/antagonist with lots of "
@@ -282,7 +288,7 @@ def _run_detection(sample_blob: str, scope: str) -> dict:
         "Output (JSON only, starting with { and ending with }):"
     )
 
-    raw = call_omlx(system_prompt, user_prompt, timeout=180.0)
+    raw = call_omlx(system_prompt, user_prompt, timeout=300.0)
     # Try multiple JSON-extraction strategies — reasoning models put JSON after prose.
     data = _parse_json_anywhere(raw)
 

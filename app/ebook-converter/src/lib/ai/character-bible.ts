@@ -41,12 +41,14 @@ import {
   resolveCharacterIds,
   queueDiff,
   mergeLlmProfilePatch,
+  recomputeCharacterRoles,
   canonicalizeRelationship,
   type ProfileSource,
   type CharacterBibleView,
   type BibleDiffPatch,
 } from '@/lib/db/character-bible';
 import { prisma } from '@/lib/db/client';
+import { getSettings } from '@/lib/db/settings';
 
 // ── Public result shape ──────────────────────────────────────────────────
 
@@ -67,10 +69,11 @@ export interface RefreshBibleOptions {
   /** Called with progress events; used by the SSE route to stream to the
    *  browser. May be omitted for the BullMQ worker call. */
   onProgress?: (e: BibleProgressEvent) => void | Promise<void>;
-  /** Hard cap on total chapter characters fed to the LLM (default 30 000).
-   *  30 k keeps the prompt inside most local models' 8 k–16 k token context
-   *  window after the system + bible summary + chatJSON's final user
-   *  prompt prefix. Bigger than this risks truncation mid-array. */
+  /** Hard cap on total chapter characters fed to the LLM (default 12 000).
+   *  Kept modest so the model returns within the upstream gateway's timeout
+   *  (the MiniMax gateway returns 504 when a request runs too long). 12 k
+   *  chars is plenty for one chapter's character-relevant prose; larger
+   *  prompts risk both truncation mid-array AND gateway time-outs. */
   maxChapterChars?: number;
   /** Override model name; defaults to the user-selected AI provider model. */
   model?: string;
@@ -155,7 +158,12 @@ export async function refreshBible(
 
   // 1. Fetch the chapter text(s) we will feed to the LLM.
   await emit({ kind: 'fetching-chapter', chapterIndex: opts.chapterIndex, chapterFile: opts.chapterFile ?? '' });
-  const inputs = await fetchChapterInputs(bookId, opts.chapterIndex, opts.chapterFile ?? null, opts.maxChapterChars ?? 30_000);
+  // Honor an explicit per-call override, else the user-configured Settings
+  // value (bibleChapterChars), else the 12k safety default.
+  const maxChars = opts.maxChapterChars
+    ?? (await getSettings().then((s) => s.bibleChapterChars))
+    ?? 12_000;
+  const inputs = await fetchChapterInputs(bookId, opts.chapterIndex, opts.chapterFile ?? null, maxChars);
   if (inputs.length === 0) {
     await emit({ kind: 'error', message: 'no chapter text found' });
     return { patches: [], autoApplied: 0, queued: 0, conflicts: 0, durationMs: Date.now() - t0 };
@@ -193,6 +201,10 @@ export async function refreshBible(
       // chat() helper clamps to 16384 internally as a safety net so a
       // user-set "Generous" preset (e.g. for reasoning models) still works
       // without us picking an arbitrary number per call site.
+      // Retry transient upstream failures (504 gateway time-outs from the
+      // MiniMax gateway, empty/dropped responses) so a flaky request doesn't
+      // fail the whole chapter — see rawChat() in src/lib/ai/index.ts.
+      maxRetries: 3,
       model: opts.model,
     });
     tokens = Array.isArray(patches) ? patches.length : 0;
@@ -205,6 +217,16 @@ export async function refreshBible(
       ? e.message
       : extractErrorMessage(e);
     await emit({ kind: 'error', message: msg });
+    // CRITICAL: still record the failure in BibleRefreshLog. Without this, a
+    // failed chapter is left with NO log entry, so the UI shows it as
+    // "not analyzed" and every subsequent run re-attempts it (and fails
+    // again the same way). Marking it `failed` lets the status endpoint
+    // display it correctly and the skip logic leave it alone until the
+    // user explicitly forces a re-run.
+    await writeRefreshLog(bookId, opts.chapterIndex, {
+      appliedCount: 0, queuedCount: 0, conflictCount: 0, durationMs: Date.now() - t0,
+      status: 'failed', lastError: msg.slice(0, 500),
+    });
     return { patches: [], autoApplied: 0, queued: 0, conflicts: 0, durationMs: Date.now() - t0 };
   }
   if (!Array.isArray(patches) || patches.length === 0) {
@@ -232,6 +254,16 @@ export async function refreshBible(
     if (isConflict) conflicts++;
   }
 
+  // 4b. Re-classify roles from accumulated evidence. The LLM bible analysis
+  //     does not emit a `role` for existing characters, so a protagonist who
+  //     was first seen as `supporting` (the default) never gets promoted.
+  //     recomputeCharacterRoles() promotes `supporting` → `main` when a
+  //     character has both many appearances and many relationships. It is
+  //     idempotent and never demotes a `main` the user set.
+  try {
+    await recomputeCharacterRoles(bookId);
+  } catch { /* non-fatal — role is cosmetic */ }
+
   // 5. Write (or update) the idempotency log so the next call on the same
   //    chapter short-circuits. We log AFTER apply so a crash mid-run doesn't
   //    leave a 'success' entry that would suppress a retry.
@@ -256,7 +288,7 @@ export async function refreshBible(
 async function writeRefreshLog(
   bookId: string,
   chapterIndex: number,
-  args: { appliedCount: number; queuedCount: number; conflictCount: number; durationMs: number; status: string },
+  args: { appliedCount: number; queuedCount: number; conflictCount: number; durationMs: number; status: string; lastError?: string | null },
 ): Promise<void> {
   try {
     await prisma.bibleRefreshLog.upsert({
@@ -270,6 +302,7 @@ async function writeRefreshLog(
         queuedCount: args.queuedCount,
         conflictCount: args.conflictCount,
         durationMs: args.durationMs,
+        lastError: args.lastError ?? null,
       },
       update: {
         version: { increment: 1 },
@@ -278,6 +311,7 @@ async function writeRefreshLog(
         queuedCount: args.queuedCount,
         conflictCount: args.conflictCount,
         durationMs: args.durationMs,
+        lastError: args.lastError ?? null,
       },
     });
   } catch (e) {
@@ -313,6 +347,24 @@ function buildSystemPrompt(): string {
     '  đặt kind="new" cho một tên đã tồn tại trong danh sách đó. Nếu nghi',
     '  ngờ 2 tên cùng một người, đặt tên mới vào `aliases` của patch',
     '  kind="new" thay vì tạo nhân vật mới.',
+    // NEW ↓ — alias / bí danh capture for cổ trang + hiện đại
+    '- `aliases` (mảng) của patch kind="new" PHẢI chứa MỌI cách nhân vật đó',
+    '  được gọi trong chương, để hệ thống gán giọng không bị lọt:',
+    '  • Tên thật / tên tự / bí danh / hiệu (ví dụ: "Giang Hạo" có thể có',
+    '    "Vệ Quốc Công" nếu đó là tước vị của hắn).',
+    '  • Chức quan / tước vị / danh xưng chính thức (Công tước, Tướng quân,',
+    '    Thái tử, Trưởng môn, sư phụ…) — chỉ khi danh xưng đó CHỈ chỉ mỗi',
+    '    nhân vật này (không phải chức vụ chung của nhiều người).',
+    '  • Cách nhân vật tự xưng hoặc được người khác gọi (xưng hô riêng).',
+    '- TUY NHIÊN, KHÔNG đưa vào aliases các từ xưng hô chung của ngai vàng',
+    '  mà bất kỳ vua/chúa nào cũng được gọi: "Bệ hạ", "trẫm", "hoàng thượng",',
+    '  "thiên tử", "nữ hoàng", "đại vương"… — những từ này chỉ người đang',
+    '  cầm quyền, không phải tên riêng của một nhân vật. Chỉ thêm vào aliases',
+    '  khi có bằng chứng rõ ràng chương này gọi ĐÚNG nhân vật đó bằng từ đó',
+    '  (vd: "Giang Hạo, Bệ hạ" — sai; "Nữ Đế Cơ Lạc Dao, Bệ hạ" — đúng cho',
+    '  Nữ Đế, không phải Giang Hạo).',
+    '- Mỗi alias phải đi kèm `evidence_quote` chứng minh chương gọi nhân vật',
+    '  đó bằng alias đó. Nếu không chắc, BỎ QUA alias đó.',
     '- CẬP NHẬT description/personality/speech_style/visual_description',
     '  phải dựa trên thông tin MỚI từ chương này. KHÔNG lặp lại y nguyên',
     '  giá trị cũ — nếu không có gì mới, BỎ QUA patch update đó.',

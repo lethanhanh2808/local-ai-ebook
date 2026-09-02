@@ -20,7 +20,7 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
     getCharacterBible(params.id),
     prisma.character.findMany({
       where: { bookId: params.id },
-      select: { id: true, name: true, gender: true, role: true, voiceId: true },
+      select: { id: true, name: true, gender: true, role: true, voiceId: true, tone: true, aliases: true },
       orderBy: [{ role: 'asc' }, { name: 'asc' }],
     }),
   ]);

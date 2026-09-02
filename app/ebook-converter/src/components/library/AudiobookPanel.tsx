@@ -28,6 +28,12 @@ interface Chapter {
 interface AudiobookSummary {
   total: number; ready: number; failed: number; pending: number;
   durationMs: number; sizeBytes: number; pct: number;
+  coverage?: {
+    plannedChapters: number;
+    totalChapters: number;
+    assignedSentences: number;
+    uncertainSentences: number;
+  };
 }
 
 interface Book {
@@ -221,6 +227,16 @@ export function AudiobookPanel({ bookId, onChapterAudioReady }: Props) {
           {voices.length === 0 && (
             <span className="block mt-1 text-amber-600 dark:text-amber-400">
               ⚠ Chưa có giọng clone — audiobook sẽ dùng giọng VieNeu mặc định.
+            </span>
+          )}
+          {summary?.coverage && summary.coverage.plannedChapters === 0 && (
+            <span className="block mt-1 text-amber-600 dark:text-amber-400">
+              ⚠ Chưa có phân giọng (Phân giọng) nào — mọi câu sẽ dùng giọng người dẫn chuyện. Mở tab "Phân giọng" để gán giọng nhân vật trước khi tạo.
+            </span>
+          )}
+          {summary?.coverage && summary.coverage.uncertainSentences > 0 && (
+            <span className="block mt-1 text-amber-600 dark:text-amber-400">
+              ⚠ Có {summary.coverage.uncertainSentences} câu AI phân giọng chưa chắc chắn (cần duyệt ở tab "Phân giọng"). Những câu này sẽ tạm dùng giọng người dẫn chuyện cho đến khi bạn chỉnh sửa.
             </span>
           )}
         </p>

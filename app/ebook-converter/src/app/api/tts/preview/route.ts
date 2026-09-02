@@ -5,10 +5,13 @@
 // Used by the CharacterDetection panel's "nghe thử" button so users can
 // audition a voice before assigning it to a character.
 //
-// Body: { voice: "Xuân Vĩnh", text?: string, language?: "vi"|"en", speed?: number }
+// Body: { voice: "Xuân Vĩnh", text?: string, language?: "vi"|"en", speed?: number, emotion?: string }
 //   - "voice" can be either a built-in VieNeu voice name OR a Voice row ID
 //     (UUID). If it looks like a UUID we look it up and use its refAudioPath
 //     for voice cloning.
+//   - "emotion" (optional) is mapped to the engine's inline marker (e.g.
+//     [cười] / [thở dài] / [hắng giọng]) so the preview matches the
+//     per-voice "sắc thái" the user set on the character card.
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import { getVoice } from '@/lib/db/voices';
@@ -28,27 +31,52 @@ const BUILTIN_VIENEU = new Set(BUILTIN_VIENEU_NAMES);
 
 const DEFAULT_PREVIEW = 'Xin chào bạn đọc, đây là giọng của tôi.';
 
+// Mirror of the helper in /api/tts/route.ts: prepend the engine's inline
+// emotion marker (e.g. [cười] / [thở dài] / [hắng giọng]) so the preview
+// reflects the per-voice "sắc thái" the user picked on the character card.
+function applyEmotionMarker(text: string, emotion?: string | null): string {
+  const marker = engine_emotionMarker(emotion);
+  if (!marker) return text;
+  if (/^\s*\[(?:cười|thở dài|hắng giọng)\]/i.test(text)) return text;
+  if (marker === '[cười]') {
+    const lc = text.toLowerCase();
+    const hasLaughEvidence =
+      /\b(?:haha|ha ha|hehe|hihi|hê hê|cười lớn|phá lên cười|cười khanh khách|cười khúc khích|cười ha hả|cười hô hố|cười rúc rích|cười gằn)\b/.test(lc)
+      || /\*?(?:khanh khách|khúc khích|hô hố|ha hả|khẽ cười|nhếch mép cười|cười gượng)\*?/.test(lc)
+      || /\(\s*(?:cười gằn|cười khổ)\s*\)/.test(lc);
+    if (!hasLaughEvidence) return text;
+  }
+  return `${marker} ${text}`;
+}
+
+// Resolved lazily inside the handler (engine is async); declared here so the
+// helper above can reference it.
+let engine_emotionMarker: (e: string | null | undefined) => string = () => '';
+
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({})) as {
     voice?: string;
     text?: string;
     language?: string;
     speed?: number;
-  };
+      emotion?: string;
+    };
 
-  const voice = body.voice?.trim();
-  if (!voice) {
-    return NextResponse.json({ error: 'voice required' }, { status: 400 });
-  }
-  const text = (body.text?.trim() || DEFAULT_PREVIEW).slice(0, 1_000);
-  const speed = clampSpeechSpeed(body.speed ?? 1.0);
+    const voice = body.voice?.trim();
+    if (!voice) {
+      return NextResponse.json({ error: 'voice required' }, { status: 400 });
+    }
+    const text = (body.text?.trim() || DEFAULT_PREVIEW).slice(0, 1_000);
+    const speed = clampSpeechSpeed(body.speed ?? 1.0);
+    const emotion = body.emotion?.trim() || null;
 
-  // Resolve the active engine once. The payload builder owns the
-  // differences between engine JSON shapes so this route stays single-
-  // backend with the current VieNeu-only setup.
-  const engine = await getActiveTTSEngine();
-  const isBuiltin = (n: string) =>
-    isBuiltinVoiceForEngine(engine, n) || isBuiltinVieNeuVoice(n);
+    // Resolve the active engine once. The payload builder owns the
+    // differences between engine JSON shapes so this route stays single-
+    // backend with the current VieNeu-only setup.
+    const engine = await getActiveTTSEngine();
+    engine_emotionMarker = (e) => engine.emotionMarker(e);
+    const isBuiltin = (n: string) =>
+      isBuiltinVoiceForEngine(engine, n) || isBuiltinVieNeuVoice(n);
 
   let refPath: string | undefined;
   let language = body.language ?? 'vi';
@@ -66,14 +94,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `unknown voice: ${voice}` }, { status: 400 });
   }
 
-  const cleanText = sanitizeTextForEngine(engine, text);
-  const payload = buildPayloadForEngine(engine, {
-    text: cleanText,
-    voice: useBuiltIn ? voice : null,
-    refAudio: refPath,
-    refText: null,
-    speed,
-    language,
+const marked = applyEmotionMarker(text, emotion);
+    const cleanText = sanitizeTextForEngine(engine, marked);
+    const payload = buildPayloadForEngine(engine, {
+      text: cleanText,
+      voice: useBuiltIn ? voice : null,
+      refAudio: refPath,
+      refText: null,
+      speed,
+      language,
+      emotion,
   });
 
   try {

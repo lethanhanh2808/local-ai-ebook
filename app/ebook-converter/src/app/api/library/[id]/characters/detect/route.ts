@@ -118,7 +118,7 @@ type DetectorOutcome = {
   modelResolution: 'empty' | 'default' | 'env-fallback' | 'validated' | 'unknown-replaced';
 };
 
-async function runDetector(epubPath: string, signal?: AbortSignal): Promise<DetectorOutcome> {
+async function runDetector(epubPath: string, signal?: AbortSignal, sessionOverride?: Partial<import('@prisma/client').Settings> | null): Promise<DetectorOutcome> {
   const py = resolvePython();
   if (!DETECTOR) {
     throw new Error(
@@ -137,14 +137,23 @@ async function runDetector(epubPath: string, signal?: AbortSignal): Promise<Dete
   // Python detector reads OMLX_BASE_URL / OMLX_API_KEY / OMLX_MODEL from its
   // environment, so we forward the effective provider's endpoint here instead
   // of hardcoding the local OMLX (127.0.0.1:8080) that may not be running.
+  //
+  // The DATABASE is the single source of truth (Settings + UserSettings).
+  // The browser `ai-settings-session` cookie is passed in as a fallback
+  // gap-fill only (never shadowing a DB value) — see `mergeEffectiveSettings`
+  // in `@/lib/db/settings`. Previously the detection route ignored the cookie
+  // entirely, so a Custom AI key saved to the cookie (scope=session) was
+  // invisible server-side and the detector hit the gateway with no auth →
+  // 401 → empty body → regex-fallback. Threading the cookie in here closes
+  // that gap.
   let omlxModel: string;
   let modelReason: 'empty' | 'default' | 'env-fallback' | 'validated' | 'unknown-replaced' = 'empty';
   let envOverrides: Record<string, string> = {};
   try {
     const { getEffectiveSettings } = await import('@/lib/db/settings');
     const { detectorEnvOverrides } = await import('@/lib/ai');
-    const settings = await getEffectiveSettings();
-    envOverrides = await detectorEnvOverrides();
+    const settings = await getEffectiveSettings(undefined, sessionOverride);
+    envOverrides = await detectorEnvOverrides(sessionOverride);
 
     if (settings.aiProvider === 'omlx-local') {
       // BUGFIX 2026-07-11 + 2026-07-12: validate the settings.aiModel value
@@ -266,11 +275,18 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   const body = await req.json().catch(() => ({})) as { autoApply?: boolean };
   const autoApply = body.autoApply === true;
 
+  // Thread the browser's `ai-settings-session` cookie through as a fallback
+  // override so a Custom AI key saved to the cookie (scope=session) reaches
+  // the detector. The DB is still authoritative — the cookie only fills
+  // null/undefined slots (see mergeEffectiveSettings).
+  const { readSessionOverrides } = await import('@/lib/db/settings');
+  const sessionOverride = readSessionOverrides(req.headers.get('cookie'));
+
   let result: any;
   let modelUsed = '';
   let modelResolution: 'empty' | 'default' | 'env-fallback' | 'validated' | 'unknown-replaced' = 'empty';
   try {
-    const outcome = await runDetector(bookPath, req.signal);
+    const outcome = await runDetector(bookPath, req.signal, sessionOverride);
     result = outcome.result;
     modelUsed = outcome.modelUsed;
     modelResolution = outcome.modelResolution;

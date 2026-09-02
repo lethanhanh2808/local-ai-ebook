@@ -81,3 +81,92 @@ export function openBibleRefreshStream(bookId: string, opts: {
     }),
   });
 }
+
+// ── Range analysis (incremental / continue) ──────────────────────────────
+
+export interface RangeAnalysisOpts {
+  from?: number;
+  to?: number;
+  /** default true — skip chapters already analyzed successfully */
+  skipAnalyzed?: boolean;
+  /** default true — apply non-conflicting patches automatically */
+  autoMerge?: boolean;
+  model?: string;
+  /** parallel chapter-analysis pool size (default read from Settings) */
+  concurrency?: number;
+  signal?: AbortSignal;
+}
+
+/** Open the range-analysis SSE stream. Returns the fetch Response; the
+ *  caller reads the body and parses `data: {...}` frames into
+ *  BibleRangeEvent objects (see the analyze-range route for the type). */
+export function openRangeAnalysisStream(bookId: string, opts: RangeAnalysisOpts): Promise<Response> {
+  const { signal, ...rest } = opts;
+  return fetch(`/api/library/${bookId}/characters/bible/analyze-range`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(rest),
+    signal,
+  });
+}
+
+/**
+ * Consume an SSE Response body line-by-line, invoking `onEvent` for each
+ * parsed `data: {...}` frame. Resolves when the stream ends. Generic over
+ * the event type so both refresh and range streams can reuse it.
+ */
+export async function consumeSseStream<T = unknown>(
+  res: Response,
+  onEvent: (ev: T) => void,
+): Promise<void> {
+  if (!res.body) return;
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    // SSE frames are separated by a blank line.
+    let sep: number;
+    while ((sep = buf.indexOf('\n\n')) !== -1) {
+      const frame = buf.slice(0, sep);
+      buf = buf.slice(sep + 2);
+      for (const line of frame.split('\n')) {
+        const trimmed = line.trimStart();
+        if (!trimmed.startsWith('data:')) continue;
+        const json = trimmed.slice(5).trim();
+        if (!json) continue;
+        try { onEvent(JSON.parse(json) as T); } catch { /* skip bad frame */ }
+      }
+    }
+  }
+}
+
+/** Fetch the per-chapter analysis status for the Nhân vật tab. */
+export async function fetchBibleStatus(bookId: string): Promise<unknown> {
+  const r = await fetch(`/api/library/${bookId}/characters/bible/status`, { cache: 'no-store' });
+  if (!r.ok) throw new Error(`status ${r.status}`);
+  return r.json();
+}
+
+/** Shape of the SSE frames emitted by the analyze-range route. Mirrors the
+ *  type declared in that route so the UI can parse them without importing
+ *  server-only code. */
+export type BibleRangeEvent =
+  | { kind: 'range-start'; from: number; to: number; total: number; plannedChapters: number[]; concurrency: number }
+  | { kind: 'chapter-skip'; chapterIndex: number; reason: string }
+  | { kind: 'chapter-start'; chapterIndex: number; index: number; total: number }
+  | { kind: 'chapter-progress'; chapterIndex: number; event: unknown }
+  | { kind: 'chapter-done'; chapterIndex: number; autoApplied: number; queued: number; conflicts: number; durationMs: number }
+  | { kind: 'chapter-error'; chapterIndex: number; message: string }
+  | {
+      kind: 'range-done';
+      analyzed: number;
+      skipped: number;
+      failed: number;
+      totalAutoApplied: number;
+      totalQueued: number;
+      totalConflicts: number;
+      durationMs: number;
+    };

@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
+  AlertTriangle,
   ArrowLeft,
   Check,
   History,
@@ -39,6 +40,8 @@ interface PlanSentence {
   voiceId: string | null;
   source: 'narration' | 'character' | 'manual';
   para: number;
+  confidence?: number;
+  uncertain?: boolean;
 }
 
 interface VoiceOption {
@@ -156,6 +159,9 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
 
   // (c) multi-select + batch assign
   const [selectionMode, setSelectionMode] = useState(false);
+  // (g) "review only" filter — show just the sentences the AI couldn't
+  // confidently attribute so the user can resolve them quickly.
+  const [reviewOnly, setReviewOnly] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [batchVoice, setBatchVoice] = useState<string | null>(null);
 
@@ -614,15 +620,22 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
       // They still exist in the underlying plan (so audio timing is
       // unchanged); they're just hidden from the editor view.
       if (isChapterHeading(s.text)) continue;
+      // "Review only" mode: keep just the sentences the AI flagged uncertain.
+      if (reviewOnly && !s.uncertain) continue;
       const last = groups[groups.length - 1];
       if (last && last.para === s.para) last.items.push(s);
       else groups.push({ para: s.para, items: [s] });
     }
     return groups;
-  }, [sentences]);
+  }, [sentences, reviewOnly]);
 
   const assignedCount = useMemo(
     () => sentences.filter((s) => s.voiceId != null && !isChapterHeading(s.text)).length,
+    [sentences],
+  );
+
+  const uncertainCount = useMemo(
+    () => sentences.filter((s) => s.uncertain && !isChapterHeading(s.text)).length,
     [sentences],
   );
 
@@ -714,6 +727,20 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
           )}
         >
           {selectionMode ? 'Thoát chọn' : 'Chọn nhiều câu'}
+        </button>
+        <button
+          type="button"
+          onClick={() => setReviewOnly((v) => !v)}
+          className={cn(
+            'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition-colors',
+            reviewOnly
+              ? 'border-amber-500 bg-amber-500/10 text-amber-600'
+              : 'border-border hover:bg-accent',
+          )}
+          title="Chỉ hiện những câu AI phân giọng chưa chắc chắn (cần user duyệt)"
+        >
+          <AlertTriangle className="h-3.5 w-3.5" />
+          Câu cần review{uncertainCount > 0 ? ` (${uncertainCount})` : ''}
         </button>
         <button
           type="button"
@@ -878,6 +905,7 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
                             'rounded px-1.5 py-0.5 [box-decoration-break:clone] [-webkit-box-decoration-break:clone]',
                           !assigned && !selectionMode && 'hover:bg-primary/10',
                           isCharacter && !assigned && 'underline decoration-dotted decoration-muted-foreground/40',
+                          s.uncertain && 'border-l-2 border-amber-500 pl-1.5 bg-amber-500/5',
                         )}
                         style={
                           assigned && color
@@ -904,6 +932,14 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
                         >
                           {s.text}
                         </span>
+                        {s.uncertain && (
+                          <span
+                            title={`AI phân giọng chưa chắc chắn (độ tin cậy ${Math.round((s.confidence ?? 0) * 100)}%). Nhấn để gán/chỉnh sửa thủ công.`}
+                            className="ml-0.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full bg-amber-500/20 text-[9px] font-bold text-amber-600 align-middle"
+                          >
+                            ?
+                          </span>
+                        )}
                         {/* (a) per-sentence speaker / play icon — lives inside
                             the highlight span so the assigned-voice chip
                             reads as one unit (text + icon). Using a

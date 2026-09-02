@@ -509,6 +509,55 @@ export async function ensureCharacter(args: {
   });
 }
 
+/**
+ * Promote characters from `supporting` to `main` when the accumulated bible
+ * evidence shows they are actually protagonists. The LLM bible analysis does
+ * not emit a `role` field for existing characters, so a character that is
+ * introduced as `supporting` (the default) never gets upgraded even when it
+ * later dominates the book. This recomputes role from those signals and is
+ * idempotent (only ever promotes `supporting` → `main`; it never demotes a
+ * `main` the user set).
+ *
+ * Signal used: relationship-graph connectivity. The appearance ledger is
+ * sparse (the LLM rarely emits `kind:'appearance'` patches), so chapter
+ * counts are unreliable on their own. A `supporting` character is promoted
+ * to `main` when it has >= 3 relationship edges (in or out) — i.e. it is a
+ * hub of the social graph, which in practice means a protagonist / major
+ * antagonist (e.g. the "Nữ Đế" who links to everyone). Side characters and
+ * cameos stay `supporting`.
+ */
+export async function recomputeCharacterRoles(bookId: string): Promise<number> {
+  const chars = await prisma.character.findMany({
+    where: { bookId, role: 'supporting' },
+    select: { id: true },
+  });
+  if (chars.length === 0) return 0;
+
+  const ids = chars.map((c) => c.id);
+  const relationships = await prisma.characterRelationship.findMany({
+    where: { bookId, OR: [{ fromCharId: { in: ids } }, { toCharId: { in: ids } }] },
+    select: { fromCharId: true, toCharId: true },
+  });
+
+  const relCount = new Map<string, number>();
+  for (const r of relationships) {
+    relCount.set(r.fromCharId, (relCount.get(r.fromCharId) ?? 0) + 1);
+    relCount.set(r.toCharId, (relCount.get(r.toCharId) ?? 0) + 1);
+  }
+
+  const promote: string[] = [];
+  for (const id of ids) {
+    if ((relCount.get(id) ?? 0) >= 3) promote.push(id);
+  }
+  if (promote.length === 0) return 0;
+
+  await prisma.character.updateMany({
+    where: { id: { in: promote } },
+    data: { role: 'main' },
+  });
+  return promote.length;
+}
+
 /** Phase 4.4 — return the deduped subset of `incoming` aliases that
  *  aren't already on the character. The caller uses this to write only
  *  new CharacterAlias rows (existing ones are preserved with their

@@ -162,6 +162,16 @@ export async function PUT(req: NextRequest) {
     if (typeof request.aiEnhanceConcurrency === 'number' && Number.isFinite(request.aiEnhanceConcurrency)) {
       data.aiEnhanceConcurrency = Math.max(1, Math.min(16, Math.floor(request.aiEnhanceConcurrency)));
     }
+    // Character-bible analysis concurrency: 1=sequential, 2-16=parallel.
+    if (typeof request.bibleConcurrency === 'number' && Number.isFinite(request.bibleConcurrency)) {
+      data.bibleConcurrency = Math.max(1, Math.min(16, Math.floor(request.bibleConcurrency)));
+    }
+    // Max chapter characters fed to the character-bible LLM per chapter.
+    // Clamped to [2000, 40000] — too low loses context, too high risks
+    // upstream gateway 504 time-outs on slow models.
+    if (typeof request.bibleChapterChars === 'number' && Number.isFinite(request.bibleChapterChars)) {
+      data.bibleChapterChars = Math.max(2000, Math.min(40000, Math.floor(request.bibleChapterChars)));
+    }
     if (typeof request.imageProvider === 'string' && ALLOWED_IMAGE_PROVIDERS.has(request.imageProvider)) data.imageProvider = request.imageProvider;
     if (request.imageApiKey === '' || typeof request.imageApiKey === 'string') data.imageApiKey = request.imageApiKey || null;
     if (request.imageBaseUrl === '' || typeof request.imageBaseUrl === 'string') data.imageBaseUrl = request.imageBaseUrl || null;

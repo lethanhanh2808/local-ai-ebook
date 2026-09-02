@@ -31,6 +31,7 @@ export interface BookSummary {
   notes?: string | null;
   addedAt: string;
   updatedAt?: string;
+  lastRead?: string | null;
   coverPath?: string | null;
   hasCover?: boolean;
 }

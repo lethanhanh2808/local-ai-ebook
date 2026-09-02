@@ -37,6 +37,9 @@ export interface ChatOptions {
   max_tokens?: number;
   enable_thinking?: boolean;
   timeoutMs?: number;
+  /** Number of retry attempts on transient failures (5xx, gateway timeouts,
+   *  network errors, empty responses). Defaults to 2. Set to 0 to disable. */
+  maxRetries?: number;
   messages: ChatMessage[];
 }
 
@@ -230,6 +233,12 @@ async function rawChat(opts: ChatOptions, s: Settings): Promise<ChatResult> {
   // via opts.timeoutMs.
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 10 * 60 * 1000);
 
+  // Retry on transient upstream failures (5xx, gateway time-outs like the
+  // 504 from openresty in front of MiniMax, network drops, empty responses).
+  // These are intermittent — a second attempt often succeeds. We do NOT retry
+  // on 4xx (auth/format errors) since those are deterministic.
+  const maxRetries = opts.maxRetries ?? 2;
+  let lastErr: unknown;
   try {
     if (process.env.AI_DEBUG === '1') process.stderr.write(`[ai] model=${body.model} url=${baseUrl}/chat/completions\n`);
     const requestInit: RequestInit = {
@@ -243,44 +252,78 @@ async function rawChat(opts: ChatOptions, s: Settings): Promise<ChatResult> {
     };
     const insecureTls = Boolean(s.aiAllowInsecureTls);
     const fetchCall = async () => fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, requestInit);
-    const res = insecureTls ? await withInsecureTls(fetchCall) : await fetchCall();
-    if (!res.ok) {
-      const text = await res.text();
-      // Try to parse provider-specific error formats and extract a clean message.
-      let friendly = text.slice(0, 300);
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        const data = JSON.parse(text) as {
-          error?: { message?: string; type?: string };
-          // MiniMax / MiniMax format
-          type?: string;
-          request_id?: string;
+        const res = insecureTls ? await withInsecureTls(fetchCall) : await fetchCall();
+        if (!res.ok) {
+          const text = await res.text();
+          // 4xx (except 408/429 which are retryable) are deterministic — don't retry.
+          if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) {
+            let friendly = text.slice(0, 300);
+            try {
+              const data = JSON.parse(text) as {
+                error?: { message?: string; type?: string };
+                type?: string;
+                request_id?: string;
+              };
+              if (data.error?.message) friendly = data.error.message;
+              else if ((data as { message?: string }).message) friendly = (data as { message: string }).message;
+            } catch { /* not JSON — keep raw text */ }
+            throw new Error(`AI ${res.status}: ${friendly}`);
+          }
+          // 5xx / 408 / 429 → retryable
+          lastErr = new Error(`AI ${res.status}: ${text.slice(0, 200)}`);
+          if (attempt < maxRetries) {
+            const backoff = Math.min(1000 * 2 ** attempt, 8000);
+            if (process.env.AI_DEBUG === '1') process.stderr.write(`[ai] attempt ${attempt + 1} failed (${res.status}), retrying in ${backoff}ms\n`);
+            await new Promise((r) => setTimeout(r, backoff));
+            continue;
+          }
+          throw lastErr;
+        }
+        const data = (await res.json()) as {
+          choices?: Array<{ message?: { content?: string } }>;
+          usage?: { total_tokens?: number; prompt_tokens?: number; completion_tokens?: number };
         };
-        // OpenAI: { error: { message, type } }
-        if (data.error?.message) friendly = data.error.message;
-        // MiniMax: { error: { message, type }, type, request_id }
-        else if (data.error?.message) friendly = data.error.message;
-        // Bare { message }
-        else if ((data as { message?: string }).message) friendly = (data as { message: string }).message;
-      } catch {
-        // not JSON — keep raw text
+        const content = data.choices?.[0]?.message?.content ?? '';
+        // Empty/whitespace response is also a transient failure (model dropped
+        // the connection mid-stream) — retry it like a 5xx.
+        if (!content.trim()) {
+          lastErr = new Error('AI returned empty response');
+          if (attempt < maxRetries) {
+            const backoff = Math.min(1000 * 2 ** attempt, 8000);
+            if (process.env.AI_DEBUG === '1') process.stderr.write(`[ai] attempt ${attempt + 1} empty, retrying in ${backoff}ms\n`);
+            await new Promise((r) => setTimeout(r, backoff));
+            continue;
+          }
+          throw lastErr;
+        }
+        const promptTokens = data.usage?.prompt_tokens ?? 0;
+        const completionTokens = data.usage?.completion_tokens ?? 0;
+        const totalTokens = data.usage?.total_tokens ?? (promptTokens + completionTokens);
+        return {
+          text: content,
+          tokens: totalTokens,
+          promptTokens,
+          completionTokens,
+          durationMs: Date.now() - t0,
+          model: opts.model ?? model,
+        };
+      } catch (e) {
+        // AbortError (our own timeout) or non-retryable 4xx → rethrow immediately.
+        if (e instanceof Error && (e.name === 'AbortError' || e.message.startsWith('AI 4'))) throw e;
+        lastErr = e;
+        if (attempt < maxRetries) {
+          const backoff = Math.min(1000 * 2 ** attempt, 8000);
+          if (process.env.AI_DEBUG === '1') process.stderr.write(`[ai] attempt ${attempt + 1} threw ${e instanceof Error ? e.message : e}, retrying in ${backoff}ms\n`);
+          await new Promise((r) => setTimeout(r, backoff));
+          continue;
+        }
+        throw e;
       }
-      throw new Error(`AI ${res.status}: ${friendly}`);
     }
-    const data = (await res.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-      usage?: { total_tokens?: number; prompt_tokens?: number; completion_tokens?: number };
-    };
-    const promptTokens = data.usage?.prompt_tokens ?? 0;
-    const completionTokens = data.usage?.completion_tokens ?? 0;
-    const totalTokens = data.usage?.total_tokens ?? (promptTokens + completionTokens);
-    return {
-      text: data.choices?.[0]?.message?.content ?? '',
-      tokens: totalTokens,
-      promptTokens,
-      completionTokens,
-      durationMs: Date.now() - t0,
-      model: opts.model ?? model,
-    };
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
   } finally {
     clearTimeout(timer);
   }
