@@ -19,6 +19,9 @@ fi
 echo "[verify] shell syntax"
 bash -n "$ROOT_DIR/scripts/start_full_app.sh"
 bash -n "$APP_DIR/scripts/start-worker.sh"
+bash -n "$ROOT_DIR/app/tts-service/scripts/start-tts.sh"
+bash -n "$ROOT_DIR/app/tts-service/start_all.sh"
+bash -n "$ROOT_DIR/app/tts-service/stop_all.sh"
 
 cd "$APP_DIR"
 

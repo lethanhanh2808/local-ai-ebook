@@ -368,6 +368,10 @@ model AudiobookChapter {
   generatedAt  DateTime?
   // Config used for generation (so regeneration is deterministic)
   configHash   String? // hash of (voices + characters + backend) used to generate this chapter
+  // updatedAt is what the worker sweeper uses to detect a stale
+  // 'generating' row left behind by a worker crash. Adding it here is
+  // non-breaking (Prisma adds it automatically; existing rows get now()).
+  updatedAt    DateTime  @updatedAt
 
   book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
 
@@ -562,6 +566,17 @@ model Settings {
   // is an independent LLM call; running several in parallel saves wall-clock
   // time on fast cloud providers. Default 5 (per user request).
   bibleConcurrency        Int @default(5)
+
+  // ── Deep-format ↔ bible integration ────────────────────────────────
+  // When true (default OFF for safety — requires explicit user opt-in):
+  // after a conversion that used deepFormat=true completes, the worker
+  // fans out one character-bible refresh job per chapter so the bible
+  // is built off the SAME AI-cleaned prose the user reads. This avoids
+  // re-feeding the LLM the raw (potentially watermarked / broken-HTML)
+  // source text. Side-effect: each chapter costs one extra LLM call —
+  // users with very long books should keep this off and run "Phân tích"
+  // manually when they want it.
+  bibleAutoEnqueueOnDeepFormat Boolean @default(false)
 
   updatedAt DateTime @updatedAt
   createdAt DateTime @default(now())

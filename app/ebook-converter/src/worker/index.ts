@@ -193,6 +193,12 @@ const worker = new Worker<ConversionJobData>(
         inputPath: effectiveInputPath,
         outputPath: out,
         originalExt: effectiveOriginalExt,
+        // Pass the Job ID so the pipeline can write the deep-format
+        // sidecar (`<outputPath>.deepFormat.json`). When the user later
+        // imports this job into the library, the POST /api/library
+        // handler copies the sidecar to the new library location so
+        // the bible worker can keep reading from the cleaned text.
+        bookId: jobId,
         onProgress: tick,
         aiEnhance: aiEnhance ?? false,
         aiWatermarkClean: aiWatermarkClean ?? false,
@@ -244,6 +250,51 @@ const worker = new Worker<ConversionJobData>(
       const tokPerSec = elapsed > 0 ? ((totalTokens * 1000) / elapsed).toFixed(1) : '0';
       log('info', 'done', `Conversion done in ${elapsed}ms | ${totalCalls} AI calls | ${totalTokens} tokens | avg ${tokPerSec} tok/s`);
 
+      // ── Deep-format sidecar → bible fan-out ───────────────────────
+      // When deepFormat ran, the pipeline wrote a sidecar JSON next to
+      // the EPUB containing the AI-cleaned chapter text. We now fan
+      // out one bible-refresh job per chapter so the character bible is
+      // built off the SAME cleaned prose the user reads in their ebook.
+      // Skipped if the user opted out (a Settings flag exists — see
+      // 'bibleAutoEnqueueOnDeepFormat' below) so power users can keep
+      // the two stages independent.
+      let bibleFanout: { enqueued: number; skipped: boolean; reason?: string } = {
+        enqueued: 0,
+        skipped: true,
+        reason: 'deep-format was not used',
+      };
+      try {
+        const s = await getEffectiveSettings();
+        // Per-book gate: when false (the default for new users who
+        // haven't reviewed it yet), do NOT auto-enqueue. Power users
+        // who want the integration flip this in /settings.
+        // We DO still write the sidecar regardless — that's a pure
+        // on-disk artifact and never auto-triggers work.
+        const autoEnqueue = (s as { bibleAutoEnqueueOnDeepFormat?: boolean }).bibleAutoEnqueueOnDeepFormat === true;
+        if (result.aiUsed.deepFormat && autoEnqueue) {
+          // Read chapter count from the final EPUB so we fan out exactly
+          // once per chapter. parseEpub is cheap (~10ms for the spine
+          // walk) and matches the chapterIndex ordering the bible worker
+          // uses (htmlFiles[i] = chapterIndex i).
+          const { parseEpub } = await import('@/lib/pipeline/epub-parser');
+          const finalEpub = await parseEpub(out);
+          const chapterIndices = finalEpub.htmlFiles.map((_f: string, i: number) => i);
+          const { enqueueBibleRefreshForChapters } = await import('@/lib/ai/character-bible-enqueue');
+          const r = await enqueueBibleRefreshForChapters(jobId, chapterIndices, {
+            useDeepFormatSidecar: true,
+            reason: 'deep-format',
+          });
+          bibleFanout = { enqueued: r.added, skipped: false };
+          log('info', 'bible-fanout', `Enqueued ${r.added} bible-refresh job(s) (deep-format source)`, {
+            bookId: jobId, chapters: chapterIndices.length,
+          });
+        } else if (result.aiUsed.deepFormat && !autoEnqueue) {
+          bibleFanout = { enqueued: 0, skipped: true, reason: 'bibleAutoEnqueueOnDeepFormat is off' };
+        }
+      } catch (err) {
+        log('warn', 'bible-fanout', `Auto-enqueue failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+      }
+
       await updateJob(jobId, {
         status: 'completed',
         progress: 100,
@@ -263,6 +314,9 @@ const worker = new Worker<ConversionJobData>(
           repair: result.repairReport,
           deepFormatAiCalls: result.deepFormatAiCalls ?? 0,
           deepFormatWarning: result.deepFormatWarning,
+          deepFormatSidecar: result.deepFormatSidecar,
+          deepFormatSidecarError: result.deepFormatSidecarError,
+          bibleFanout,
         },
       });
 
@@ -328,6 +382,8 @@ worker.on('error', (err) => {
 });
 
 let shuttingDown = false;
+let staleSweeperHandle: NodeJS.Timeout | null = null;
+
 async function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -336,6 +392,10 @@ async function shutdown(signal: string) {
     process.exit(1);
   }, 30_000);
   forceTimer.unref();
+  if (staleSweeperHandle) {
+    clearInterval(staleSweeperHandle);
+    staleSweeperHandle = null;
+  }
   await shutdownPing();
   await worker.close();
   await pingConnection.quit().catch(() => undefined);
@@ -346,25 +406,92 @@ async function shutdown(signal: string) {
 process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
 process.on('SIGINT', () => { void shutdown('SIGINT'); });
 
+// ── Stale-job sweep ──────────────────────────────────────────────────────
+// If the worker dies while a job is processing (OOM, SIGKILL, host
+// crash, or someone killing the script directly), the DB row stays in
+// `processing` forever because no BullMQ event will ever fire for it.
+// We periodically mark such rows as `failed` so the UI shows the truth
+// and the user can re-queue. We only touch rows older than 15 minutes
+// so a briefly-overlapping replacement process cannot clobber live
+// work. This sweeps the `Job` table for the conversion queue; the
+// audiobook worker owns its own recovery path.
+async function sweepStaleProcessingJobs(): Promise<void> {
+  // The same idea applies to AudiobookChapter rows that got stuck in
+  // 'generating' because the worker died mid-pipeline: there's no
+  // Python child to clean up (the supervisor restarts the whole worker),
+  // but the DB row would never recover on its own and the UI would show
+  // a chapter stuck at <100% forever.
+  //
+  // Why raw $executeRaw instead of prisma.X.updateMany:
+  //   Prisma 5.22.0 on SQLite has a bug where updateMany with a
+  //   DateTime WHERE filter (`updatedAt < someDate`) silently matches
+  //   zero rows even when findMany/findFirst returns the matching rows.
+  //   We hit this on Job (the conversion queue) and AudiobookChapter.
+  //   Raw executeRaw with bound ISO string works correctly. There are
+  //   no user-controlled values in this query, so the SQL is safe.
+  const staleBeforeIso = new Date(Date.now() - 15 * 60_000).toISOString();
+
+  // 1) Job rows — conversion queue
+  // strftime normalizes the stored "YYYY-MM-DD HH:MM:SS" text to the
+  // ISO "YYYY-MM-DDTHH:MM:SS.sssZ" form so the lexicographic comparison
+  // matches the chronological comparison. Without strftime, a fresh
+  // row "2026-09-02 23:23:30" compares less than "2026-09-02T23:08:30Z"
+  // for the wrong reason (' ' < 'T' at position 11) and gets swept.
+  try {
+    const recovered = await prisma.$executeRawUnsafe(
+      `UPDATE Job SET status='failed', errorMsg=? WHERE status='processing' AND strftime('%Y-%m-%dT%H:%M:%fZ', updatedAt) < ?`,
+      'Worker was offline while this conversion was running. Requeue the book to try again.',
+      staleBeforeIso,
+    );
+    if (recovered > 0) {
+      console.warn(
+        `[worker] sweep: recovered ${recovered} stale processing job(s) — marked failed.`,
+      );
+    }
+  } catch (err) {
+    console.error('[worker] Job sweep failed (will retry):', err);
+  }
+
+  // 2) AudiobookChapter rows — audiobook pre-generation pipeline
+  try {
+    const recoveredChapters = await prisma.$executeRawUnsafe(
+      `UPDATE AudiobookChapter SET status='failed', errorMsg=? WHERE status='generating' AND strftime('%Y-%m-%dT%H:%M:%fZ', updatedAt) < ?`,
+      'Worker was offline while this chapter was generating. Re-queue from the Audiobook panel to retry.',
+      staleBeforeIso,
+    );
+    if (recoveredChapters > 0) {
+      console.warn(
+        `[worker] sweep: recovered ${recoveredChapters} stale audiobook chapter(s) — marked failed.`,
+      );
+    }
+  } catch (err) {
+    console.error('[worker] AudiobookChapter sweep failed (will retry):', err);
+  }
+}
+
+function startStaleSweeper(): NodeJS.Timeout {
+  // Every 5 minutes. Lightweight (one indexed scan + 0–N row updates).
+  const handle = setInterval(() => {
+    void sweepStaleProcessingJobs();
+  }, 5 * 60_000);
+  handle.unref(); // don't keep the process alive just for the sweeper
+  return handle;
+}
+
 (async () => {
   const n = await getWorkerConcurrency();
   activeConcurrency = n;
   worker.concurrency = n;
 
-  // A hard-killed worker leaves rows in `processing`; no future BullMQ
-  // event can complete them. Recover only sufficiently old rows so a
-  // briefly overlapping replacement process cannot clobber live work.
-  const staleBefore = new Date(Date.now() - 15 * 60_000);
-  const recovered = await prisma.job.updateMany({
-    where: { status: 'processing', updatedAt: { lt: staleBefore } },
-    data: {
-      status: 'failed',
-      errorMsg: 'Worker restarted while this conversion was still running. Requeue the book to try again.',
-    },
-  });
-  if (recovered.count > 0) {
-    console.warn(`[worker] recovered ${recovered.count} stale processing job(s)`);
-  }
+  // Run once at boot to clear anything left over from a previous crash
+  // that wasn't caught by a startup sweep elsewhere.
+  await sweepStaleProcessingJobs();
+
+  // Then continue sweeping periodically for the lifetime of the worker.
+  // Without this, a mid-runtime crash (worker dies but DB is intact) only
+  // gets cleaned up at the next worker restart — which, if the launcher
+  // supervises and auto-restarts immediately, the user might never notice.
+  staleSweeperHandle = startStaleSweeper();
 
   // Also start the audiobook worker so audiobook jobs sitting on the
   // 'ebook-audiobook' queue actually get processed. Without this, books
