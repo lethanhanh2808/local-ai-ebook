@@ -43,7 +43,6 @@ export async function runChapterPreparationStage(opts: ChapterStageInput): Promi
     repairResult,
     finalMeta,
     deepFormat = false,
-    readerFriendly = false,
     aiEnhance = false,
     aiPrompt,
     onProgress,
@@ -126,7 +125,11 @@ export async function runChapterPreparationStage(opts: ChapterStageInput): Promi
   }
 
   let deepFormatAiCalls = 0;
-  if (deepFormat && chapters.length > 0 && !readerFriendly) {
+  // deepFormat and aiEnhance are now COMPOSABLE: both can run on the same
+  // book. deepFormat runs first (restructures/normalizes the HTML), then
+  // aiEnhance cleans up any residual artifacts. readerFriendly no longer
+  // cancels either stage — it is purely a build-stage CSS swap.
+  if (deepFormat && chapters.length > 0) {
     aiUsed.deepFormat = true;
     const deepResult = await runDeepFormatStage(chapters, {
       enabled: true,
@@ -141,8 +144,7 @@ export async function runChapterPreparationStage(opts: ChapterStageInput): Promi
     firstDeepWarning = deepResult.firstDeepWarning;
   }
 
-  const skipAiEnhance = aiEnhance && chapters.length > 0 && !deepFormat && !readerFriendly;
-  if (skipAiEnhance) {
+  if (aiEnhance && chapters.length > 0) {
     const enhancedResult = await runAiEnhancementStage(chapters, {
       enabled: true,
       aiPrompt,

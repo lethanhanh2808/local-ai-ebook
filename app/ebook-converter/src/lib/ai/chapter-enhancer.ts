@@ -108,11 +108,11 @@ export async function enhanceChapter(
       model: settings.aiModel,
       messages: [
         { role: 'system', content: buildSystemPrompt(customPrompt, language) },
-        // Truncate at 8000 chars (~2000 tokens) — was 12000 but OOM-prone.
-        // Enhancement beyond this rarely changes user-visible readability
-        // (the script just fixes encoding artifacts + boilerplate); longer
-        // chapters still get cleaned, just only on their first 8000 chars.
-        { role: 'user', content: `SOURCE_HTML_BODY_FRAGMENT:\n${bodyHtml.slice(0, 8000)}` },
+        // Send the WHOLE chapter body (no truncation) so the AI sees all of it
+        // and produces a complete, accurate cleanup. The max_tokens cap above
+        // still bounds the *output*, preventing OOM; the input is unbounded by
+        // design (accuracy > speed for chapter enhancement).
+        { role: 'user', content: `SOURCE_HTML_BODY_FRAGMENT:\n${bodyHtml}` },
       ],
       temperature: 0.1,
       max_tokens: safeMaxTokens,
@@ -178,7 +178,8 @@ export async function enhanceChaptersParallel(
             model: undefined, // read from settings inside chatWithStats
             messages: [
               { role: 'system', content: buildSystemPrompt(customPrompt, language) },
-              { role: 'user', content: `SOURCE_HTML_BODY_FRAGMENT:\n${bodyHtml.slice(0, 8000)}` },
+              // Send the WHOLE chapter body (no truncation) for accuracy.
+              { role: 'user', content: `SOURCE_HTML_BODY_FRAGMENT:\n${bodyHtml}` },
             ],
             temperature: 0.1,
             max_tokens: safeMaxTokens,

@@ -49,6 +49,15 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
   // When ON (default), uploaded files start converting immediately.
   // When OFF, files are saved as 'pending' and the user must click "Start" in the queue.
   const [autoStart, setAutoStart] = useState(true);
+  // Preset selector: applies a sensible combination of the AI toggles.
+  // 'custom' is set automatically whenever the user flips an individual toggle.
+  const [preset, setPreset] = useState<'fast' | 'balanced' | 'thorough' | 'custom'>('balanced');
+  const applyPreset = useCallback((p: 'fast' | 'balanced' | 'thorough') => {
+    setPreset(p);
+    if (p === 'fast') { setAiEnhance(true); setDeepFormat(false); }
+    else if (p === 'balanced') { setAiEnhance(true); setDeepFormat(true); }
+    else { setAiEnhance(true); setDeepFormat(true); setAiWatermarkClean(true); }
+  }, []);
   // Phase 4.3 — Calibre probe. When ok=true, MOBI is added to the dropzone
   // accept list. When ok=false, a banner points the user to Settings →
   // Importers to install Calibre. `null` means we haven't fetched yet; the
@@ -245,9 +254,52 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
 
       {/* AI Enhancement Options */}
       <Card className="rounded-xl border overflow-hidden divide-y divide-border">
+        {/* Preset selector */}
+        <div className="flex flex-wrap items-center gap-2 px-4 py-3 bg-muted/30">
+          <span className="text-xs font-medium text-muted-foreground mr-1">Preset:</span>
+          <button
+            type="button"
+            onClick={() => applyPreset('fast')}
+            className={cn(
+              'text-xs px-2.5 py-1 rounded-full border transition-colors',
+              preset === 'fast'
+                ? 'bg-primary text-primary-foreground border-primary'
+                : 'border-border hover:bg-accent',
+            )}
+          >
+            Fast
+          </button>
+          <button
+            type="button"
+            onClick={() => applyPreset('balanced')}
+            className={cn(
+              'text-xs px-2.5 py-1 rounded-full border transition-colors',
+              preset === 'balanced'
+                ? 'bg-primary text-primary-foreground border-primary'
+                : 'border-border hover:bg-accent',
+            )}
+          >
+            Balanced
+          </button>
+          <button
+            type="button"
+            onClick={() => applyPreset('thorough')}
+            className={cn(
+              'text-xs px-2.5 py-1 rounded-full border transition-colors',
+              preset === 'thorough'
+                ? 'bg-primary text-primary-foreground border-primary'
+                : 'border-border hover:bg-accent',
+            )}
+          >
+            Thorough
+          </button>
+          {preset === 'custom' && (
+            <span className="text-[10px] rounded-full bg-muted-foreground/15 text-muted-foreground px-1.5 py-0.5 font-medium">CUSTOM</span>
+          )}
+        </div>
         {/* Light AI enhance (fast) */}
         <div className="flex items-center gap-3 px-4 py-3 select-none">
-          <Switch checked={aiEnhance} onCheckedChange={setAiEnhance} label="AI Enhancement" />
+          <Switch checked={aiEnhance} onCheckedChange={(v) => { setAiEnhance(v); setPreset('custom'); }} label="AI Enhancement" />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5">
               <Sparkles className="h-4 w-4 text-primary" />
@@ -264,7 +316,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
 
         {/* Deep format (slow, Vietnamese-novel optimized) */}
         <div className="flex items-center gap-3 px-4 py-3 select-none">
-          <Switch checked={deepFormat} onCheckedChange={setDeepFormat} label="Deep Format" />
+          <Switch checked={deepFormat} onCheckedChange={(v) => { setDeepFormat(v); setPreset('custom'); }} label="Deep Format" />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5">
               <Wand2 className="h-4 w-4 text-primary" />
@@ -295,6 +347,14 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
             </div>
           </div>
         </div>
+
+        {/* Composable hint: both AI stages can run together now */}
+        {aiEnhance && deepFormat && (
+          <div className="flex items-start gap-2 px-4 py-2 text-[11px] text-amber-700 dark:text-amber-300 bg-amber-500/10 border-t border-amber-500/20">
+            <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+            <span>Deep Format chạy trước, sau đó AI Enhancement dọn dẹp tiếp. Cả hai đều gửi <strong>toàn bộ chương</strong> cho AI để độ chính xác cao nhất (có thể chậm với sách dài).</span>
+          </div>
+        )}
 
         {/* Custom prompt (shown when either AI option is on) */}
         {(aiEnhance || deepFormat) && (
@@ -396,7 +456,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
       {/* AI Watermark Cleanup */}
       <Card className="rounded-xl border overflow-hidden">
         <div className="flex items-center gap-3 px-4 py-3 select-none">
-          <Switch checked={aiWatermarkClean} onCheckedChange={setAiWatermarkClean} label="AI Watermark Cleanup" />
+          <Switch checked={aiWatermarkClean} onCheckedChange={(v) => { setAiWatermarkClean(v); setPreset('custom'); }} label="AI Watermark Clean" />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5">
               <ShieldOff className="h-4 w-4 text-primary" />
