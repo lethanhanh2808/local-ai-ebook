@@ -1,6 +1,6 @@
 'use client';
 // src/components/jobs/JobCard.tsx – Full-width conversion job card with live stats
-import { forwardRef, useState, useEffect, useRef, useCallback } from 'react';
+import { forwardRef, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   CheckCircle2, XCircle, Loader2, Clock, Download, Trash2,
@@ -342,6 +342,23 @@ export const JobCard = forwardRef<HTMLDivElement, JobCardProps>(function JobCard
               }
               return null;
             })()}
+            {(() => {
+              // Auto-enqueue report from the worker: shows how many bible
+              // jobs were fanned out after a deep-format conversion so the
+              // user knows the integration is working without digging
+              // into settings.
+              const fanout = (job.report as { bibleFanout?: { enqueued: number; skipped: boolean; reason?: string } } | null)?.bibleFanout;
+              if (!fanout || fanout.skipped) return null;
+              return (
+                <span
+                  className="flex items-center gap-1 text-sky-700 dark:text-sky-300 font-medium"
+                  title={`Đã tự động enqueue ${fanout.enqueued} bible-refresh job — character bible sẽ được build từ bản text đã được AI format (deep-format source).`}
+                >
+                  <BookOpen className="h-3 w-3" />
+                  Bible auto-enqueue · {fanout.enqueued} chương
+                </span>
+              );
+            })()}
             {validation?.score !== undefined && (
               <span className="flex items-center gap-1">
                 <CheckCircle2 className="h-3 w-3 text-success-fg" />Score {String(validation.score)}/100
@@ -457,10 +474,20 @@ interface DebugConsoleProps {
 
 interface LogEntry { ts: number; level: 'info' | 'warn' | 'error' | 'debug'; stage: string; message: string; meta?: Record<string, unknown>; }
 
+// Levels shown in the level-filter chip group. Order matters — it
+// drives the chip order and the default-on set.
+const LEVELS: LogEntry['level'][] = ['info', 'warn', 'error', 'debug'];
+
 function DebugConsole({ logPath, open, onClose }: DebugConsoleProps) {
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [autoscroll, setAutoscroll] = useState(true);
+  // Default: show info + warn + error, hide debug (heartbeats).
+  // The user can toggle debug back on to see liveness pings.
+  const [levelFilter, setLevelFilter] = useState<Set<LogEntry['level']>>(
+    new Set(['info', 'warn', 'error']),
+  );
+  const [showMeta, setShowMeta] = useState(false);
   const tailRef = useRef<HTMLDivElement | null>(null);
   const lastTsRef = useRef<number>(0);
 
@@ -500,16 +527,73 @@ function DebugConsole({ logPath, open, onClose }: DebugConsoleProps) {
     return () => clearInterval(t);
   }, [open, fetchLogs]);
 
+  const toggleLevel = (lvl: LogEntry['level']) => {
+    setLevelFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(lvl)) next.delete(lvl); else next.add(lvl);
+      return next;
+    });
+  };
+
+  const visibleEntries = useMemo(
+    () => entries.filter((e) => levelFilter.has(e.level)),
+    [entries, levelFilter],
+  );
+
+  // Header counters per level — quick at-a-glance.
+  const counts = useMemo(() => {
+    const out: Record<LogEntry['level'], number> = { info: 0, warn: 0, error: 0, debug: 0 };
+    for (const e of entries) out[e.level] = (out[e.level] ?? 0) + 1;
+    return out;
+  }, [entries]);
+
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }} widthClass="max-w-4xl">
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }} widthClass="max-w-5xl">
       <div className="flex flex-col max-h-[80vh]">
-        <header className="flex items-center justify-between px-4 py-3 border-b border-border">
-          <div className="flex items-center gap-2">
-            <Terminal className="h-4 w-4 text-primary" />
-            <h3 className="font-semibold text-sm">Debug Console</h3>
-            <span className="text-[10px] text-muted-foreground font-mono">{logPath.split('/').pop()}</span>
+        <header className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-border">
+          <div className="flex items-center gap-2 min-w-0">
+            <Terminal className="h-4 w-4 text-primary shrink-0" />
+            <h3 className="font-semibold text-sm shrink-0">Debug Console</h3>
+            <span className="text-[10px] text-muted-foreground font-mono truncate" title={logPath}>
+              {logPath.split('/').pop()}
+            </span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Level filter — clickable chips that show counts and
+                toggle visibility for each level. Default: hide debug
+                so heartbeats don't drown real progress. */}
+            {LEVELS.map((lvl) => {
+              const on = levelFilter.has(lvl);
+              return (
+                <button
+                  key={lvl}
+                  type="button"
+                  onClick={() => toggleLevel(lvl)}
+                  title={on ? `Ẩn ${lvl}` : `Hiện ${lvl}`}
+                  className={cn(
+                    'inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono border transition-colors',
+                    on ? 'border-border' : 'border-transparent opacity-40 line-through',
+                    lvl === 'info' && on && 'bg-sky-100 text-sky-900 border-sky-300 dark:bg-sky-950/40 dark:text-sky-200 dark:border-sky-700',
+                    lvl === 'warn' && on && 'bg-amber-100 text-amber-900 border-amber-300 dark:bg-amber-950/40 dark:text-amber-200 dark:border-amber-700',
+                    lvl === 'error' && on && 'bg-red-100 text-red-900 border-red-300 dark:bg-red-950/40 dark:text-red-200 dark:border-red-700',
+                    lvl === 'debug' && on && 'bg-zinc-100 text-zinc-600 border-zinc-300 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700',
+                  )}>
+                  <span className="font-semibold uppercase">{lvl}</span>
+                  <span className="opacity-70">{counts[lvl]}</span>
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setShowMeta((v) => !v)}
+              title={showMeta ? 'Ẩn metadata' : 'Hiện metadata'}
+              className={cn(
+                'inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono border',
+                showMeta ? 'border-primary/40 bg-primary/10 text-primary' : 'border-border text-muted-foreground',
+              )}>
+              <span className="font-semibold">{showMeta ? '–' : '+'}</span>
+              <span>meta</span>
+            </button>
             <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <input
                 type="checkbox"
@@ -519,7 +603,9 @@ function DebugConsole({ logPath, open, onClose }: DebugConsoleProps) {
               />
               Auto-scroll
             </label>
-            <span className="text-xs text-muted-foreground">{entries.length} entries</span>
+            <span className="text-xs text-muted-foreground whitespace-nowrap">
+              {visibleEntries.length}/{entries.length} entries
+            </span>
             <button onClick={onClose} className="text-muted-foreground hover:text-foreground p-1" title="Đóng">
               <XCircle className="h-4 w-4" />
             </button>
@@ -528,31 +614,58 @@ function DebugConsole({ logPath, open, onClose }: DebugConsoleProps) {
         <DialogBody className="p-0">
           <div
             ref={tailRef}
-            className="overflow-y-auto bg-popover text-popover-foreground font-mono text-[11px] leading-relaxed p-3"
-            style={{ minHeight: 300, maxHeight: 'calc(80vh - 60px)' }}>
+            className="overflow-y-auto overflow-x-hidden bg-popover text-popover-foreground font-mono text-[11px] leading-snug p-2"
+            style={{ minHeight: 320, maxHeight: 'calc(80vh - 60px)' }}>
             {error && <div className="text-destructive p-2">Error: {error}</div>}
             {!error && entries.length === 0 && <div className="text-muted-foreground p-2">Đang tải log...</div>}
-            {entries.map((e, i) => (
-              <div key={i} className={cn('flex gap-2 hover:bg-muted px-1 -mx-1 rounded',
-                e.level === 'error' && 'text-destructive',
-                e.level === 'warn' && 'text-bible-pending-fg',
-                e.level === 'debug' && 'text-muted-foreground',
-              )}>
-                <span className="text-muted-foreground shrink-0 w-20">
-                  {new Date(e.ts).toLocaleTimeString()}
-                </span>
-                <span className={cn('shrink-0 w-16 truncate',
-                  e.stage === 'ai-call' && 'text-primary',
-                  e.stage === 'chapter-done' && 'text-success-fg',
-                  e.level === 'error' && 'text-destructive',
+            {entries.length > 0 && visibleEntries.length === 0 && (
+              <div className="text-muted-foreground p-2">
+                Đã lọc hết {entries.length} entries. Bật lại chip <span className="font-semibold">INFO</span> hoặc <span className="font-semibold">DEBUG</span> phía trên để xem.
+              </div>
+            )}
+            {visibleEntries.map((e, i) => (
+              <div
+                key={i}
+                className={cn(
+                  'flex flex-col gap-0.5 px-2 py-1 rounded hover:bg-muted/60 border border-transparent',
+                  e.level === 'error' && 'bg-red-50/60 border-red-200 dark:bg-red-950/20 dark:border-red-900',
+                  e.level === 'warn' && 'bg-amber-50/60 dark:bg-amber-950/20',
+                  e.level === 'debug' && 'text-muted-foreground',
                 )}>
-                  [{e.stage}]
-                </span>
-                <span className="flex-1 break-all">{e.message}</span>
-                {e.meta && (
-                  <span className="text-muted-foreground text-[10px] shrink-0">
-                    {JSON.stringify(e.meta)}
+                <div className="flex items-start gap-2 min-w-0">
+                  <span className="text-muted-foreground shrink-0 w-[68px] tabular-nums" title={new Date(e.ts).toISOString()}>
+                    {new Date(e.ts).toLocaleTimeString()}
                   </span>
+                  <span
+                    className={cn(
+                      'shrink-0 px-1.5 rounded text-[10px] font-semibold tracking-wide',
+                      e.stage === 'ai-call' && 'bg-blue-100 text-blue-900 dark:bg-blue-950/50 dark:text-blue-200',
+                      e.stage === 'chapter-done' && 'bg-emerald-100 text-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-200',
+                      (e.stage === 'stale-recovery' || e.level === 'error') && 'bg-red-100 text-red-900 dark:bg-red-950/60 dark:text-red-200',
+                      e.stage === 'start' && 'bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-200',
+                      e.level === 'debug' && 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400',
+                      !['ai-call','chapter-done','stale-recovery','start'].includes(e.stage)
+                        && e.level !== 'error' && e.level !== 'debug'
+                        && 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
+                    )}
+                    title={e.stage}>
+                    {e.stage}
+                  </span>
+                  <span
+                    className={cn(
+                      'flex-1 min-w-0 whitespace-pre-wrap wrap-anywhere break-words',
+                      e.level === 'error' && 'font-semibold text-red-900 dark:text-red-200',
+                    )}
+                    title={e.message}>
+                    {e.message}
+                  </span>
+                </div>
+                {showMeta && e.meta && (
+                  <pre
+                    className="ml-[76px] mt-0.5 p-1.5 bg-muted/50 rounded text-[10px] text-muted-foreground overflow-x-auto whitespace-pre-wrap break-all"
+                    title={JSON.stringify(e.meta, null, 2)}>
+                    {JSON.stringify(e.meta, null, 2)}
+                  </pre>
                 )}
               </div>
             ))}
