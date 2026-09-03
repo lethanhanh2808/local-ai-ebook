@@ -74,6 +74,10 @@ interface Settings {
   aiEnhanceConcurrency: number;
   // Character-bible analysis concurrency (parallel chapter analysis)
   bibleConcurrency: number;
+  // Auto-fan-out bible refresh after a deepFormat conversion completes.
+  // Off by default — power users can flip it on once they're happy with
+  // the deep-format quality. See conversion-pipeline.ts + worker/index.ts.
+  bibleAutoEnqueueOnDeepFormat?: boolean;
 }
 
 interface WatermarkRow {
@@ -298,6 +302,7 @@ export default function SettingsPage() {
         workerChapterConcurrency: settings.workerChapterConcurrency,
         aiEnhanceConcurrency: settings.aiEnhanceConcurrency ?? 3,
         bibleConcurrency: settings.bibleConcurrency ?? 5,
+        bibleAutoEnqueueOnDeepFormat: settings.bibleAutoEnqueueOnDeepFormat ?? false,
         imageBaseUrl: settings.imageBaseUrl,
         imageAllowInsecureTls: settings.imageAllowInsecureTls,
         imageModel: settings.imageModel,
@@ -1067,6 +1072,13 @@ export default function SettingsPage() {
                 onChange={(v) => update('defaultDeepFormat', v)}
               />
               <ToggleRow
+                icon={<BookOpen className="h-4 w-4 text-sky-600 dark:text-sky-400" />}
+                label="Tự động phân tích nhân vật sau Deep format"
+                tooltip="Khi bật, mỗi lần convert có Deep format xong, hệ thống tự động chạy 'Phân tích' (Nhân vật) trên TẤT CẢ các chương — dùng đúng bản text đã được AI format, nên character mention / hội thoại chính xác hơn. Tốn thêm 1 LLM call / chương. Tắt nếu muốn chạy thủ công."
+                checked={settings.bibleAutoEnqueueOnDeepFormat ?? false}
+                onChange={(v) => update('bibleAutoEnqueueOnDeepFormat', v)}
+              />
+              <ToggleRow
                 icon={<ShieldOff className="h-4 w-4" />}
                 label="AI watermark cleaning"
                 tooltip="Tự động phát hiện & loại bỏ quảng cáo / watermark cuối chương (có memory để lần sau detect nhanh hơn)."
@@ -1225,18 +1237,20 @@ export default function SettingsPage() {
                   )}
 
                   <Field label="Art style" htmlFor="settings-image-style"
-                    tooltip="Default is black-and-white anime line-art — keeps cover + chapters visually cohesive. Same character regenerates with matching look via per-chapter seed anchoring."
+                    tooltip="Default is chibi / kawaii — cute super-deformed style with vibrant color, fun and playful. B&W family below keeps cover + chapters visually cohesive and is easier for per-character image consistency."
                   >
                     <Select value={settings.imageStyle} onValueChange={(v) => update('imageStyle', v)}>
                       <SelectTrigger id="settings-image-style" className="w-full" aria-label="Art style">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {/* B&W family — preferred for novels; covers + chapter
-                            illustrations stay in the same visual language and
-                            character consistency (per-chapter seed anchoring)
-                            is easier when the provider has no colour to guess. */}
-                        <SelectItem value="bw-anime">Anime line-art (Đen trắng) — RECOMMENDED for novels</SelectItem>
+                        {/* Chibi / kawaii — DEFAULT for novels. Fun, playful,
+                            cute super-deformed (2-3 head proportions), bright
+                            color. NOT monochrome — colour is the payoff. */}
+                        <SelectItem value="chibi">Chibi / kawaii (màu, dễ thương) — RECOMMENDED for novels</SelectItem>
+                        {/* B&W family — cohesive monochrome, easier per-character
+                            consistency via per-chapter seed anchoring. */}
+                        <SelectItem value="bw-anime">Anime line-art (Đen trắng)</SelectItem>
                         <SelectItem value="bw-manga">Manga / manhua (Đen trắng)</SelectItem>
                         <SelectItem value="bw-ink">Ink-wash line drawing (Đen trắng, 水墨)</SelectItem>
                         <SelectItem value="bw-sketch">Pencil sketch (Đen trắng)</SelectItem>

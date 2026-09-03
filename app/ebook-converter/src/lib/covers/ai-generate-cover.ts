@@ -76,7 +76,7 @@ interface CoverDesign {
   /** A short Vietnamese tagline / subtitle for the cover (optional). */
   tagline: string;
   /** Style hint: ink, watercolor, painting, etc. */
-  style: 'ink' | 'watercolor' | 'painting' | 'cinematic' | 'sketch' | 'bw-anime' | 'bw-manga' | 'bw-ink' | 'bw-sketch';
+  style: 'ink' | 'watercolor' | 'painting' | 'cinematic' | 'sketch' | 'bw-anime' | 'bw-manga' | 'bw-ink' | 'bw-sketch' | 'chibi';
   /** Accent color for the title (hex). */
   accent: string;
   /** Title text color (hex) — light or dark. */
@@ -160,7 +160,7 @@ async function designCoverConcept(opts: AICoverOptions): Promise<CoverDesign> {
 Mandatory fields the JSON MUST include:
 - imagePrompt (string, English only, 80-180 words) — concrete SCENE description for an image-generation model. NO text in the image. Phrase it as a single vivid paragraph covering: setting/architecture, the central subject, mood/lighting, artistic style (e.g. "cinematic photo", "digital painting", "ink wash with color accents", "oil painting"), and a colour palette. Use English-only words; do NOT include any Vietnamese characters in this field.
 - tagline (string, Vietnamese, 2-6 words) — a short evocative subtitle. Empty string "" if not applicable.
-- style (enum) — must be one of: ink | watercolor | painting | cinematic | sketch
+- style (enum) — must be one of: ink | watercolor | painting | cinematic | sketch | bw-anime | bw-manga | bw-ink | bw-sketch | chibi
 - accent (string hex) — accent colour for the title. Suggested for this genre: ${art.accent}
 - textColor (string hex) — title colour ("#ffffff" for dark backgrounds, "#1a1a2e" for light)
 - background (enum "dark" | "light") — already known for this genre to be ${art.bgDark ? '"dark"' : '"light"'}; please use exactly that.
@@ -247,7 +247,7 @@ function isLikelyEnglishPrompt(s: string): boolean {
 }
 
 function isCoverStyleEnum(v: unknown): v is CoverDesign['style'] {
-  return typeof v === 'string' && (GENRE_SPECS as any) && /^(ink|watercolor|painting|cinematic|sketch|bw-anime|bw-manga|bw-ink|bw-sketch)$/.test(v);
+  return typeof v === 'string' && (GENRE_SPECS as any) && /^(ink|watercolor|painting|cinematic|sketch|bw-anime|bw-manga|bw-ink|bw-sketch|chibi)$/.test(v);
 }
 
 /** Map our cover-style enum to the image-generator's ImageStyle enum.
@@ -263,6 +263,7 @@ function coverStyleToImageStyle(s: CoverDesign['style']): ImageStyle {
     case 'cinematic':  return 'none';   // provider default — full colour
     case 'ink':        return 'ink';
     case 'sketch':     return 'sketch';
+    case 'chibi':      return 'chibi';
   }
 }
 

@@ -15,11 +15,19 @@ import { runPreflightStage } from './conversion-pipeline-preflight';
 import { runWatermarkCleanupStage } from './conversion-pipeline-watermark';
 import { extractBody, extractTitleFromBody, prepareChapterBodies, stripLeadingHeadings } from './conversion-pipeline-content';
 import { extractDataUriImages, rewriteImageSources, stripImages } from './conversion-pipeline-image-ops';
+import { writeDeepFormatSidecar, type SidecarChapter } from './deep-format-sidecar';
 
 export interface PipelineOptions {
   inputPath: string;
   outputPath: string;
   originalExt: string;
+  /** Book UUID. When provided, the pipeline writes a deep-format sidecar
+   *  (`<outputPath>.deepFormat.json`) containing the cleaned chapter text so
+   *  the character-bible worker can read from the formatted source instead
+   *  of re-parsing the original EPUB. Required to enable sidecar persistence;
+   *  leaving it null disables sidecar writes for back-compat with the test
+   *  harness. */
+  bookId?: string | null;
   fontDir?: string;
   aiEnhance?: boolean;
   aiWatermarkClean?: boolean;
@@ -60,6 +68,12 @@ export interface PipelineResult {
   deepFormatAiCalls?: number;
   /** If the deep-format stage produced warnings (e.g. AI key missing), this is the first one. */
   deepFormatWarning?: string;
+  /** When deepFormat was used and a sidecar was written, the file path +
+   *  byte size of the JSON next to the EPUB. null when the sidecar was
+   *  skipped or `bookId` wasn't supplied to the pipeline. */
+  deepFormatSidecar?: { path: string; bytes: number } | null;
+  /** Sidecar write failure reason (non-fatal — see conversion-pipeline.ts). */
+  deepFormatSidecarError?: string | null;
 }
 
 export async function runConversionPipeline(opts: PipelineOptions): Promise<PipelineResult> {
@@ -132,6 +146,40 @@ export async function runConversionPipeline(opts: PipelineOptions): Promise<Pipe
     onProgress: progress,
   });
 
+  // ── Deep-format sidecar ──────────────────────────────────────────────
+  // When the user opted into deepFormat AND we actually have an AI-
+  // produced set of chapters, persist the cleaned chapter text next to
+  // the EPUB so the character-bible worker can read the SAME text the
+  // user sees in their ebook (no mojibake / watermark noise to confuse
+  // character extraction). Best-effort: a sidecar write failure never
+  // fails the conversion — the bible worker will fall back to the raw
+  // EPUB parse.
+  let deepFormatSidecar: { path: string; bytes: number } | null = null;
+  let deepFormatSidecarError: string | null = null;
+  if (aiUsed.deepFormat && opts.bookId) {
+    const sidecarChapters: SidecarChapter[] = chapters.map((ch) => ({
+      // The bible worker keys everything on chapterIndex (the position
+      // in the source EPUB's htmlFiles). We trust the chapter order here
+      // because runChapterPreparationStage() preserves the source order
+      // (filtered only by `looksLikeCoverPage` at the very start).
+      index: chapterIndexForEntry(chapters, ch),
+      title: ch.title,
+      text: stripHtml(ch.html).slice(0, MAX_CHAPTER_TEXT_CHARS),
+    }));
+    const result = await writeDeepFormatSidecar({
+      outputPath,
+      bookId: opts.bookId,
+      chapters: sidecarChapters,
+      model: opts.aiPrompt ? null : null, // model is plumbed elsewhere
+      aiCalls: deepFormatAiCalls,
+    });
+    if (result.ok) {
+      deepFormatSidecar = { path: result.path, bytes: result.bytes };
+    } else {
+      deepFormatSidecarError = result.error;
+    }
+  }
+
   await progress(100, 'Done!');
 
   return {
@@ -142,5 +190,49 @@ export async function runConversionPipeline(opts: PipelineOptions): Promise<Pipe
     aiUsed,
     deepFormatAiCalls: deepFormat ? deepFormatAiCalls : undefined,
     deepFormatWarning: firstDeepWarning ?? undefined,
+    deepFormatSidecar,
+    deepFormatSidecarError,
   };
 }
+
+/** Resolve the position of a `ChapterEntry` within the final chapter list.
+ *  `ChapterEntry.id` is stable (e.g. "chapter001") but the bible worker
+ *  uses the position-in-htmlFiles index as its key. We track positions
+ *  by mapping id→index inside this file because the input chapters array
+ *  here is the SAME array as `chapterStage.chapters` (deepFormat +
+ *  enhance preserve order). Returns the index, or -1 if not found. */
+function chapterIndexForEntry(
+  chapters: ChapterEntry[],
+  target: ChapterEntry,
+): number {
+  return chapters.findIndex((c) => c.id === target.id);
+}
+
+/** Best-effort HTML→text stripper, scoped to the sidecar use case. We keep
+ *  it simple here because the chapter HTML has already been normalized by
+ *  `normalizeChapterHtml` + the deep-format stage — script/style tags,
+ *  inline styles, and complex media shouldn't survive to this point. */
+function stripHtml(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<head[\s\S]*?<\/head>/gi, ' ')
+    .replace(/<\/(p|div|section|h[1-6]|li|br)>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/** Hard cap on per-chapter text written to the sidecar. The bible worker
+ *  applies its own per-call `bibleChapterChars` truncation on read, so we
+ *  only need to prevent absurdly-large chapters from blowing up the JSON.
+ *  200 KB of UTF-8 covers ~50k Vietnamese words — far beyond any novel
+ *  chapter we've seen (Eragon's longest is ~25 KB). */
+const MAX_CHAPTER_TEXT_CHARS = 200_000;

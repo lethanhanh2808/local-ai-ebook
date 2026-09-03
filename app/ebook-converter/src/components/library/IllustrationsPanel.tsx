@@ -256,7 +256,7 @@ export function IllustrationsPanel({ bookId, variant = 'card' }: IllustrationsPa
             <p className="text-[10px] text-muted-foreground">
               Mỗi ảnh = 1 AI call (~$0.04 MiniMax / $0.12 DALL-E 3). {maxPerBook} ảnh ≈
               <span className="font-semibold ml-0.5">${(0.04 * maxPerBook).toFixed(2)} – ${(0.12 * maxPerBook).toFixed(2)}</span> per book.
-              Style đang dùng: <span className="font-mono">{settings?.imageStyle || 'ink'}</span>.
+              Style đang dùng: <span className="font-mono">{settings?.imageStyle || 'chibi'}</span>.
             </p>
           )}
         </div>

@@ -183,6 +183,35 @@ export function BibleAnalysisControls({ bookId, onAnalysisComplete }: Props) {
       setRunState('done');
       toast('success', 'Phân tích nhân vật hoàn tất');
       await loadStatus();
+      // 2026-09-02: After a successful range analysis, run the per-book
+      // auto voice-assign pass for any newly-created supporting/minor/
+      // crowd characters that don't have a voice yet. The bible analysis
+      // surfaces dozens of minor characters; without this step the
+      // voice-plan suggester would just call pickBestBuiltInVoice() per
+      // sentence and put every male minor on the same voice. Idempotent
+      // and fast (uses deterministic hashing + cached common-pool).
+      try {
+        const r2 = await fetch(`/api/library/${bookId}/characters/assign-voices-auto`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        if (r2.ok) {
+          const data = (await r2.json()) as {
+            assigned?: number;
+            considered?: number;
+            alreadyHadVoice?: number;
+          };
+          const a = data.assigned ?? 0;
+          if (a > 0) {
+            toast('success', `Đã tự động gán giọng cho ${a} nhân vật phụ mới`);
+          } else if ((data.considered ?? 0) > 0) {
+            toast('info', 'Các nhân vật phụ đang chờ xác nhận giới tính');
+          }
+        }
+      } catch {
+        /* best-effort — bible result still useful on its own */
+      }
     } catch (e) {
       if ((e as Error).name === 'AbortError') {
         setRunState('idle');
@@ -196,7 +225,7 @@ export function BibleAnalysisControls({ bookId, onAnalysisComplete }: Props) {
       // even on error/abort, so any partial results are shown.
       onAnalysisComplete?.();
     }
-  }, [bookId, status, from, to, forceRerun, loadStatus, onAnalysisComplete, toast]);
+  }, [bookId, status, from, to, forceRerun, loadStatus, onAnalysisComplete, toast, concurrency]);
 
   const stop = useCallback(() => {
     abortRef.current?.abort();

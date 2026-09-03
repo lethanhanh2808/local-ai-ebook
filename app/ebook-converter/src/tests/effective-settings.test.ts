@@ -40,16 +40,25 @@ describe('effective settings precedence', () => {
     expect(effective.aiTemperature).toBe(0.4);
   });
 
-  it('prefers session override over app and user defaults', () => {
+it('uses session cookie only to fill null/undefined DB slots (DB wins)', () => {
+    // The DB is the source of truth. The session cookie is a per-browser
+    // fallback that only fills slots where the DB has no value — it must
+    // NEVER shadow a saved DB setting (otherwise an old browser cookie
+    // could resurrect a stale provider/key and silently break the AI
+    // request with the wrong backend). See settings.ts `mergeEffectiveSettings`.
     const app = { aiProvider: 'openai', aiModel: 'gpt-4o-mini', aiTemperature: 0.2 } as any;
     const user = { aiProvider: 'minimax-cloud', aiModel: 'MiniMax-Text-01', aiTemperature: 0.5 } as any;
-    const session = { aiProvider: 'custom', aiModel: 'custom-model', aiTemperature: 0.8 } as any;
+    // session has a 'theme' that neither DB row set — it should fill that gap.
+    const session = { aiProvider: 'custom', aiModel: 'custom-model', aiTemperature: 0.8, theme: 'dark' } as any;
 
     const effective = mergeEffectiveSettings(app, user, session);
 
-    expect(effective.aiProvider).toBe('custom');
-    expect(effective.aiModel).toBe('custom-model');
-    expect(effective.aiTemperature).toBe(0.8);
+    // DB wins: provider / model / temperature came from the user override.
+    expect(effective.aiProvider).toBe('minimax-cloud');
+    expect(effective.aiModel).toBe('MiniMax-Text-01');
+    expect(effective.aiTemperature).toBe(0.5);
+    // Gap fill: 'theme' was absent in the DB layers, so the cookie value lands.
+    expect(effective.theme).toBe('dark');
   });
 
   it('treats admin as the only role allowed to mutate settings', () => {

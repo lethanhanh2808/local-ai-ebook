@@ -293,33 +293,65 @@ export async function assignVoicesToCharacters(
     const nameLc = c.name.toLowerCase();
     const existing = charByName.get(nameLc);
 
-    // CASE A: character already exists → return current assignment, don't overwrite
+    // CASE A: character already exists → preserve current assignment, but
+    // if they don't have a voice yet (e.g. bible analysis just created
+    // them) treat them as needing one. Don't overwrite an existing voice
+    // — that would clobber user curation.
     if (existing && !c.forceNew) {
-      // Even if a character already exists, we may want to backfill gender/tone
-      // if our previous detection missed them — but only if the new detection
-      // gave us a real value (not 'unknown').
       const backfillGender = (!existing.gender || existing.gender === 'unknown')
         && c.gender && c.gender !== 'unknown';
       const backfillTone = (!existing.tone || existing.tone === 'unknown')
         && c.tone && c.tone !== 'unknown';
-      if (backfillGender || backfillTone) {
-        toUpsert.push({
+
+      if (existing.voiceId) {
+        // Existing character with a voice — nothing to assign. Backfill
+        // gender/tone only if our detection is fresher.
+        if (backfillGender || backfillTone) {
+          toUpsert.push({
+            name: existing.name,
+            aliases: [],
+            role: existing.role ?? 'supporting',
+            age: existing.age ?? null,
+            gender: backfillGender ? c.gender : (existing.gender ?? null),
+            tone: backfillTone ? c.tone : (existing.tone ?? null),
+          });
+        }
+        results.push({
+          characterId: existing.id,
           name: existing.name,
-          aliases: [],
+          voiceId: existing.voiceId,
+          builtinName: existing.voiceId
+            ? voiceByName.get(existing.voiceId)?.builtinName ?? null
+            : null,
           role: existing.role ?? 'supporting',
-          age: existing.age ?? null,
-          gender: backfillGender ? c.gender : (existing.gender ?? null),
-          tone: backfillTone ? c.tone : (existing.tone ?? null),
+          isNew: false,
         });
+        continue;
       }
+
+      // CASE A': existing character, NO voice yet. Pick a role + voice for
+      // them using the same logic as new characters, then upsert.
+      const role = c.role && c.role !== 'crowd' && c.role !== 'supporting' && c.role !== 'minor' && c.role !== 'main'
+        ? pickRole(c, existingChars)
+        : (existing.role ?? pickRole(c, existingChars));
+      const voiceId = await pickOrCreateVoice({ ...c, role }, role, voiceByName, bookId);
+      toUpsert.push({
+        name: existing.name,
+        aliases: c.aliases ?? existing.aliases ?? [],
+        voiceId,
+        role,
+        age: existing.age ?? c.age ?? null,
+        gender: backfillGender ? c.gender : (existing.gender ?? null),
+        tone: backfillTone ? c.tone : (existing.tone ?? null),
+      });
       results.push({
         characterId: existing.id,
         name: existing.name,
-        voiceId: existing.voiceId,
-        builtinName: existing.voiceId
-          ? voiceByName.get(existing.voiceId)?.builtinName ?? null
+        voiceId: voiceId ?? null,
+        builtinName: voiceId
+          ? voiceByName.get(voiceId)?.builtinName ?? null
           : null,
-        role: existing.role ?? 'supporting',
+        role,
         isNew: false,
       });
       continue;

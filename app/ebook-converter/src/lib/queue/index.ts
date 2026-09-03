@@ -53,7 +53,12 @@ export interface CharacterBibleJobData {
    *  patches land in PendingBibleDiff for user review. */
   autoMerge?: boolean;
   /** Why the job was enqueued. */
-  reason?: 'chapter-close' | 'book-load' | 'manual';
+  reason?: 'chapter-close' | 'book-load' | 'manual' | 'deep-format';
+  /** When true, the bible worker should prefer the deep-format sidecar
+   *  (if one exists next to the EPUB) over the raw EPUB parse. The worker
+   *  already does this opportunistically — this flag just makes the
+   *  intent explicit and lets the worker log it for diagnostics. */
+  useDeepFormatSidecar?: boolean;
 }
 
 const redisConnection = {

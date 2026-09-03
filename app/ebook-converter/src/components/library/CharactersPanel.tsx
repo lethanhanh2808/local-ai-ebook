@@ -83,8 +83,16 @@ interface PendingDiffView {
     newCharacter?: { name: string; aliases?: string[]; gender?: string; role?: string };
     updateFields?: { description?: string | null; personality?: string | null; speechStyle?: string | null; visualDescription?: string | null };
     relationship?: { fromName?: string; toName?: string; relationship?: string };
+    appearance?: { chapterIndex: number; mentions: number };
     autoReason?: string;
     evidenceQuote?: string;
+    /** Original LLM-emitted target name, preserved when characterId is null.
+     *  Used to label the queued diff and to recover the target at apply time. */
+    targetName?: string;
+    /** Original LLM-emitted from/to names for queued relationship diffs. */
+    fromName?: string;
+    toName?: string;
+    conflictWith?: string;
   };
   status: string;
   createdAt: string;
@@ -258,7 +266,7 @@ export function CharactersPanel({ bookId, bookLanguage, refreshSignal }: Props) 
     } finally {
       setLoading(false);
     }
-  }, [bookId]);
+  }, [bookId, loadVoiceSettings]);
 
   useEffect(() => { void fetchAll(); }, [fetchAll]);
 
@@ -266,6 +274,7 @@ export function CharactersPanel({ bookId, bookLanguage, refreshSignal }: Props) 
   // analysis completes) so newly-detected characters + the graph appear.
   useEffect(() => {
     if (refreshSignal && refreshSignal > 0) void fetchAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshSignal]);
 
   const stopPreview = useCallback(() => {
@@ -327,7 +336,7 @@ export function CharactersPanel({ bookId, bookLanguage, refreshSignal }: Props) 
       body: JSON.stringify({ characters: [payload] }),
     });
     await fetchAll();
-  }, [bookId, bookLanguage, characters, builtinVoices, fetchAll]);
+  }, [bookId, characters, builtinVoices, fetchAll]);
 
   // ── Character edit (name / aliases / role / gender / age / description) ──
   const openEdit = useCallback((char: Character) => {
@@ -407,17 +416,26 @@ export function CharactersPanel({ bookId, bookLanguage, refreshSignal }: Props) 
     return m;
   }, [characters]);
 
-  // Bulk-apply every non-conflicting pending diff at once.
+  // Bulk-apply every pending diff at once — including conflict diffs
+  // (the route was fixed to honour this; the previous version silently
+  //  skipped every row whenever the user had edited the corresponding
+  //  profile fields, which made the button useless for the common
+  //  "edited-then-refreshed" case).
   const [applyingAll, setApplyingAll] = useState(false);
   const applyAllDiffs = useCallback(async () => {
     setApplyingAll(true);
     try {
       const r = await fetch(`/api/library/${bookId}/characters/bible/diffs/apply-all`, { method: 'POST' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data = await r.json() as { appliedIds?: string[]; skipped?: number };
+      const data = await r.json() as { appliedIds?: string[]; conflictAppliedIds?: string[]; skipped?: number };
       setPendingDiffs((prev) => prev.filter((d) => !(data.appliedIds ?? []).includes(d.id)));
       await fetchAll();
-      toast('success', `Đã áp dụng ${data.appliedIds?.length ?? 0} đề xuất${data.skipped ? ` · ${data.skipped} bỏ qua (xung đột)` : ''}`);
+      const conflictCount = data.conflictAppliedIds?.length ?? 0;
+      const appliedCount = data.appliedIds?.length ?? 0;
+      const suffix = conflictCount > 0
+        ? ` · ${conflictCount} ghi đè chỉnh sửa của bạn`
+        : (data.skipped ? ` · ${data.skipped} bỏ qua (lỗi)` : '');
+      toast('success', `Đã áp dụng ${appliedCount} đề xuất${suffix}`);
     } catch (e) {
       toast('error', e instanceof Error ? e.message : 'Lỗi áp dụng tất cả');
     } finally {
@@ -491,52 +509,90 @@ export function CharactersPanel({ bookId, bookLanguage, refreshSignal }: Props) 
   // (Legacy single-shot detection + review UI removed; range analysis now
   //  lives in BibleAnalysisControls above.)
 
-  // ── One-click auto-assign (detect + apply for unassigned) ──────────────────
+  // ── One-click auto-assign (bulk + AI detect for unassigned) ────────────────
+  // 2026-09-02 revised flow (2 phases):
+  //   Phase 1 — bulk assign voices to all existing supporting/minor/crowd
+  //             characters that don't have a voiceId yet. Uses the new
+  //             /assign-voices-auto endpoint which calls the deterministic
+  //             picker in lib/ai/voice-selector.ts (gender/age/tone aware,
+  //             common-pool rotation for minor/crowd, idempotent).
+  //   Phase 2 — (optional) re-run the top-8 AI detector to find any
+  //             characters the bible analysis might have missed (rare but
+  //             happens when only a few chapters have been scanned) and
+  //             assign voices to those too.
+  // The button is idempotent and safe to spam — nothing happens for chars
+  // that already have a voice.
   const autoAssignVoices = useCallback(async () => {
     setAutoAssigning(true);
     setAutoMsg(null);
     setError(null);
     try {
-      const r = await fetch(`/api/library/${bookId}/characters/detect`, {
+      // ── Phase 1: bulk assign all existing unassigned chars ────────────
+      const bulk = await fetch(`/api/library/${bookId}/characters/assign-voices-auto`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ maxCharacters: 8, language: bookLanguage }),
+        body: JSON.stringify({}),
       });
-      if (!r.ok) throw new Error(`Phân tích thất bại: HTTP ${r.status}`);
-      const data = await r.json() as { characters?: DetectedCharacter[] };
-      const detected = data.characters ?? [];
-      if (detected.length === 0) {
-        setAutoMsg('⚠ AI không phát hiện nhân vật nào. Hãy dùng khung "Phân tích nhân vật" ở trên để quét theo chương.');
-        return;
+      if (!bulk.ok) throw new Error(`Lỗi auto-assign: HTTP ${bulk.status}`);
+      const bulkData = (await bulk.json()) as {
+        assigned?: number;
+        considered?: number;
+        alreadyHadVoice?: number;
+      };
+      const assignedCount = bulkData.assigned ?? 0;
+
+      // ── Phase 2: detect any characters the bible might have missed ────
+      // Skip if all characters already have voices (saves an LLM call).
+      let newlyDetected = 0;
+      const hasUnassigned = characters.some((c) => !c.voiceId && c.role !== 'main');
+      if (hasUnassigned || assignedCount === 0) {
+        const det = await fetch(`/api/library/${bookId}/characters/detect`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ maxCharacters: 8, language: bookLanguage }),
+        });
+        if (det.ok) {
+          const data = (await det.json()) as { characters?: DetectedCharacter[] };
+          const detected = data.characters ?? [];
+          const normalize = (s: string) =>
+            s.toLowerCase().replace(/[.,!?;:'"\`~()\[\]{}]/g, '').replace(/\s+/g, ' ').trim();
+          const existingByName = new Map(characters.map((c) => [normalize(c.name), c]));
+          const toAssign = detected
+            .filter((d) => {
+              const ex = existingByName.get(normalize(d.name));
+              return !ex || !ex.voiceId;
+            })
+            .filter((d) => d.suggested_voice)
+            .map((d) => ({
+              name: d.name,
+              aliases: d.aliases ?? [],
+              voiceName: d.suggested_voice,
+              role: d.role,
+              age: d.age,
+              tone: d.tone,
+            }));
+          if (toAssign.length > 0) {
+            const r2 = await fetch(`/api/library/${bookId}/characters`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ characters: toAssign }),
+            });
+            if (r2.ok) newlyDetected = toAssign.length;
+          }
+        }
       }
-      const normalize = (s: string) => s.toLowerCase().replace(/[.,!?;:'"`~()\[\]{}]/g, '').replace(/\s+/g, ' ').trim();
-      const existingByName = new Map(characters.map((c) => [normalize(c.name), c]));
-      const toAssign = detected
-        .filter((d) => {
-          const ex = existingByName.get(normalize(d.name));
-          return !ex || !ex.voiceId;
-        })
-        .filter((d) => d.suggested_voice)
-        .map((d) => ({
-          name: d.name,
-          aliases: d.aliases ?? [],
-          voiceName: d.suggested_voice,
-          role: d.role,
-          age: d.age,
-          tone: d.tone,
-        }));
-      if (toAssign.length === 0) {
-        setAutoMsg('✓ Tất cả nhân vật AI phát hiện đều đã có giọng — không cần gán thêm.');
-        return;
-      }
-      const r2 = await fetch(`/api/library/${bookId}/characters`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ characters: toAssign }),
-      });
-      if (!r2.ok) throw new Error(`HTTP ${r2.status}`);
+
       await fetchAll();
-      setAutoMsg(`✓ Đã gán ${toAssign.length} giọng: ${toAssign.map((p) => p.name).join(', ')}`);
+      const total = assignedCount + newlyDetected;
+      if (total === 0) {
+        setAutoMsg('✓ Tất cả nhân vật phụ đều đã có giọng.');
+      } else if (newlyDetected > 0 && assignedCount > 0) {
+        setAutoMsg(`✓ Đã gán ${assignedCount} giọng từ danh sách hiện có + phát hiện mới ${newlyDetected} nhân vật.`);
+      } else if (newlyDetected > 0) {
+        setAutoMsg(`✓ Đã phát hiện và gán giọng cho ${newlyDetected} nhân vật mới.`);
+      } else {
+        setAutoMsg(`✓ Đã gán ${assignedCount} giọng cho nhân vật phụ.`);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Lỗi không xác định');
     } finally {
@@ -546,6 +602,14 @@ export function CharactersPanel({ bookId, bookLanguage, refreshSignal }: Props) 
 
   const assignedCount = useMemo(
     () => characters.filter((c) => c.voiceId).length,
+    [characters],
+  );
+
+  // 2026-09-02: surface the count of supporting/minor/crowd characters
+  // that still need a voice — gives the user a clear "before" view so
+  // they know the auto-assign button is worth clicking.
+  const unassignedSupportingCount = useMemo(
+    () => characters.filter((c) => !c.voiceId && c.role !== 'main').length,
     [characters],
   );
 
@@ -570,6 +634,11 @@ export function CharactersPanel({ bookId, bookLanguage, refreshSignal }: Props) 
               <h2 className="text-base font-semibold">Nhân vật &amp; Giọng đọc</h2>
               <p className="mt-0.5 text-xs text-muted-foreground">
                 {characters.length} nhân vật · {assignedCount} đã gán giọng
+                {unassignedSupportingCount > 0 && (
+                  <span className="ml-1.5 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                    {unassignedSupportingCount} nhân vật phụ chưa có giọng
+                  </span>
+                )}
               </p>
             </div>
           </div>
@@ -579,10 +648,15 @@ export function CharactersPanel({ bookId, bookLanguage, refreshSignal }: Props) 
               size="sm"
               onClick={autoAssignVoices}
               disabled={autoAssigning}
-              title="Dùng AI gán giọng cho các nhân vật chưa có"
+              title="Tự động gán giọng cho tất cả nhân vật phụ (supporting/minor/crowd) chưa có giọng — theo giới tính và nhất quán giữa các chương"
             >
               {autoAssigning ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 mr-1" />}
               Gán giọng tự động
+              {unassignedSupportingCount > 0 && (
+                <span className="ml-1 rounded-full bg-primary/15 px-1.5 py-0 text-[10px] font-medium text-primary">
+                  {unassignedSupportingCount}
+                </span>
+              )}
             </Button>
           </div>
         </div>
@@ -671,12 +745,21 @@ export function CharactersPanel({ bookId, bookLanguage, refreshSignal }: Props) 
           <div className="flex flex-col gap-2 p-3">
             {pendingDiffs.map((d) => {
               const charName = d.patch.characterId ? (charNameById.get(d.patch.characterId) ?? d.patch.characterId) : null;
+              // For queued diffs whose characterId is null (target name didn't
+              // resolve at analysis time), fall back to the LLM-emitted target
+              // name so the user sees a real character instead of "—".
               const title =
                 d.patch.kind === 'new'
                   ? `Nhân vật mới: ${d.patch.newCharacter?.name ?? '—'}`
                   : d.patch.kind === 'relationship'
-                    ? `Quan hệ: ${d.patch.relationship?.fromName} → ${d.patch.relationship?.toName}`
-                    : `Cập nhật: ${charName ?? '—'}`;
+                    ? `Quan hệ: ${d.patch.fromName ?? d.patch.relationship?.fromName ?? '?'} → ${d.patch.toName ?? d.patch.relationship?.toName ?? '?'}`
+                    : d.patch.kind === 'appearance'
+                      ? `Xuất hiện: ${d.patch.targetName ?? charName ?? '—'}${
+                          typeof d.patch.appearance?.chapterIndex === 'number'
+                            ? ` (chương ${d.patch.appearance.chapterIndex})`
+                            : ''
+                        }`
+                      : `Cập nhật: ${charName ?? d.patch.targetName ?? '—'}`;
               const isConflict = d.patch.autoReason === 'conflict-with-user-edit';
               const sug = suggestions[d.id];
               const suggesting = suggestingIds.has(d.id);
@@ -779,13 +862,19 @@ export function CharactersPanel({ bookId, bookLanguage, refreshSignal }: Props) 
                   <div className="flex flex-wrap items-center gap-1.5">
                     <Button
                       size="sm"
-                      variant="outline"
+                      variant={isConflict ? 'destructive' : 'outline'}
                       className="h-7 px-2 text-[11px]"
                       onClick={() => applyDiffWith(d.id, sug?.decision === 'merge' ? sug.merged : undefined)}
-                      disabled={isConflict}
-                      title={isConflict ? 'Xung đột với chỉnh sửa của bạn — cần duyệt thủ công' : undefined}
+                      // Conflict diffs are NOW apply-able — that's the whole
+                      // point of queueing them. The user explicitly accepts
+                      // that applying a conflict overwrites their prior edit.
+                      // The destructive button style + red border + tooltip
+                      // make the consequence obvious.
+                      title={isConflict
+                        ? 'Ghi đè chỉnh sửa của bạn bằng giá trị AI đề xuất — không thể undo nhưng đề xuất bị xóa khỏi hàng chờ'
+                        : undefined}
                     >
-                      {sug?.decision === 'merge' ? 'Áp dụng (gộp)' : 'Áp dụng'}
+                      {sug?.decision === 'merge' ? 'Áp dụng (gộp)' : isConflict ? 'Ghi đè bằng đề xuất' : 'Áp dụng'}
                     </Button>
                     {sug?.decision === 'merge' && (
                       <Button
@@ -799,7 +888,13 @@ export function CharactersPanel({ bookId, bookLanguage, refreshSignal }: Props) 
                     )}
                     {isConflict && (
                       <span className="text-[11px] italic text-destructive/80">
-                        Xung đột với chỉnh sửa của bạn — bỏ qua hoặc sửa thủ công.
+                        {d.patch.conflictWith?.startsWith('unknown-target') || d.patch.conflictWith?.startsWith('appearance-unknown')
+                          ? 'AI đề xuất cập nhật cho nhân vật chưa tồn tại — bấm "Ghi đè" sẽ tạo nhân vật và áp dụng.'
+                          : d.patch.conflictWith?.startsWith('new-character-already-exists')
+                            ? 'Tên này đã có nhân vật — bấm "Ghi đè" sẽ gộp alias vào nhân vật hiện có.'
+                            : d.patch.conflictWith?.startsWith('relationship-self-loop')
+                              ? 'AI gộp từ và đến là cùng một nhân vật — bấm "Bỏ qua" nếu không cần chỉnh.'
+                              : 'Trùng với chỉnh sửa của bạn — bấm "Ghi đè" để thay bằng giá trị AI, hoặc "Bỏ qua".'}
                       </span>
                     )}
                   </div>

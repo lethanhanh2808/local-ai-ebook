@@ -9,6 +9,7 @@ import { listBooks, createBook } from '@/lib/db/books';
 import { getJob } from '@/lib/db/jobs';
 import { libraryPath, coverPath, ensureDirs } from '@/lib/storage';
 import { extractCoverFromEpub } from '@/lib/pipeline/epub-cover';
+import { restampDeepFormatSidecar } from '@/lib/pipeline/deep-format-sidecar';
 import { assertWithinRoots, pathRoots, SafePathError } from '@/lib/storage/safe-path';
 
 /** Convert a filename stem to a human-readable title.
@@ -80,6 +81,33 @@ export async function POST(req: NextRequest) {
     fs.copyFileSync(jobOutputPath, dest);
     const fileSize = fs.statSync(dest).size;
 
+    // ── Carry over the deep-format sidecar (if any) ────────────────
+    // When the conversion ran with deepFormat=true the worker wrote a
+    // `<jobOutputPath>.deepFormat.json` next to the EPUB. The character-
+    // bible worker reads this sidecar instead of re-parsing the source,
+    // so we MUST copy it alongside the new library file — otherwise the
+    // user's expensive AI cleanup is invisible to the bible pipeline.
+    // Best-effort: a missing sidecar just means the bible worker falls
+    // back to the raw EPUB (the existing behavior).
+    let deepFormatSidecar: { path: string; bytes: number } | null = null;
+    try {
+      const sidecarSrc = `${jobOutputPath}.deepFormat.json`;
+      if (fs.existsSync(sidecarSrc)) {
+        const sidecarDest = `${dest}.deepFormat.json`;
+        fs.copyFileSync(sidecarSrc, sidecarDest);
+        const sb = fs.statSync(sidecarDest).size;
+        deepFormatSidecar = { path: sidecarDest, bytes: sb };
+        // Re-stamp the sidecar's bookId field with the new Book UUID so
+        // the sidecar remains self-identifying for downstream consumers.
+        // (Read-side tolerates mismatched ids; this just keeps things
+        // clean if the user inspects the file directly.)
+        await restampDeepFormatSidecar({ epubPath: dest, newBookId: bookId })
+          .catch((err) => console.warn('[library-import] sidecar restamp failed:', err));
+      }
+    } catch (err) {
+      console.warn('[library-import] deep-format sidecar copy failed:', err);
+    }
+
     // Extract cover image from EPUB (best-effort)
     let cover: string | undefined;
     try {
@@ -106,7 +134,10 @@ export async function POST(req: NextRequest) {
       notes: body.notes,
     });
 
-    return NextResponse.json(book, { status: 201 });
+    return NextResponse.json(
+      { ...book, deepFormatSidecar },
+      { status: 201 },
+    );
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }

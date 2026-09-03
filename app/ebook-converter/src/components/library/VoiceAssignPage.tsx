@@ -429,17 +429,28 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
   // (e) AI suggest voices — build a PROPOSAL only. The proposal is NOT
   // persisted; the user reviews/edits it and explicitly applies it (which
   // snapshots history first). This avoids accidental overwrites.
+  //
+  // 2026-09-02: the suggest endpoint now auto-creates per-book voice rows
+  // for any unassigned character referenced by the chapter (and the rest
+  // of the book) so the proposal is consistent across chapters. The server
+  // returns `autoAssignedCharIds` — we surface it as a banner so the user
+  // knows what was created under the hood.
+  const [autoAssignedNames, setAutoAssignedNames] = useState<string[] | null>(null);
   const suggestVoices = useCallback(async () => {
     if (!chapterId) return;
     setProposalBusy(true);
     setProposal(null);
+    setAutoAssignedNames(null);
     try {
       const r = await fetch(
         `/api/library/${bookId}/chapters/${encodeURIComponent(chapterId)}/voice-plan/suggest`,
         { method: 'POST' },
       );
       if (!r.ok) throw new Error('suggest failed');
-      const data = await r.json() as { sentences?: PlanSentence[] };
+      const data = await r.json() as {
+        sentences?: PlanSentence[];
+        autoAssignedCharIds?: string[];
+      };
       if (data.sentences) {
         // Preserve order/index; only take the suggested voiceId/charId/source.
         setProposal((prev) => {
@@ -451,12 +462,21 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
           return next;
         });
       }
+      // If the server created voices for new characters, surface a
+      // confirmation banner with the names so the user can sanity-check.
+      const ids = data.autoAssignedCharIds ?? [];
+      if (ids.length > 0) {
+        const names = ids
+          .map((id) => characters[id]?.name)
+          .filter((n): n is string => !!n);
+        setAutoAssignedNames(names);
+      }
     } catch {
       /* best-effort */
     } finally {
       setProposalBusy(false);
     }
-  }, [bookId, chapterId, sentences]);
+  }, [bookId, chapterId, sentences, characters]);
 
   // Push the CURRENT plan to history (the safety net before any apply/restore/
   // manual save). Enforced cap of HISTORY_CAP on the server.
@@ -790,6 +810,32 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
           )}
         </button>
       </div>
+
+      {/* 2026-09-02: confirmation banner shown when the AI suggester had
+          to create voice rows for characters that didn't have one yet
+          (typically supporting/minor characters discovered by "Phân tích
+          nhân vật theo chương" but never voice-assigned). Stays visible
+          until the user dismisses it OR applies the proposal. */}
+      {autoAssignedNames && autoAssignedNames.length > 0 && !proposal && (
+        <div className="flex flex-wrap items-center gap-2 border-b bg-emerald-50 px-4 py-2 text-xs text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200">
+          <Sparkles className="h-3.5 w-3.5" />
+          <span>
+            Đã tự động gán giọng cho <b className="text-foreground">{autoAssignedNames.length}</b> nhân vật phụ mới
+            {autoAssignedNames.length <= 6
+              ? ': ' + autoAssignedNames.join(', ')
+              : ': ' + autoAssignedNames.slice(0, 5).join(', ') + ` (+${autoAssignedNames.length - 5} khác)`}
+            . Chạy lại &ldquo;AI đề xuất&rdquo; để áp dụng vào chương này.
+          </span>
+          <button
+            type="button"
+            onClick={() => setAutoAssignedNames(null)}
+            className="ml-auto inline-flex items-center gap-1 rounded-md border border-emerald-300 px-2 py-0.5 text-[10px] font-medium transition-colors hover:bg-emerald-100 dark:border-emerald-700 dark:hover:bg-emerald-900/40"
+          >
+            <X className="h-3 w-3" />
+            Ẩn
+          </button>
+        </div>
+      )}
 
       {/* (f) AI proposal banner — shown after "AI đề xuất giọng" returns. The
           proposal is NOT saved yet; the user reviews/edits then applies it. */}

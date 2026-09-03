@@ -39,6 +39,7 @@ import {
   recordAppearances,
   ensureCharacter,
   resolveCharacterIds,
+  findCharacterIdByName,
   queueDiff,
   mergeLlmProfilePatch,
   recomputeCharacterRoles,
@@ -88,6 +89,7 @@ export type BibleProgressEvent =
   | { kind: 'fetching-chapter'; chapterIndex: number; chapterFile: string }
   | { kind: 'reading-chapter'; chars: number }
   | { kind: 'calling-llm' }
+  | { kind: 'llm-retry'; attempt: number; backoffMs: number; reason: string }
   | { kind: 'llm-done'; tokens: number; durationMs: number }
   | { kind: 'applying'; autoApplied: number; queued: number; conflicts: number }
   | { kind: 'done'; autoApplied: number; queued: number; conflicts: number; durationMs: number }
@@ -179,34 +181,84 @@ export async function refreshBible(
     chapterText,
     chapterIndices: inputs.map((i) => i.chapterIndex),
   });
-  let patches: RawBiblePatch[];
+  let patches: RawBiblePatch[] = [];
   let tokens = 0;
   try {
     const llmStart = Date.now();
-    patches = await chatJSON<RawBiblePatch[]>({
-      messages: [
-        { role: 'system', content: sysPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      // Force chain-of-thought OFF — for some Vietnamese-trained local
-      // models (and the "MiniMax" provider) thinking tokens eat a large
-      // slice of the output budget and the actual JSON array gets
-      // truncated mid-element. This is what was producing "Unexpected
-      // end of JSON input". The bible task doesn't need reasoning.
-      enable_thinking: false,
-      temperature: 0.2,
-      // 2026-09-01: honor Settings.aiMaxTokens (via chatJSON fallback)
-      // instead of hardcoding 8192. Vietnamese character-bible arrays can
-      // grow quickly when a chapter introduces many new characters. The
-      // chat() helper clamps to 16384 internally as a safety net so a
-      // user-set "Generous" preset (e.g. for reasoning models) still works
-      // without us picking an arbitrary number per call site.
-      // Retry transient upstream failures (504 gateway time-outs from the
-      // MiniMax gateway, empty/dropped responses) so a flaky request doesn't
-      // fail the whole chapter — see rawChat() in src/lib/ai/index.ts.
-      maxRetries: 3,
-      model: opts.model,
-    });
+    // Outer retry loop for transient gateway errors. rawChat() already
+    // retries 5xx/408/429 inside (~7 s total budget), but the openresty
+    // 504s in front of MiniMax have a longer recovery window — when the
+    // gateway is briefly overloaded the failure can persist for 30-60s.
+    // We add an outer loop of 3 attempts with 5/10/20 s backoff so a
+    // temporary spike doesn't permanently fail a chapter. Total wall
+    // budget here is ~35 s; gated by `isTransientGatewayError()` so we
+    // DON'T retry deterministic failures (4xx auth/billing/format) or
+    // model-side JSON parse errors (those won't fix themselves on retry).
+    const maxOuterRetries = 3;
+    let attempt = 0;
+    let lastErr: unknown;
+    while (true) {
+      try {
+        patches = await chatJSON<RawBiblePatch[]>({
+          messages: [
+            { role: 'system', content: sysPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+          // Force chain-of-thought OFF — for some Vietnamese-trained local
+          // models (and the "MiniMax" provider) thinking tokens eat a large
+          // slice of the output budget and the actual JSON array gets
+          // truncated mid-element. This is what was producing "Unexpected
+          // end of JSON input". The bible task doesn't need reasoning.
+          enable_thinking: false,
+          temperature: 0.2,
+          // 2026-09-01: honor Settings.aiMaxTokens (via chatJSON fallback)
+          // instead of hardcoding 8192. Vietnamese character-bible arrays can
+          // grow quickly when a chapter introduces many new characters. The
+          // chat() helper clamps to 16384 internally as a safety net so a
+          // user-set "Generous" preset (e.g. for reasoning models) still works
+          // without us picking an arbitrary number per call site.
+          // Retry transient upstream failures (504 gateway time-outs from the
+          // MiniMax gateway, empty/dropped responses) so a flaky request
+          // doesn't fail the whole chapter — see rawChat() in src/lib/ai/index.ts.
+          // maxRetries: 1 — let rawChat do ONE inner retry (so a fast
+          // 504/empty-response gets a quick second chance with 1s backoff)
+          // but no more. The outer retry loop below handles longer-window
+          // recovery. With maxRetries=1 a single chatJSON takes at most
+          // ~2 × timeoutMs + 1s ≈ 180s; outer loop adds 3 × that + 35s
+          // backoffs ≈ 575s — just under the route's 600s SSE budget.
+          maxRetries: 1,
+          // 2026-09-02: tighten per-attempt timeout. rawChat's default is
+          // 10 minutes, which means a hung upstream (the openresty 504s
+          // sometimes hold the connection open instead of returning a
+          // status) blocks the whole SSE stream for ~10 min before the
+          // outer retry can fire. 90 s is enough for a healthy MiniMax
+          // generation (longest observed: ~55 s for a 25-character bible)
+          // but fails fast on a hanging gateway, so the 5/10/20 s backoffs
+          // in the outer loop get a chance to recover.
+          timeoutMs: 90_000,
+          model: opts.model,
+        });
+        lastErr = undefined;
+        break;
+      } catch (e) {
+        lastErr = e;
+        if (!isTransientGatewayError(e) || attempt >= maxOuterRetries) {
+          throw e;
+        }
+        // Exponential backoff: 5s, 10s, 20s — the openresty 504s typically
+        // resolve in this window. Emit a progress event so the UI can show
+        // "retrying..." instead of a silent pause.
+        const backoff = 5000 * 2 ** attempt;
+        await emit({ kind: 'llm-retry', attempt: attempt + 1, backoffMs: backoff, reason: extractErrorMessage(e).slice(0, 200) });
+        await new Promise((r) => setTimeout(r, backoff));
+        attempt++;
+      }
+    }
+    // `patches` is assigned on the success branch above; this assert
+    // exists only to satisfy TS's "used before assignment" check given
+    // the unusual control flow.
+    if (lastErr !== undefined) throw lastErr;
+    if (patches === undefined) throw new Error('refreshBible: LLM call returned no patches without throwing');
     tokens = Array.isArray(patches) ? patches.length : 0;
     await emit({ kind: 'llm-done', tokens, durationMs: Date.now() - llmStart });
   } catch (e) {
@@ -668,6 +720,19 @@ async function normalizePatches(
   // without telling the user anything happened).
   const { apply, queue } = sanitizePatches(raw, nameToId);
   for (const q of queue) {
+    // Preserve the original LLM-emitted name(s) so the apply path can
+    // re-resolve a missing characterId later (e.g. when the target name
+    // didn't exist at analysis time but does now, or when a name has a
+    // typo that the user wants to fix). Without these, an Apply click
+    // would 422 with "update-missing-target-or-fields" because the queued
+    // diff's characterId is null. The UI also uses them to label the
+    // queued diff ("Cập nhật: Vũ An Bang").
+    const targetName =
+      q.patch.kind === 'update' ? (q.patch.update_target_name ?? '').trim() || undefined :
+      q.patch.kind === 'appearance' ? (q.patch.character_name ?? '').trim() || undefined :
+      undefined;
+    const fromName = q.patch.kind === 'relationship' ? (q.patch.from_name ?? '').trim() || undefined : undefined;
+    const toName = q.patch.kind === 'relationship' ? (q.patch.to_name ?? '').trim() || undefined : undefined;
     await queueDiff(bookId, {
       kind: q.patch.kind === 'new' ? 'new' :
             q.patch.kind === 'update' ? 'update' :
@@ -698,7 +763,16 @@ async function normalizePatches(
             personality: q.patch.update_fields?.personality,
             speechStyle: q.patch.update_fields?.speech_style,
             visualDescription: q.patch.update_fields?.visual_description,
-          }, relationship: undefined }
+          }, relationship: undefined, targetName }
+        : {}),
+      ...(q.patch.kind === 'relationship'
+        ? { relationship: { fromName, toName, relationship: q.patch.relationship ?? '' }, fromName, toName }
+        : {}),
+      ...(q.patch.kind === 'appearance'
+        ? { targetName, appearance: {
+            chapterIndex: typeof q.patch.chapter_index === 'number' ? q.patch.chapter_index : 0,
+            mentions: 1,
+          } }
         : {}),
       conflictWith: q.reason,
     } as BibleDiffPatch);
@@ -1000,6 +1074,35 @@ export async function setUserProfile(args: {
  * bulk-apply routes use this path so a status can never be flipped to
  * `applied` without actually mutating the bible.
  */
+
+/** Best-effort name hint from an evidence snippet for legacy diffs queued
+ *  before `targetName` was stored. The snippet almost always starts with
+ *  the character name followed by a verb in Vietnamese ("Vũ An Bang là
+ *  một tráng hán..."), or "Người của X mặc..." (member of X). We grab the
+ *  first noun-like phrase before "là", "mặc", or "thấy". Returns null when
+ *  no confident guess can be made — caller falls back to "no resolution".
+ *  This is intentionally narrow (1 helper call, no DB) so it can be used
+ *  inline during apply without blocking the SSE. */
+function extractNameFromEvidence(evidence: string): string | null {
+  if (!evidence) return null;
+  // The first sentence usually contains the name; cut at common Vietnamese
+  // verbs that follow a subject noun phrase.
+  const m = evidence.match(/^\s*([^,.;:()\n]+?)\s*(?:là|mặc|thấy|có|đứng|ngồi|nói|hỏi|cầm|mang|bước|vung|cảm)/i);
+  if (!m) return null;
+  const candidate = m[1].trim().replace(/^["'"\u201C\u201D]+|["'"\u201C\u201D]+$/g, '');
+  // The helper phrases "Người của X" → strip the "Người của" prefix and
+  // take what's left as the character's group affiliation (still better
+  // than null and lets the user rename via the Edit dialog).
+  if (/^người\s+của\s+/i.test(candidate)) {
+    return candidate.replace(/^người\s+của\s+/i, '').trim();
+  }
+  // Reject very short or stop-word-only candidates.
+  if (candidate.length < 2 || /^(và|hoặc|nhưng|rồi|thì|mà|của|trong|ngoài)$/i.test(candidate)) {
+    return null;
+  }
+  return candidate;
+}
+
 export async function applyAcceptedBiblePatch(
   bookId: string,
   patch: BibleDiffPatch,
@@ -1017,14 +1120,53 @@ export async function applyAcceptedBiblePatch(
   }
 
   if (patch.kind === 'update') {
-    if (!patch.characterId || !patch.updateFields || Object.keys(patch.updateFields).length === 0) {
+    if (!patch.updateFields || Object.keys(patch.updateFields).length === 0) {
       return { applied: false, reason: 'update-missing-target-or-fields' };
     }
-    const character = await prisma.character.findFirst({
-      where: { id: patch.characterId, bookId },
-      select: { id: true },
-    });
-    if (!character) return { applied: false, reason: 'update-target-not-in-book' };
+    // 2026-09-02: queued update diffs frequently have characterId=null
+    // because they were queued at analysis time when the LLM's
+    // update_target_name didn't resolve to any existing character (e.g. a
+    // new character introduced in the same chapter). When the user later
+    // accepts the "Apply" (Ghi đè), we must NOT just 422 — we should
+    // try to recover the target. Resolution order:
+    //   1. Use the embedded characterId if it's still in this book.
+    //   2. Otherwise re-resolve by targetName against the current book.
+    //   3. Otherwise extract a name hint from the evidence quote
+    //      (the first quoted phrase is usually the character name) so
+    //      legacy diffs queued before this fix can also be applied.
+    //   4. Otherwise auto-create the character (the diff effectively
+    //      doubles as a new-character proposal — the user's "Ghi đè"
+    //      click should be honoured).
+    let characterId = patch.characterId;
+    if (characterId) {
+      const found = await prisma.character.findFirst({
+        where: { id: characterId, bookId },
+        select: { id: true },
+      });
+      if (!found) characterId = null;
+    }
+    let resolvedTargetName: string | null = (patch.targetName ?? '').trim() || null;
+    if (!characterId && resolvedTargetName) {
+      characterId = await findCharacterIdByName(bookId, resolvedTargetName);
+    }
+    if (!characterId && !resolvedTargetName) {
+      const guessed = extractNameFromEvidence(patch.evidenceQuote ?? '');
+      if (guessed) {
+        resolvedTargetName = guessed;
+        characterId = await findCharacterIdByName(bookId, guessed);
+      }
+    }
+    if (!characterId && resolvedTargetName) {
+      const created = await ensureCharacter({
+        bookId,
+        name: resolvedTargetName,
+        role: 'supporting',
+      });
+      characterId = created.id;
+    }
+    if (!characterId) {
+      return { applied: false, reason: 'update-missing-target-or-fields' };
+    }
     const fields = patch.updateFields;
     const fieldSources: Partial<Record<
       'description' | 'personality' | 'speechStyle' | 'visualDescription',
@@ -1034,7 +1176,7 @@ export async function applyAcceptedBiblePatch(
       if (fields[field] !== undefined) fieldSources[field] = 'user';
     }
     await setProfile({
-      characterId: patch.characterId,
+      characterId,
       description: fields.description,
       personality: fields.personality,
       speechStyle: fields.speechStyle,
@@ -1051,11 +1193,17 @@ export async function applyAcceptedBiblePatch(
     if (!rel?.relationship) return { applied: false, reason: 'relationship-missing-label' };
     let fromId = rel.fromCharId ?? null;
     let toId = rel.toCharId ?? null;
-    if (!fromId && rel.fromName) {
-      fromId = (await ensureCharacter({ bookId, name: rel.fromName.trim(), role: 'supporting' })).id;
+    // 2026-09-02: queued relationship diffs preserve fromName/toName
+    // when they were queued without resolved ids, so re-resolve here.
+    if (!fromId && (rel.fromName ?? patch.fromName)) {
+      const name = (rel.fromName ?? patch.fromName ?? '').trim();
+      fromId = await findCharacterIdByName(bookId, name)
+        ?? (await ensureCharacter({ bookId, name, role: 'supporting' })).id;
     }
-    if (!toId && rel.toName) {
-      toId = (await ensureCharacter({ bookId, name: rel.toName.trim(), role: 'supporting' })).id;
+    if (!toId && (rel.toName ?? patch.toName)) {
+      const name = (rel.toName ?? patch.toName ?? '').trim();
+      toId = await findCharacterIdByName(bookId, name)
+        ?? (await ensureCharacter({ bookId, name, role: 'supporting' })).id;
     }
     if (!fromId || !toId || fromId === toId) {
       return { applied: false, reason: 'relationship-invalid-endpoints' };
@@ -1078,18 +1226,64 @@ export async function applyAcceptedBiblePatch(
   }
 
   if (patch.kind === 'appearance') {
-    if (!patch.characterId || !patch.appearance) {
+    let chapterIndex = patch.appearance?.chapterIndex;
+    let mentions = patch.appearance?.mentions ?? 1;
+    if (typeof chapterIndex !== 'number' || chapterIndex < 0) {
+      // Legacy diffs queued before appearance{chapterIndex,mentions} was
+      // preserved have no appearance field. Infer chapterIndex from the
+      // queued context — the diff was created during a chapter refresh, but
+      // we don't have that context here. Fall back to chapterIndex=0 so
+      // the user can still increment the appearance ledger; the Edit
+      // dialog can correct it after.
+      chapterIndex = 0;
+      mentions = 1;
+    }
+    let characterId = patch.characterId;
+    let characterName: string | null = null;
+    if (characterId) {
+      const found = await prisma.character.findFirst({
+        where: { id: characterId, bookId },
+        select: { name: true },
+      });
+      if (found) characterName = found.name;
+      else characterId = null;
+    }
+    if (!characterId && patch.targetName) {
+      const name = patch.targetName.trim();
+      const foundId = await findCharacterIdByName(bookId, name);
+      if (foundId) {
+        characterId = foundId;
+        const c = await prisma.character.findFirst({ where: { id: foundId }, select: { name: true } });
+        characterName = c?.name ?? name;
+      } else {
+        const created = await ensureCharacter({ bookId, name, role: 'supporting' });
+        characterId = created.id;
+        characterName = name;
+      }
+    }
+    if (!characterId && !characterName) {
+      // Try extracting a name from the evidence quote (legacy fallback).
+      const guessed = extractNameFromEvidence(patch.evidenceQuote ?? '');
+      if (guessed) {
+        const foundId = await findCharacterIdByName(bookId, guessed);
+        if (foundId) {
+          characterId = foundId;
+          const c = await prisma.character.findFirst({ where: { id: foundId }, select: { name: true } });
+          characterName = c?.name ?? guessed;
+        } else {
+          const created = await ensureCharacter({ bookId, name: guessed, role: 'supporting' });
+          characterId = created.id;
+          characterName = guessed;
+        }
+      }
+    }
+    if (!characterId || !characterName) {
       return { applied: false, reason: 'appearance-missing-target' };
     }
-    const character = await prisma.character.findFirst({
-      where: { id: patch.characterId, bookId },
-      select: { name: true },
-    });
-    if (!character) return { applied: false, reason: 'appearance-target-not-in-book' };
     await recordAppearances({
       bookId,
-      chapterIndex: patch.appearance.chapterIndex,
-      names: [character.name],
+      chapterIndex,
+      names: [characterName],
     });
     return { applied: true };
   }
@@ -1115,6 +1309,7 @@ async function fetchChapterInputs(
   // at module-init time would break SSR for any page that imports the AI
   // helper (none today, but future-proofing).
   const { parseEpub } = await import('@/lib/pipeline/epub-parser');
+  const { readDeepFormatSidecar } = await import('@/lib/pipeline/deep-format-sidecar');
 
   const fs = await import('node:fs/promises');
   const { resolveBookPath } = await import('@/lib/storage');
@@ -1122,6 +1317,40 @@ async function fetchChapterInputs(
   let pathExists = false;
   try { await fs.access(bookPath); pathExists = true; } catch { pathExists = false; }
   if (!pathExists) return [];
+
+  // ── Fast path: deep-format sidecar ─────────────────────────────
+  // When the conversion ran with deepFormat=true the worker persisted a
+  // JSON sidecar next to the final EPUB containing the AI-cleaned
+  // chapter text. Reading from the sidecar (a) avoids re-parsing the
+  // whole EPUB and (b) feeds the bible LLM the SAME text the user sees
+  // in their reader — so character mentions and dialogue attribution
+  // line up exactly with the prose being analyzed. Falls back to the
+  // raw parseEpub() path when the sidecar is missing (old books, books
+  // converted without deepFormat, or after a sidecar wipe).
+  try {
+    const sidecar = await readDeepFormatSidecar({ epubPath: bookPath, bookId });
+    if (sidecar && sidecar.chapters.length > 0) {
+      const match = sidecar.chapters.find((c) => c.index === chapterIndex);
+      if (match) {
+        return [{
+          chapterIndex: match.index,
+          chapterFile: chapterFile ?? `chapter-${match.index}`,
+          text: match.text.slice(0, maxChars),
+        }];
+      }
+      // Sidecar exists but doesn't have this chapter index — could
+      // happen if the user re-ordered the EPUB after conversion.
+      // Fall through to the slow path.
+    }
+  } catch (err) {
+    // Sidecar read failures are non-fatal — we just fall back to the
+    // raw EPUB parse below. Log at debug level so a corrupted sidecar
+    // doesn't spam warnings, but it's visible in the job logs if the
+    // operator wants to investigate.
+    if (process.env.DEBUG_BIBLE_SIDECAR) {
+      console.warn('[fetchChapterInputs] sidecar read failed, falling back:', err);
+    }
+  }
 
   const epub = await parseEpub(bookPath);
   const candidates: Array<{ idx: number; file: string }> = [];
@@ -1172,6 +1401,35 @@ function stripHtml(html: string): string {
 function extractErrorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
   return String(e);
+}
+
+/** True if an error from the LLM stack is a transient gateway/upstream
+ *  failure that the outer retry loop should attempt again. We DO NOT
+ *  retry:
+ *    - 4xx other than 408/429 (auth, billing, format errors)
+ *    - JsonChatError (model returned unparseable JSON — retrying without
+ *      changing anything will hit the same parse error)
+ *    - generic Error whose message doesn't match a known transient shape
+ *  We DO retry:
+ *    - 502/503/504 (bad gateway / unavailable / gateway timeout)
+ *    - 408 (request timeout)
+ *    - 429 (rate limit — usually transient)
+ *    - "AI returned empty response" (model dropped the connection)
+ *    - "AbortError" / fetch-failed (network drop) */
+function isTransientGatewayError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  if (!msg) return false;
+  // JsonChatError and parse failures are model-side — retrying won't help.
+  if (e && typeof e === 'object' && 'name' in e && (e as { name: string }).name === 'JsonChatError') return false;
+  // Detect retryable HTTP status codes regardless of where they appear in
+  // the message (rawChat formats them as `AI <status>: <body>`).
+  if (/\bAI (?:502|503|504|408|429)\b/.test(msg)) return true;
+  // Empty response and aborted fetches (timeout / network drop).
+  if (/AI returned empty response/i.test(msg)) return true;
+  if (/AbortError|aborted|fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(msg)) return true;
+  // 504 page-style HTML leakage (openresty default page).
+  if (/504 Gateway Time-out|<title>504/.test(msg)) return true;
+  return false;
 }
 
 export { type ProfileSource };

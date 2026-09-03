@@ -10,7 +10,8 @@
 //   - "custom"    : any OpenAI-compatible /v1/images/generations endpoint
 //
 // Image style presets adapt the prompt to match the novel's visual language:
-//   bw-anime   : anime line art, black ink on white paper — DEFAULT for novels
+//   chibi      : super-deformed 2-3 head proportions, kawaii, colorful — DEFAULT
+//   bw-anime   : anime line art, black ink on white paper
 //   bw-manga   : manga/manhua halftone + screentone — black-and-white only
 //   bw-ink     : ink-wash (水墨画) line drawing — black-and-white only
 //   bw-sketch  : pencil sketch, loose lines — black-and-white only
@@ -20,25 +21,29 @@
 //   manga      : legacy manga style
 //   none       : provider default — no style guidance
 //
-// All "bw-" presets are GUARANTEED monochrome: prompt instructs the
-// provider for "no color, no fills, white background", and the result is
-// checked for grayscale content before being kept.
+// All "bw-" presets rely on prompt-level instructions ("no color, no
+// fills, white background") to lock the provider to monochrome. The
+// generated image is NOT post-checked for grayscale content — it is
+// rendered-as-monochrome by instruction. (Cover placement scoring
+// in covers/image-analysis.ts inspects pixels for *placement*, not for
+// color verification.)
 
 import { getEffectiveSettings } from '@/lib/db/settings';
 import { chat, chatJSON } from './';
 
 export type ImageStyle =
-  | 'bw-anime'    // anime line art — DEFAULT
-  | 'bw-manga'    // manga / manhua
-  | 'bw-ink'      // ink-wash line drawing
-  | 'bw-sketch'   // pencil sketch
+  | 'chibi'      // super-deformed kawaii — DEFAULT for novels
+  | 'bw-anime'   // anime line art — was default before chibi
+  | 'bw-manga'   // manga / manhua
+  | 'bw-ink'     // ink-wash line drawing
+  | 'bw-sketch'  // pencil sketch
   | 'ink'
   | 'sketch'
   | 'watercolor'
   | 'manga'
   | 'none';
 
-export const DEFAULT_IMAGE_STYLE: ImageStyle = 'bw-anime';
+export const DEFAULT_IMAGE_STYLE: ImageStyle = 'chibi';
 
 /** True if this style is the B&W family — prompt will be locked to monochrome. */
 export function isMonochromeStyle(s: ImageStyle | string | null | undefined): boolean {
@@ -50,7 +55,7 @@ export function isMonochromeStyle(s: ImageStyle | string | null | undefined): bo
  *  switch to the new visual identity. */
 export function normalizeImageStyle(s: string | null | undefined): ImageStyle {
   if (!s) return DEFAULT_IMAGE_STYLE;
-  if ((['bw-anime', 'bw-manga', 'bw-ink', 'bw-sketch', 'ink', 'sketch', 'watercolor', 'manga', 'none'] as const).includes(s as ImageStyle)) {
+  if ((['chibi', 'bw-anime', 'bw-manga', 'bw-ink', 'bw-sketch', 'ink', 'sketch', 'watercolor', 'manga', 'none'] as const).includes(s as ImageStyle)) {
     return s as ImageStyle;
   }
   return DEFAULT_IMAGE_STYLE;
@@ -88,6 +93,13 @@ export interface GenerateImageResult {
 }
 
 const STYLE_HINTS: Record<ImageStyle, string> = {
+  // — Chibi (default) — super-deformed kawaii, vibrant color, fun. Big head,
+  //   tiny body (2-3 head proportions), huge expressive eyes, small limbs,
+  //   playful poses. Used for novel chapter illustrations + covers. NOT
+  //   monochrome — chibi reads as flat-color kawaii. The provider has more
+  //   freedom in color so per-character consistency is harder, but the cute
+  //   aesthetic is the deliberate payoff.
+  'chibi': 'Chibi / super-deformed (SD) anime illustration. 2 to 3 head-to-body proportions: oversized head, tiny body, short stubby limbs, huge round expressive eyes taking ~1/3 of the face, simplified tiny nose and mouth. Cute kawaii aesthetic — adorable, playful, fun, lighthearted mood. Bright cheerful color palette (pastel + saturated accents). Clean confident line art, flat color fills with minimal cel-shading. Pure white or soft pastel gradient background. Expressive over realistic; mood over detail. Studio Ghibli kawaii chibi style blended with modern mobile-game character art (Genshin Impact chibi / Honkai chibi / Cookie Run style).',
   // — Black-and-white family (preferred for novels — keeps the book visually
   //   cohesive and makes per-character image consistency possible since the
   //   image provider has fewer degrees of freedom in monochrome) —
@@ -106,17 +118,71 @@ const STYLE_HINTS: Record<ImageStyle, string> = {
 /** Suffix appended for B&W-family styles to lock the provider out of color. */
 const MONOCHROME_LOCK = 'STRICT PALETTE: black ink, mid-greys, white. No colour, no flat fills, no gradient washes. Pure white background. Hand-inked strokes only.';
 
-/** Build the full prompt with style + novel-context adaptation. */
-function buildPrompt(opts: GenerateImageOptions, style: ImageStyle): string {
+/** Quick-and-dirty check that the imagePrompt is English-only — if it
+ *  contains non-ASCII letters (Vietnamese diacritics, CJK, cyrillic, ...)
+ *  we treat it as contaminated and use our per-genre fallback instead.
+ *  Intentionally lenient — accented Latin and basic punctuation are
+ *  fine; what we want to ban is the AI emitting entire Vietnamese
+ *  paragraphs or the title. Shared between cover + chapter pipelines. */
+export function isLikelyEnglishPrompt(s: string | null | undefined): boolean {
+  if (!s) return false;
+  if (s.length < 40) return false;
+  return !/[\u00C0-\u024F\u0300-\u036F\u0370-\u03FF\u0400-\u04FF\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF]/.test(s);
+}
+
+/** Generic English fallback when the LLM returns a Vietnamese / non-ASCII
+ *  prompt (or no prompt at all). Generic enough to apply to ANY novel —
+ *  per-genre fallbacks live in genre-detector.ts via composeFallbackPrompt()
+ *  when the cover pipeline wants to be more specific. */
+const GENERIC_ENGLISH_FALLBACK =
+  'A dramatic illustration of the chapter scene. ' +
+  'Expressive characters in a meaningful moment, atmospheric setting. ' +
+  'No text, no speech bubbles, no watermarks, no borders.';
+
+/** Max chars we send to MiniMax — its /v1/image_generation endpoint rejects
+ *  prompts >1500 chars with status_code 2013 ("invalid params"). OpenAI
+ *  DALL-E 3 caps at 4000 but we use one budget for both so a single image
+ *  provider switch never silently fails. 1450 leaves headroom under 1500.
+ *  Mirrors the cover pipeline's MAX_TOTAL (see ai-generate-cover.ts). */
+const MAX_PROMPT_TOTAL = 1450;
+
+/** Build the full prompt with style + novel-context adaptation.
+ *  Hard-truncates to MAX_PROMPT_TOTAL so MiniMax doesn't 2013.
+ *  Exported for tests / debug tooling; production callers should use
+ *  generateImage() which wraps this with provider dispatch. */
+export function buildPrompt(opts: GenerateImageOptions, style: ImageStyle): string {
   const hint = STYLE_HINTS[style] ?? STYLE_HINTS[DEFAULT_IMAGE_STYLE];
   const monoSuffix = isMonochromeStyle(style) ? `\n\n${MONOCHROME_LOCK}` : '';
-  return [
+  // Per-style generic safety footer. Chibi is intentionally NOT monochrome
+  // (it's bright color kawaii), so it doesn't get the IMPORTANT: B&W line.
+  const genericFooter = isMonochromeStyle(style)
+    ? 'IMPORTANT: Black-and-white illustration. High contrast. White background. No text, no speech bubbles, no watermarks, no signatures, no borders, no frames.'
+    : 'IMPORTANT: Illustration, NOT photorealistic. White or pastel gradient background. No text, no speech bubbles, no watermarks, no signatures, no borders, no frames. Single cohesive composition.';
+  // First compose without truncation so we know the natural suffix size.
+  const full = [
     opts.prompt.trim(),
     '',
     '── VISUAL STYLE ──',
     hint,
     '',
-    'IMPORTANT: Black-and-white illustration. High contrast. White background. No text, no speech bubbles, no watermarks, no signatures, no borders, no frames.',
+    genericFooter,
+    monoSuffix,
+  ].join('\n');
+  if (full.length <= MAX_PROMPT_TOTAL) return full;
+  // Trim the user-supplied scene prompt to fit. Cap it at the budget minus
+  // the suffix length we just produced. Cut on a word boundary so the
+  // truncated sentence reads naturally and don't end on a half-word.
+  const budget = Math.max(200, MAX_PROMPT_TOTAL - (full.length - opts.prompt.trim().length));
+  const trimmedScene = opts.prompt.trim().length > budget
+    ? opts.prompt.trim().slice(0, budget).replace(/\s+\S*$/, '') + '…'
+    : opts.prompt.trim();
+  return [
+    trimmedScene,
+    '',
+    '── VISUAL STYLE ──',
+    hint,
+    '',
+    genericFooter,
     monoSuffix,
   ].join('\n');
 }
@@ -403,16 +469,53 @@ export function characterSeed(bookId: string, chapterIndex: number, name: string
 }
 
 /** Analyze a chapter and decide whether to illustrate it + write the prompt.
- *  Uses the text-generation AI (cheap) to score visual richness. */
+ *  Uses the text-generation AI (cheap) to score visual richness.
+ *
+ *  Two-stage pattern (same shape as the cover pipeline):
+ *    1. Deterministic genre/seed from title + author via the
+ *       `genre-detector`. Gives us a per-book motif, shot,
+ *       lighting, and palette. Free, fast, stable.
+ *    2. The LLM only fills the freeform scene description on
+ *       top of that seed. Result: chapter illustrations feel
+ *       consistent with the cover and per-book, not generic. */
 export async function analyzeChapterForIllustration(
   chapterTitle: string,
   chapterBody: string,
-  novelContext: { title?: string; author?: string; language?: string },
+  novelContext: { title?: string; author?: string; language?: string; description?: string | null },
   /** Optional cast with visual anchors. Names are NEVER injected into
    *  the image prompt — only the visual description. */
   cast?: CastMember[],
 ): Promise<{ shouldIllustrate: boolean; prompt?: string; confidence: number; reason?: string }> {
   const truncated = chapterBody.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 4000);
+
+  // Stage 1 — deterministic art-direction seed. Imported lazily so
+  // we don't pull the genre-detector keyword table into every
+  // import that touches image-generator. Failure is non-fatal —
+  // we fall through with an empty seed and the LLM still produces
+  // something.
+  let artBlock = '';
+  try {
+    const { detectGenre, toArtDirection } = await import('@/lib/covers/genre-detector');
+    const detection = detectGenre({
+      title: novelContext.title,
+      titleVi: novelContext.title,
+      description: novelContext.description,
+    });
+    const art = toArtDirection(detection, novelContext.title, novelContext.author);
+    // Per-book anchors: motif / shot / lighting / palette. We pass them
+    // as English-only structural hints (NOT to be parroted verbatim)
+    // so the LLM writes a scene that aligns with this book's world
+    // instead of generic anime/wuxia defaults.
+    artBlock = `\n\nART DIRECTION (deterministic seed for THIS book — anchor your prompt on this, but write the scene yourself):
+- Genre: ${art.en}
+- Subject anchor: ${art.motif}
+- Composition: ${art.picked.shot}
+- Lighting / atmosphere: ${art.picked.lighting}
+- Mood: ${art.mood}
+- Palette: ${art.paletteDescription} (accent ${art.accent})`;
+  } catch (err) {
+    console.warn('[image-gen] genre seeding failed, using bare prompt:', err instanceof Error ? err.message : err);
+  }
 
   // Build a cast anchor block. Only members with a real visual description
   // are included — LLM-saved "unspecified" sentinels and null fields are
@@ -440,35 +543,58 @@ export async function analyzeChapterForIllustration(
     messages: [
       { role: 'system', content: `Bạn là trợ lý phân tích văn bản văn học. Nhiệm vụ: đánh giá xem một chương truyện có đáng để minh họa (tạo ảnh) hay không.
 
+Quy tắc quyết định shouldIllustrate — CHỈ trả true khi chương chứa MỘT cảnh cụ thể, hữu hình mà độc giả sẽ nhớ. Các tiêu chí (cần ≥ 1):
+  * Cảnh đối đầu / chiến đấu đầu tiên giữa hai nhân vật chính
+  * Lần đầu gặp gỡ giữa hai nhân vật quan trọng (khoảnh khắc "thấy nhau")
+  * Phá vỡ cảnh giới / đột phá tu luyện / thức tỉnh năng lực (tu tiên / hệ thống)
+  * Biến cố lớn (phản bội, hy sinh, cứu người, mất người thân)
+  * Phong cảnh / kiến trúc đặc trưng được miêu tả kỹ (cung điện, bí cảnh, thành phố xa lạ)
+  * Kết thúc arc — khoảnh khắc quyết định trước khi chương kết thúc
+
+Trả false khi chương chỉ chứa hội thoại, lộ trình di chuyển, nội tâm suy nghĩ, hay những cảnh không có yếu tố hình ảnh nổi bật. Ưu tiên chất lượng hơn số lượng — tốt hơn bỏ sót một cảnh dở còn hơn vẽ một cảnh nhạt.
+
 Trả lời JSON với schema:
-- shouldIllustrate: boolean — true nếu chương có cảnh đẹp, kịch tính, hoặc quan trọng
-- confidence: number 0-1 — độ tự tin
-- reason: string — giải thích ngắn (1 câu)
-- prompt: string — nếu shouldIllustrate=true, viết prompt tiếng Anh mô tả cảnh (cho AI image gen). Tối đa 200 từ. Bao gồm:
-  * Bối cảnh (địa điểm, thời gian, không khí)
-  * Nhân vật chính trong cảnh — khi có CAST VISUAL ANCHORS bên dưới, hãy dùng NGUYÊN VĂN mô tả ngoại hình (tóc, mắt, da, quần áo, phụ kiện, đặc điểm nhận dạng) chứ KHÔNG diễn giải lại; đây là hợp đồng với image provider để nhân vật trông giống nhau giữa các chương
-  * Tư thế, biểu cảm nếu rõ
-  * Hành động đang diễn ra
-  * Phong cách nghệ thuật phù hợp (tu tiểu thuyết → epic fantasy, hiện đại → contemporary, etc.)
-- KHÔNG bao gồm: text/watermark/border, màu sắc (sẽ thêm ở bước sau), tên riêng nhân vật (chỉ dùng mô tả ngoại hình)` },
+- shouldIllustrate: boolean — theo tiêu chí trên
+- confidence: number 0-1 — độ tự tin. Trả 0.85+ chỉ khi chương có cảnh rõ ràng; trả 0.5-0.7 khi cảnh trung bình
+- reason: string — giải thích ngắn gọn 1 câu bằng tiếng Việt, nêu cảnh cụ thể nào sẽ được minh họa (hoặc lý do bỏ qua)
+- prompt: string — NẾU shouldIllustrate=true, viết prompt TIẾNG ANH (English-only — KHÔNG dấu tiếng Việt) mô tả cảnh, 100-180 từ, cho provider image AI. Bao gồm:
+  * Bối cảnh (địa điểm, thời gian, không khí, ánh sáng)
+  * Nhân vật chính — khi có CAST VISUAL ANCHORS, dùng NGUYÊN VĂN mô tả ngoại hình (tóc, mắt, da, quần áo, phụ kiện, đặc điểm nhận dạng), KHÔNG paraphrase hay thay synonym
+  * Tư thế, biểu cảm, hành động đang diễn ra
+  * Khi có ART DIRECTION bên dưới, hãy NEO cảnh theo motif + lighting + palette của thể loại (ví dụ: tu tiên dùng "jade palace, flowing clouds, immortal robes"; kinh dị dùng "deep shadow, oppressive silence"; đô thị dùng "neon cityscape, contemporary interior")
+  * Phong cách nghệ thuật phù hợp thể loại
+- KHÔNG bao gồm: text/watermark/border, tên riêng nhân vật (chỉ dùng mô tả ngoại hình), chữ trong ảnh` },
       { role: 'user', content: `Tiểu thuyết: ${novelContext.title ?? 'Không rõ'} (${novelContext.author ?? ''})
 Ngôn ngữ: ${novelContext.language ?? 'vi'}
 Chương: ${chapterTitle}
-${castBlock}
+${castBlock}${artBlock}
 Nội dung (trích):
 ${truncated}
 
 JSON:` },
     ],
     temperature: 0.2,  // low — keeps the visual-description wording stable across runs
-    max_tokens: 800,
+    // Bumped to 1200 from 800 — the new (stricter) system prompt asks for
+    // 100-180-word English scene descriptions which can push the JSON
+    // output past 800 tokens when the model also emits brief reasoning
+    // bleed (we send enable_thinking=false but not all backends honour it).
+    // 1200 still costs ~50% of a 2K generation budget; well bounded.
+    max_tokens: 1200,
     enable_thinking: false,
   });
+
+  // Sanitize the LLM's English prompt. The model is told to write in
+  // English but occasionally returns Vietnamese / mixed text — and
+  // MiniMax / OpenAI image generators reject non-Latin characters.
+  // Fall back to a deterministic English scene description so the
+  // chapter always gets a usable prompt.
+  const rawPrompt = typeof result.prompt === 'string' ? result.prompt.trim() : '';
+  const safePrompt = isLikelyEnglishPrompt(rawPrompt) ? rawPrompt : GENERIC_ENGLISH_FALLBACK;
 
   return {
     shouldIllustrate: !!result.shouldIllustrate,
     confidence: typeof result.confidence === 'number' ? result.confidence : 0,
     reason: result.reason,
-    prompt: result.prompt,
+    prompt: safePrompt,
   };
 }

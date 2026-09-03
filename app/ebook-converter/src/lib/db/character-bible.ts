@@ -124,6 +124,19 @@ export interface BibleDiffPatch {
   /** When autoReason mentions a conflict, this names the colliding field
    *  so the UI can show "Linh: description conflicts with your edit". */
   conflictWith?: string;
+  /** Original name hint from the LLM, preserved so the apply path can
+   *  re-resolve a missing characterId (e.g. when the diff was queued
+   *  because the target name didn't exist at analysis time, but does
+   *  now). For kind='update' this is `update_target_name`; for
+   *  kind='relationship' this is `from_name` / `to_name` (joined); for
+   *  kind='appearance' this is `character_name`. Without this hint the
+   *  user sees a 422 on Apply because the diff has characterId=null.
+   *  Optional for backward compatibility with already-stored diffs. */
+  targetName?: string;
+  /** Original from-side name for queued relationship diffs. */
+  fromName?: string;
+  /** Original to-side name for queued relationship diffs. */
+  toName?: string;
 }
 
 // ── Profiles ──────────────────────────────────────────────────────────────
@@ -450,16 +463,81 @@ export async function ensureCharacter(args: {
   role?: 'main' | 'supporting' | 'minor' | 'crowd';
 }): Promise<{ id: string; created: boolean }> {
   return prisma.$transaction(async (tx) => {
-    const existing = await tx.character.findUnique({
+    // 1. Exact-name match first (cheap, hits the unique index).
+    let existing = await tx.character.findUnique({
       where: { bookId_name: { bookId: args.bookId, name: args.name } },
       include: { aliases: true },
     });
+
+    // 2. Case-insensitive fallback. The bible LLM frequently re-emits the
+    //    same character with a different casing ("Ảnh Yêu" → "Ảnh yêu")
+    //    because Vietnamese mixed-case names confuse tokenizers. Without
+    //    this fallback the unique (bookId, name) constraint silently
+    //    produces a duplicate Character row, and the second one ends up
+    //    voiceless / undetected in voice-assignment. Match by normKey
+    //    (NFC-fold + lowercase + whitespace-collapse) and fold the new
+    //    spelling into the existing row's aliases.
+    if (!existing) {
+      const wantedKey = normKey(args.name);
+      if (wantedKey) {
+        const candidates = await tx.character.findMany({
+          where: { bookId: args.bookId },
+          select: { id: true, name: true, aliases: { select: { alias: true } } },
+        });
+        const ciMatch = candidates.find((c) => normKey(c.name) === wantedKey)
+          ?? candidates.find((c) => c.aliases.some((a) => normKey(a.alias) === wantedKey));
+        if (ciMatch) {
+          // Re-fetch with aliases included for the merge branch below.
+          existing = await tx.character.findUnique({
+            where: { id: ciMatch.id },
+            include: { aliases: true },
+          });
+        }
+      }
+    }
+
+    // 3. Honorific-strip fallback. The bible LLM treats address forms as
+    //    distinct characters ("Yến Vương" vs "Yến Vương điện hạ"), so an
+    //    emission with an honorific suffix would otherwise create a fresh
+    //    row for the same person. If we can strip a known Vietnamese
+    //    honorific suffix and the resulting base already exists in this
+    //    book (case-insensitive), fold the full new name into that
+    //    character's aliases instead of inserting a duplicate.
+    if (!existing) {
+      const stripped = stripHonorific(args.name);
+      if (stripped) {
+        const baseKey = normKey(stripped.base);
+        const candidates = await tx.character.findMany({
+          where: { bookId: args.bookId },
+          select: { id: true, name: true, aliases: { select: { alias: true } } },
+        });
+        const honMatch = candidates.find((c) => normKey(c.name) === baseKey)
+          ?? candidates.find((c) => c.aliases.some((a) => normKey(a.alias) === baseKey));
+        if (honMatch) {
+          existing = await tx.character.findUnique({
+            where: { id: honMatch.id },
+            include: { aliases: true },
+          });
+        }
+      }
+    }
+
     if (existing) {
       // Only update fields that the LLM provided AND the existing row has no
       // user-locked value for. We treat the existing 'gender' / 'role' as
       // authoritative; merge new aliases though.
       const existingAliasNames = existing.aliases.map((a) => a.alias);
-      const incoming = args.aliases ?? [];
+      // Always seed the original args.name as an alias so future
+      // case-variant emissions (e.g. "Ảnh Yêu" → "Ảnh yêu") resolve to
+      // this character even when the casing was the first occurrence.
+      // Also seed the honorific-stripped form so a later emission of just
+      // the base name ("Hồ Lập") resolves to this row whose name was
+      // recorded with the honorific first ("Hồ Lập đại nhân").
+      const stripped = stripHonorific(args.name);
+      const aliasSeed = stripped ? [args.name, stripped.base] : [args.name];
+      const incoming = Array.from(
+        new Set([...aliasSeed, ...(args.aliases ?? [])]),
+      );
       const toAdd = mergeAliasLists(existingAliasNames, incoming);
       if (toAdd.length > 0) {
         for (const alias of toAdd) {
@@ -491,8 +569,15 @@ export async function ensureCharacter(args: {
         role: args.role ?? 'supporting',
       },
     });
-    if (args.aliases && args.aliases.length > 0) {
-      for (const alias of args.aliases) {
+    // On a brand-new insert, also seed the honorific-stripped form as an
+    // alias so a later LLM emission of just the base name resolves here.
+    // (We do the same seeding in the merge branch above; this covers the
+    // case where the honorific form arrived before the base form existed.)
+    const seedAliases = new Set<string>(args.aliases ?? []);
+    const stripped = stripHonorific(args.name);
+    if (stripped) seedAliases.add(stripped.base);
+    if (seedAliases.size > 0) {
+      for (const alias of seedAliases) {
         const trimmed = alias.trim();
         if (!trimmed) continue;
         await tx.characterAlias.create({
@@ -585,10 +670,16 @@ function parseAliases(s: string | null | undefined): string[] {
 
 /** Resolve a list of names to Character.id in batch. Names not found return null.
  *
- *  Alias-aware + case-insensitive (Unicode NFC normalized). The previous
- *  implementation only matched `Character.name`, so "Linh" missed
- *  "Lâm Linh" and any alias-based reference. This is the single biggest
- *  source of "duplicate character created" bugs in the bible build.
+ *  Alias-aware + case-insensitive (Unicode NFC normalized) + honorific-
+ *  aware. Three layers of lookup per name:
+ *    1. exact normKey(name)            → name match
+ *    2. normKey(name) hits an alias     → alias match
+ *    3. stripHonorific(name).base      → base match (for "Yến Vương điện hạ"
+ *                                         resolving to "Yến Vương")
+ *
+ *  The previous implementation only matched `Character.name`, so "Linh"
+ *  missed "Lâm Linh" and any alias-based reference. This is the single
+ *  biggest source of "duplicate character created" bugs in the bible build.
  */
 export async function resolveCharacterIds(
   bookId: string,
@@ -610,7 +701,16 @@ export async function resolveCharacterIds(
   const out: Record<string, string | null> = {};
   for (const n of names) {
     const k = normKey(n);
-    out[n] = byName.get(k) ?? byAlias.get(k) ?? null;
+    let id = byName.get(k) ?? byAlias.get(k) ?? null;
+    if (!id) {
+      // Honorific-strip fallback: "Yến Vương điện hạ" → "Yến Vương"
+      const stripped = stripHonorific(n);
+      if (stripped) {
+        const baseKey = normKey(stripped.base);
+        id = byName.get(baseKey) ?? byAlias.get(baseKey) ?? null;
+      }
+    }
+    out[n] = id;
   }
   return out;
 }
@@ -618,6 +718,61 @@ export async function resolveCharacterIds(
 /** Unicode-NFC fold + lowercase + whitespace-trim for name comparison. */
 export function normKey(s: string): string {
   return s.normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+/** Common Vietnamese honorific / title suffixes the bible LLM tacks onto a
+ *  character name when the prose uses an address form. The LLM treats
+ *  "Yến Vương" and "Yến Vương điện hạ" as two different people, so without
+ *  stripping these we spawn a duplicate Character row for every address form.
+ *
+ *  Match order is significant — longest first so that "đại sư phụ" doesn't
+ *  match "phụ" instead of "đại sư phụ". Tied-prefix matches are returned as a
+ *  list so the caller can try each base form (e.g. both "Yến Vương điện hạ" and
+ *  "Yến Vương tiên tử" could derive from "Yến Vương", though only one matches
+ *  per emission).
+ */
+const HONORIFIC_SUFFIXES: readonly string[] = [
+  'điện hạ',
+  'thái hậu',
+  'đế vương',
+  'quốc vương',
+  'tướng quân',
+  'tiên tử',
+  'công chúa',
+  'hoàng tử',
+  'thái tử',
+  'đại sư',
+  'tiên sinh',
+  'đại nhân',
+  'lão sư',
+  'tiền bối',
+  'sư huynh',
+  'sư tỷ',
+  'sư phụ',
+  'sư đệ',
+  'sư muội',
+  'đạo trưởng',
+];
+
+/** If `name` ends with an honorific suffix, return the stripped base + the
+ *  suffix; otherwise null. The base must be at least 2 characters so we
+ *  never collapse something like "Hắn đại nhân" → "Hắn đại" (which is what
+ *  we'd get from a too-aggressive strip).
+ */
+export function stripHonorific(
+  name: string,
+): { base: string; honorific: string } | null {
+  const n = normKey(name);
+  if (!n) return null;
+  for (const hon of HONORIFIC_SUFFIXES) {
+    if (n.endsWith(' ' + hon) && n.length - hon.length >= 3) {
+      const base = n.slice(0, -hon.length - 1);
+      if (base.length >= 2) {
+        return { base, honorific: hon };
+      }
+    }
+  }
+  return null;
 }
 
 /** Lookup single name → id (returns null if not found). Convenience

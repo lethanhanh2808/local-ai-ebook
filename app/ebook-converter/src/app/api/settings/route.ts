@@ -172,6 +172,13 @@ export async function PUT(req: NextRequest) {
     if (typeof request.bibleChapterChars === 'number' && Number.isFinite(request.bibleChapterChars)) {
       data.bibleChapterChars = Math.max(2000, Math.min(40000, Math.floor(request.bibleChapterChars)));
     }
+    // Auto-fan-out bible refresh after a deepFormat conversion completes.
+    // When true, the worker enqueues one bible-refresh job per chapter so
+    // the bible is built off the AI-cleaned text the user reads. Default
+    // false (requires explicit opt-in — power-user feature).
+    if (typeof request.bibleAutoEnqueueOnDeepFormat === 'boolean') {
+      data.bibleAutoEnqueueOnDeepFormat = request.bibleAutoEnqueueOnDeepFormat;
+    }
     if (typeof request.imageProvider === 'string' && ALLOWED_IMAGE_PROVIDERS.has(request.imageProvider)) data.imageProvider = request.imageProvider;
     if (request.imageApiKey === '' || typeof request.imageApiKey === 'string') data.imageApiKey = request.imageApiKey || null;
     if (request.imageBaseUrl === '' || typeof request.imageBaseUrl === 'string') data.imageBaseUrl = request.imageBaseUrl || null;

@@ -77,7 +77,7 @@ interface GenreSpec {
    * their own (e.g. "yêu", "tình" — they appear in many novel titles).
    */
   bonusKeywords?: readonly string[];
-  style: 'ink' | 'painting' | 'watercolor' | 'cinematic' | 'sketch';
+  style: 'ink' | 'painting' | 'watercolor' | 'cinematic' | 'sketch' | 'chibi';
   motif: string;
   palette: { accent: string; bgDark: boolean; description: string };
   mood: string;
@@ -827,6 +827,7 @@ function styleToHumanName(s: GenreSpec['style']): string {
     case 'painting':   return 'Classical oil painting style';
     case 'cinematic':  return 'Cinematic photography style with shallow depth of field';
     case 'sketch':     return 'Pencil sketch style with light shading';
+    case 'chibi':      return 'Chibi / super-deformed cute kawaii illustration style with playful colorful tones';
   }
 }
 
