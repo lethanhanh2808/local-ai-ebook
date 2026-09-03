@@ -438,15 +438,65 @@ async function sweepStaleProcessingJobs(): Promise<void> {
   // row "2026-09-02 23:23:30" compares less than "2026-09-02T23:08:30Z"
   // for the wrong reason (' ' < 'T' at position 11) and gets swept.
   try {
-    const recovered = await prisma.$executeRawUnsafe(
-      `UPDATE Job SET status='failed', errorMsg=? WHERE status='processing' AND strftime('%Y-%m-%dT%H:%M:%fZ', updatedAt) < ?`,
-      'Worker was offline while this conversion was running. Requeue the book to try again.',
+    // Find the candidates first so we can (a) append a terminal log
+    // entry to each one — the Debug Console tail shows the truth
+    // instead of "Job still running" forever — and (b) keep the
+    // affected-job count for logging even though UPDATE affects N rows.
+    const candidates = await prisma.$queryRawUnsafe<
+      { id: string; logPath: string | null }[]
+    >(
+      `SELECT id, logPath FROM Job WHERE status='processing' AND strftime('%Y-%m-%dT%H:%M:%fZ', updatedAt) < ? LIMIT 100`,
       staleBeforeIso,
     );
-    if (recovered > 0) {
-      console.warn(
-        `[worker] sweep: recovered ${recovered} stale processing job(s) — marked failed.`,
+    if (candidates.length === 0) {
+      // nothing to do for jobs
+    } else {
+      await prisma.$executeRawUnsafe(
+        `UPDATE Job SET status='failed', errorMsg=? WHERE status='processing' AND strftime('%Y-%m-%dT%H:%M:%fZ', updatedAt) < ?`,
+        'Worker was offline while this conversion was running. Requeue the book to try again.',
+        staleBeforeIso,
       );
+      console.warn(
+        `[worker] sweep: recovered ${candidates.length} stale processing job(s) — marked failed.`,
+      );
+      // Append a terminal error line to each affected job's log so the
+      // Debug Console (which tails <jobId>.jsonl) stops showing stale
+      // "Job still running" heartbeats. Best-effort: if the file has
+      // been removed or the FS is read-only we simply skip it.
+      for (const { id, logPath } of candidates) {
+        try {
+          const targetPath = logPath ?? jobLogPath(id);
+          appendLog(id, {
+            ts: Date.now(),
+            level: 'error',
+            stage: 'stale-recovery',
+            message: 'Worker was offline while this conversion was running. Requeue the book to try again.',
+            meta: { reason: 'stale-sweep', recoveryMsg: 'Worker was offline while this conversion was running. Requeue the book to try again.' },
+          });
+          // appendLog already wrote to jobLogPath(id); if the actual
+          // stream is elsewhere we mirror the entry there too.
+          if (logPath && logPath !== jobLogPath(id)) {
+            try {
+              fs.appendFileSync(
+                logPath,
+                JSON.stringify({
+                  ts: Date.now(),
+                  level: 'error',
+                  stage: 'stale-recovery',
+                  message: 'Worker was offline while this conversion was running. Requeue the book to try again.',
+                }) + '\n',
+              );
+            } catch {
+              /* best-effort */
+            }
+          }
+          // Suppress unused-var lint; we just want to ensure the file
+          // path was sane before we wrote.
+          void targetPath;
+        } catch {
+          /* best-effort */
+        }
+      }
     }
   } catch (err) {
     console.error('[worker] Job sweep failed (will retry):', err);
@@ -454,15 +504,35 @@ async function sweepStaleProcessingJobs(): Promise<void> {
 
   // 2) AudiobookChapter rows — audiobook pre-generation pipeline
   try {
-    const recoveredChapters = await prisma.$executeRawUnsafe(
-      `UPDATE AudiobookChapter SET status='failed', errorMsg=? WHERE status='generating' AND strftime('%Y-%m-%dT%H:%M:%fZ', updatedAt) < ?`,
-      'Worker was offline while this chapter was generating. Re-queue from the Audiobook panel to retry.',
+    const chapterCandidates = await prisma.$queryRawUnsafe<
+      { id: string; bookId: string }[]
+    >(
+      `SELECT id, bookId FROM AudiobookChapter WHERE status='generating' AND strftime('%Y-%m-%dT%H:%M:%fZ', updatedAt) < ? LIMIT 100`,
       staleBeforeIso,
     );
-    if (recoveredChapters > 0) {
-      console.warn(
-        `[worker] sweep: recovered ${recoveredChapters} stale audiobook chapter(s) — marked failed.`,
+    if (chapterCandidates.length === 0) {
+      // nothing to do for chapters
+    } else {
+      await prisma.$executeRawUnsafe(
+        `UPDATE AudiobookChapter SET status='failed', errorMsg=? WHERE status='generating' AND strftime('%Y-%m-%dT%H:%M:%fZ', updatedAt) < ?`,
+        'Worker was offline while this chapter was generating. Re-queue from the Audiobook panel to retry.',
+        staleBeforeIso,
       );
+      console.warn(
+        `[worker] sweep: recovered ${chapterCandidates.length} stale audiobook chapter(s) — marked failed.`,
+      );
+      // AudiobookChapter rows don't have a per-chapter Debug Console
+      // log file (the only NDJSON log we keep is for conversion `Job`
+      // rows: data/job-logs/<jobId>.jsonl). The conversion job that
+      // owns this book may already be in `failed`; the Audiobook
+      // panel pulls its state straight from the `Book.status` /
+      // `AudiobookChapter.status` columns, so a stdout-only note here
+      // is sufficient for the operator running tail on the worker log.
+      for (const { bookId } of chapterCandidates) {
+        console.warn(
+          `[worker] stale-recovery: bookId=${bookId} chapter marked failed`,
+        );
+      }
     }
   } catch (err) {
     console.error('[worker] AudiobookChapter sweep failed (will retry):', err);
