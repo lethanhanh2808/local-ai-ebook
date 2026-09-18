@@ -1,6 +1,13 @@
 // src/components/layout/PageHeader.tsx
-// Shared page header used by every page for a consistent look.
+// Shared page header for the East-Asian paper visual world (DESIGN.md).
+//
 //   <PageHeader title="Library" description="..." icon={<BookOpen/>} actions={...} />
+//
+// The header sits on the full-width paper canvas, anchored by a 1-px ink
+// rule under the title row. The title is brushed serif, with a small
+// vermilion seal-style tab on the left if an icon is provided. Spacing is
+// generous on the top and tight below the rule — the leaf lies flat on
+// the desk.
 'use client';
 
 import { cn } from '@/lib/utils';
@@ -60,20 +67,25 @@ export function PageHeader({
           </nav>
         )}
         {eyebrow && (
-          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-primary mb-1.5">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-primary mb-2">
             {eyebrow}
           </p>
         )}
         <div className="flex items-center gap-3">
           {icon && (
-            <div className="flex h-8 w-8 items-center justify-center text-foreground shrink-0 border-l-[3px] border-l-primary pl-2">
+            // Icon sits on a vermilion seal-style tab: a small vermilion
+            // square with the icon in cream. Reads as a chapter marker
+            // rather than a circular SaaS backdrop.
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center bg-primary text-primary-foreground">
               {icon}
             </div>
           )}
           <div className="min-w-0">
-            <h1 className="text-[18px] font-semibold leading-tight tracking-[-0.01em] truncate">{title}</h1>
+            <h1 className="text-[22px] font-semibold leading-tight tracking-[-0.01em] truncate">
+              {title}
+            </h1>
             {description && (
-              <p className="text-[12px] text-muted-foreground mt-0.5 leading-snug">{description}</p>
+              <p className="text-[12px] text-muted-foreground mt-1 leading-snug">{description}</p>
             )}
           </div>
         </div>

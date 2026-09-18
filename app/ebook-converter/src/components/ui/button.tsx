@@ -1,22 +1,35 @@
 // src/components/ui/button.tsx
+// Button primitive for the East-Asian paper visual world (DESIGN.md).
+//
+// The world has one accent — vermilion (朱砂 cinnabar). Buttons that take
+// an action use vermilion ground with cream ink; outline and ghost
+// variants stay in sumi ink so the surface hierarchy is clear. No pillowy
+// corners, no shadows, no gradients. Default height 32 px to keep the
+// reference-manual tightness.
 import { cn } from '@/lib/utils';
 import { ButtonHTMLAttributes, forwardRef } from 'react';
 
 const variants = {
-  // Primary is now chrome-yellow on ink — the reference-manual accent.
-  // No `shadow` — the manual has hairlines, not Material elevation.
-  default: 'bg-primary text-primary-foreground hover:bg-accent border border-primary',
-  outline: 'border border-border bg-card text-foreground hover:bg-muted',
-  ghost: 'text-foreground hover:bg-muted',
-  destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90 border border-destructive',
-  secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80 border border-border',
-  link: 'text-foreground underline-offset-4 hover:underline decoration-primary decoration-2 underline-offset-[3px]',
+  // Primary = brush: vermilion ground, cream text, 1-px sumi-edge border.
+  default:
+    'bg-primary text-primary-foreground border border-primary hover:bg-primary/90',
+  outline:
+    'border border-border bg-transparent text-foreground hover:bg-secondary hover:border-foreground/30',
+  ghost:
+    'bg-transparent text-foreground hover:bg-secondary border border-transparent',
+  destructive:
+    'bg-destructive text-destructive-foreground border border-destructive hover:bg-destructive/90',
+  secondary:
+    'bg-secondary text-secondary-foreground border border-border hover:bg-secondary/80',
+  link:
+    'text-foreground underline-offset-4 hover:underline decoration-primary decoration-2 underline-offset-[3px]',
 };
 const sizes = {
-  // Manual chrome is tighter than the SaaS default; default height 32 px.
-  default: 'h-8 px-3 text-xs font-semibold uppercase tracking-[0.06em]',
-  sm: 'h-7 px-2 text-[11px] font-semibold uppercase tracking-[0.06em]',
-  lg: 'h-10 px-5 text-sm font-semibold uppercase tracking-[0.06em]',
+  // Slightly tighter than the SaaS default so the chrome stays in scale
+  // with the paper-ground cards.
+  default: 'h-8 px-3 text-[12px] font-semibold tracking-[0.04em]',
+  sm: 'h-7 px-2.5 text-[11px] font-semibold tracking-[0.04em]',
+  lg: 'h-10 px-5 text-sm font-semibold tracking-[0.04em]',
   icon: 'h-8 w-8',
 };
 
@@ -41,8 +54,9 @@ export function buttonClasses(opts: {
 } = {}): string {
   const { variant = 'default', size = 'default', className } = opts;
   return cn(
-    // Reference-manual: tighter radius (2 px), no font-medium weight override
-    // (variants carry weight), no `shadow` (hairlines only).
+    // East-Asian paper: tight 2-px corners, no shadows (paper has
+    // hairlines, not Material elevation), uppercase tracking on every
+    // size variant except icon.
     'inline-flex items-center justify-center whitespace-nowrap',
     'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
     'disabled:pointer-events-none disabled:opacity-50',

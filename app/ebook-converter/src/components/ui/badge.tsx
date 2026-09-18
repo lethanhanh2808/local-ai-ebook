@@ -1,4 +1,9 @@
 // src/components/ui/badge.tsx
+// Badge primitive for the East-Asian paper visual world (DESIGN.md).
+//
+// Square 2-px corners, hairline border, uppercase tracking. Reads like a
+// chapter tag or a manuscript label rather than a SaaS pill. The default
+// variant is vermilion — the one accent in the world.
 import { cn } from '@/lib/utils';
 import type { ReactNode } from 'react';
 
@@ -26,10 +31,10 @@ interface BadgeProps {
   variant?: BadgeVariant;
 }
 export function Badge({ className, children, variant }: BadgeProps) {
-  // Reference-manual: square corners (2 px), hairline border, uppercase
-  // tracking — reads like a chip label or section tag, not a SaaS pill.
+  // East-Asian paper: square 2-px corners, hairline border, uppercase
+  // tracking. The default = vermilion seal tab — the structural accent.
   const base =
-    'inline-flex items-center px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] border';
+    'inline-flex items-center px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] border';
   // When callers pass semantic variants we apply utility classes; for free-form
   // tokens (e.g. "status-queued") we expect the caller to have added the
   // matching utility classes via className. We still emit the base classes so
@@ -51,7 +56,7 @@ export function Badge({ className, children, variant }: BadgeProps) {
       case 'muted':
         return 'bg-muted text-muted-foreground border-border';
       default:
-        // default = the chrome-yellow tab marker — the structural accent.
+        // default = the vermilion seal tab — the structural accent.
         return 'bg-primary text-primary-foreground border-primary';
     }
   })();

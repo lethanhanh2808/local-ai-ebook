@@ -21,19 +21,34 @@ try {
 } catch (e) {}
 `;
 
+// East-Asian paper direction (DESIGN.md). Noto Serif SC carries the
+// Song/Mincho-style stroke contrast; Noto Sans SC is the fallback for
+// inline sans tags (metadata, tabular numerals). Both are loaded as a
+// single stylesheet from Google Fonts and preconnected to remove the
+// extra DNS round-trip before first paint.
+const PAPER_FONTS_HREF =
+  'https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;500;600;700&display=swap';
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="vi" suppressHydrationWarning>
       <head>
         {/* eslint-disable-next-line @next/next/no-before-interactive-script-outside-document */}
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link
+          rel="preconnect"
+          href="https://fonts.gstatic.com"
+          crossOrigin="anonymous"
+        />
+        <link rel="stylesheet" href={PAPER_FONTS_HREF} />
       </head>
-      <body className="min-h-screen bg-background font-sans antialiased">
+      <body className="min-h-screen bg-background antialiased">
         <ThemeProvider>
           <ToastProvider>
             <a
               href="#main-content"
-              className="fixed left-3 top-3 z-[100] -translate-y-20 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground shadow-lg transition-transform focus:translate-y-0"
+              className="fixed left-3 top-3 z-[100] -translate-y-20 border border-foreground/30 bg-card px-3 py-2 text-sm font-medium text-foreground shadow-acetate transition-transform focus:translate-y-0"
             >
               Bỏ qua điều hướng
             </a>
