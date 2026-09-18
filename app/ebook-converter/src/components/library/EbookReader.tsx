@@ -4281,16 +4281,19 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
     <div ref={wrapperRef} className="fixed inset-0 z-50 flex flex-col" style={{ background: themeObj.bg, color: themeObj.text }}>
 
       {/* ── Header ── */}
-      {/* Paper-tight chrome: one flex-wrap row, hairline ink rules between
-          functional groups, no SaaS chip clusters. Every control reachable
-          at every viewport — the row wraps to 2-3 lines on narrow screens
-          instead of hiding controls behind a hamburger. The two exceptions
-          are `ServiceHealth` and the read-time clock, both informational
-          (not actionable), so they collapse below their own breakpoints. */}
+      {/* Paper-tight chrome: two explicit horizontal rows. The flex-wrap
+          approach proved fragile (toolbar buttons were collapsing each
+          onto its own line because flex children with `display: inline`
+          from the underlying <a>/<button> element ignore w-8 in some
+          browser layouts). Two explicit rows are bulletproof:
+            • Row 1 — title bar: [Home] [Info] | [Title centered, fills] | [Đọc button]
+            • Row 2 — toolbar: every other control inline with `gap-1`.
+          VRules between every functional group. The ServiceHealth pill is
+          the only breakpoint-gated item (informational, not actionable). */}
       <header className={cn('relative z-30 shrink-0 border-b backdrop-blur-sm', headerCls)}>
-        <div className="flex flex-wrap items-center gap-y-1.5 gap-x-0.5 px-2 py-1.5">
-
-          {/* Group 1 — Navigation */}
+        {/* Row 1 — title bar */}
+        <div className="flex items-center gap-1 px-2 py-1.5">
+          {/* Left: nav */}
           <Tooltip content={<span>Về thư viện</span>} side="bottom">
             <Link href="/library" title="Back to library" aria-label="Back to library" className={iconBtnCls()}>
               <Home className="h-4 w-4" />
@@ -4304,19 +4307,17 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
 
           <VRule />
 
-          {/* Title block — flex-1 so it eats spare space and pushes the
-              controls to the edges. Brushed-serif title + seal stamp on the
-              left, matching the `PageHeader` paper world. */}
+          {/* Center: title (flex-1, truncated, never expands past viewport) */}
           <div className="flex min-w-0 flex-1 items-center justify-center gap-2 px-2">
             <SealStamp size="sm" label="讀" aria-label="Reader" className="shrink-0" />
-            <div className="max-w-[36rem] min-w-0 text-center">
+            <div className="min-w-0 max-w-full text-center">
               <p className="mb-0.5 text-[9px] font-semibold uppercase tracking-[0.18em] text-primary">Reader</p>
               <h1 className="truncate text-[15px] font-semibold leading-tight tracking-[-0.01em]">{bookTitle}</h1>
               {current && (
                 <p className={cn('mt-0.5 flex items-center justify-center gap-1 truncate text-[11px] leading-tight', mutedCls)}>
-                  {current.title}
+                  <span className="truncate">{current.title}</span>
                   {detectingChapter === current.id && (
-                    <span className="inline-flex shrink-0 items-center gap-0.5 text-blue-600 dark:text-blue-400" title="Đang AI phân tích nhân vật và giọng cho chương này…">
+                    <span title="Đang AI phân tích nhân vật và giọng cho chương này…" className="inline-flex shrink-0 text-blue-600 dark:text-blue-400">
                       <Loader2 className="h-2.5 w-2.5 animate-spin" />
                     </span>
                   )}
@@ -4325,9 +4326,49 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
             </div>
           </div>
 
-          <VRule />
+          {/* Right: TTS play/stop lives on the title bar so it's always
+              reachable regardless of how the toolbar wraps. */}
+          <button
+            onClick={() => {
+              if (ttsState === 'idle') {
+                void loadTtsContext();
+                setAbTab('readAloud');
+                setAbOpen(true);
+                setTtsSettingsOpen(false);
+              } else {
+                stopTts();
+              }
+            }}
+            title={ttsState === 'idle' ? 'Read aloud controls' : 'Stop reading'}
+            aria-label={ttsState === 'idle' ? 'Open read aloud controls' : 'Stop reading aloud'}
+            aria-pressed={ttsState !== 'idle'}
+            className={cn(
+              'inline-flex h-8 shrink-0 items-center gap-1.5 border border-border px-2 transition-colors',
+              ttsState === 'playing'
+                ? 'bg-primary text-primary-foreground border-primary'
+                : ttsState === 'loading'
+                  ? 'bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30'
+                  : ttsState !== 'idle'
+                    ? `${activeCls} border-primary/40`
+                    : `border-transparent ${hoverCls}`,
+            )}>
+            {ttsState === 'loading'
+              ? <Loader2 className="h-4 w-4 animate-spin" />
+              : ttsState !== 'idle'
+              ? <VolumeX className="h-4 w-4" />
+              : <Volume2 className="h-4 w-4" />}
+            <span className="hidden sm:inline text-[11px] font-medium">
+              {ttsState === 'playing' ? 'Dừng' : ttsState === 'paused' ? 'Tiếp' : ttsState === 'loading' ? '…' : 'Đọc'}
+            </span>
+          </button>
+        </div>
 
-          {/* Group 2 — Reading tools (TOC, Gallery, Bookmarks, Aa, ?) */}
+        {/* Row 2 — toolbar (every remaining control, inline, hairline rules
+            between groups). Wraps gracefully on narrow viewports because
+            every button has `shrink-0` and a fixed `w-8` size. */}
+        <div className="flex flex-wrap items-center gap-1 border-t border-current/10 px-2 py-1.5">
+
+          {/* Group A — Reading tools (TOC, Gallery, Bookmarks, Bookmark, Aa, ?) */}
           <Tooltip content={<span className="inline-flex items-center gap-1.5">Mục lục <KbdHint keys={['T']} /></span>} side="bottom">
             <button type="button" onClick={() => { setTocOpen((o) => !o); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); }}
               data-testid="toc-toggle"
@@ -4369,7 +4410,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
               aria-label="Cài đặt nhanh (cỡ chữ, giao diện, khổ)"
               aria-expanded={aaPopoverOpen}
               data-testid="aa-quick-btn"
-              className={cn('inline-flex h-8 w-8 items-center justify-center transition-colors', aaPopoverOpen ? activeCls : 'border border-transparent hover:bg-foreground/5')}>
+              className={cn('inline-flex h-8 w-8 shrink-0 items-center justify-center transition-colors', aaPopoverOpen ? activeCls : 'border border-transparent hover:bg-foreground/5')}>
               <span className="text-[13px] font-semibold leading-none">Aa</span>
             </button>
             {aaPopoverOpen && (
@@ -4433,31 +4474,31 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
           <Tooltip content={<span className="inline-flex items-center gap-1.5">Phím tắt <KbdHint keys={['?']} /></span>} side="bottom">
             <button type="button" onClick={() => setShortcutsOpen(true)}
               aria-label="Phím tắt"
-              className={cn('inline-flex h-8 w-8 items-center justify-center transition-colors border border-transparent', hoverCls)}>
+              className={cn('inline-flex h-8 w-8 shrink-0 items-center justify-center transition-colors border border-transparent', hoverCls)}>
               <span className="text-sm font-semibold leading-none">?</span>
             </button>
           </Tooltip>
 
           <VRule />
 
-          {/* Group 3 — Chapter tools (Jump + Read time) */}
+          {/* Group B — Chapter tools (Jump input + Read time) */}
           {chapters.length > 0 && (
-            <form onSubmit={(e) => { e.preventDefault(); const n = parseInt(jumpInput, 10) - 1; if (!isNaN(n)) goToChapter(n); setJumpInput(''); }} className="flex items-center gap-1.5">
+            <form onSubmit={(e) => { e.preventDefault(); const n = parseInt(jumpInput, 10) - 1; if (!isNaN(n)) goToChapter(n); setJumpInput(''); }} className="inline-flex shrink-0 items-center gap-1.5">
               <input type="number" min={1} max={chapters.length} value={jumpInput}
                 onChange={(e) => setJumpInput(e.target.value)} placeholder={String(currentIdx + 1)}
                 className={cn('w-12 border border-border bg-transparent text-center text-xs py-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring', inputCls)} title="Jump to chapter" aria-label="Số chương muốn mở" />
-              <span className={cn('text-[10px]', mutedCls)}>/ {chapters.length}</span>
+              <span className={cn('text-[10px] tabular-nums', mutedCls)}>/ {chapters.length}</span>
             </form>
           )}
           {chapters.length > 0 && (
-            <span className={cn('hidden xl:inline-flex items-center gap-0.5 text-[10px] font-medium', mutedCls)}>
+            <span className={cn('hidden xl:inline-flex items-center gap-0.5 text-[10px] font-medium shrink-0', mutedCls)}>
               <Clock className="h-3 w-3 opacity-60" />{estimateReadTime(chapters.length, currentIdx)}
             </span>
           )}
 
           <VRule />
 
-          {/* Group 4 — Tools (Voice Debug, Voice Assign, Edit, Mic, Fullscreen) */}
+          {/* Group C — Tools (Voice Debug, Voice Assign, Edit, Mic, Fullscreen) */}
           <Tooltip content={<span>Voice assignment debug</span>} side="bottom">
             <button onClick={() => { setVoiceDebugOpen((o) => !o); setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); setAbOpen(false); }}
               data-testid="voice-debug-toggle"
@@ -4508,7 +4549,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
 
           <VRule />
 
-          {/* Group 5 — Audio (panel + analyzer split) */}
+          {/* Group D — Audio (panel toggle + analyzer split) */}
           <Tooltip content={<span>Audio: Read aloud, Audiobook, Voices</span>} side="bottom">
             <button type="button" onClick={() => { setAbOpen((o) => !o); setTocOpen(false); setSettingsOpen(false); setBookmarksOpen(false); setWmOpen(false); setTtsSettingsOpen(false); }}
               aria-label="Audio, đọc thành tiếng và giọng" aria-expanded={abOpen}
@@ -4519,7 +4560,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
           </Tooltip>
           <div
             ref={analyzerModeBtnRef}
-            className="relative flex items-stretch h-8 border border-transparent"
+            className="relative flex h-8 shrink-0 items-stretch border border-transparent"
             data-testid="analyzer-mode-split"
           >
             <button
@@ -4531,7 +4572,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
               aria-label={`Run full analysis (mode = ${analyzerMode})`}
               data-testid="analyzer-run-btn"
               className={cn(
-                'flex items-center justify-center gap-1.5 px-2.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+                'inline-flex items-center justify-center gap-1.5 px-2.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
                 analysisInFlight ? activeCls : hoverCls,
               )}
             >
@@ -4552,7 +4593,7 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
               data-testid="analyzer-mode-toggle"
               title={`Đổi mode (hiện tại: ${analyzerMode})`}
               className={cn(
-                'flex items-center justify-center w-7 transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+                'inline-flex w-7 shrink-0 items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
                 analyzerModePickerOpen ? activeCls : hoverCls,
               )}
             >
@@ -4605,43 +4646,11 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
             )}
           </div>
 
-          <VRule />
-
-          {/* Group 6 — TTS (ServiceHealth + Play/Stop) */}
+          {/* ServiceHealth lives at the end of the toolbar (informational,
+              breakpoint-gated to md+). On narrow viewports it collapses
+              entirely — the TTS button on the title bar covers the
+              critical audio action. */}
           <ServiceHealth showWorker={false} className="hidden md:inline-flex" />
-          <button
-            onClick={() => {
-              if (ttsState === 'idle') {
-                void loadTtsContext();
-                setAbTab('readAloud');
-                setAbOpen(true);
-                setTtsSettingsOpen(false);
-              } else {
-                stopTts();
-              }
-            }}
-            title={ttsState === 'idle' ? 'Read aloud controls' : 'Stop reading'}
-            aria-label={ttsState === 'idle' ? 'Open read aloud controls' : 'Stop reading aloud'}
-            aria-pressed={ttsState !== 'idle'}
-            className={cn(
-              'flex h-8 items-center gap-1.5 border border-border px-2 transition-colors shrink-0',
-              ttsState === 'playing'
-                ? 'bg-primary text-primary-foreground border-primary'
-                : ttsState === 'loading'
-                  ? 'bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30'
-                  : ttsState !== 'idle'
-                    ? `${activeCls} border-primary/40`
-                    : `border-transparent ${hoverCls}`,
-            )}>
-            {ttsState === 'loading'
-              ? <Loader2 className="h-4 w-4 animate-spin" />
-              : ttsState !== 'idle'
-              ? <VolumeX className="h-4 w-4" />
-              : <Volume2 className="h-4 w-4" />}
-            <span className="hidden sm:inline text-[11px] font-medium">
-              {ttsState === 'playing' ? 'Dừng' : ttsState === 'paused' ? 'Tiếp' : ttsState === 'loading' ? '…' : 'Đọc'}
-            </span>
-          </button>
         </div>
       </header>
 
@@ -5377,13 +5386,19 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       {/* ── Footer ── */}
       <footer className={cn('shrink-0 border-t backdrop-blur-sm', headerCls)}>
         <div className="flex items-center gap-2 px-3 py-2">
-          <Button variant="outline" size="sm" onClick={handlePrev}
+          {/* Prev / Next use raw <button> with inline style so the theme-aware
+              color + border apply without fighting the Button primitive's
+              `text-foreground` class. Previous version rendered as empty
+              rectangles because the inline `style.color` was overridden by
+              the outline variant's class color in some browsers. */}
+          <button
+            onClick={handlePrev}
             disabled={chapters.length === 0 || currentIdx <= 0}
-            style={btnStyle}
             aria-label="Previous chapter"
-            className="gap-1 text-xs">
-            <ChevronLeft className="h-3.5 w-3.5" /><span className="hidden sm:block">Prev</span>
-          </Button>
+            className="inline-flex shrink-0 items-center gap-1 border bg-transparent px-2.5 py-1 text-xs font-medium transition-colors hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40"
+            style={{ color: themeObj.text, borderColor: btnBorder }}>
+            <ChevronLeft className="h-3.5 w-3.5" /><span className="hidden sm:inline">Prev</span>
+          </button>
 
           <div className="flex-1">
             <div className="flex flex-col items-center gap-1">
@@ -5468,13 +5483,14 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
             </div>
           </div>
 
-          <Button variant="outline" size="sm" onClick={handleNext}
+          <button
+            onClick={handleNext}
             disabled={chapters.length === 0 || currentIdx >= chapters.length - 1}
-            style={btnStyle}
             aria-label="Next chapter"
-            className="gap-1 text-xs">
-            <span className="hidden sm:block">Next</span><ChevronRight className="h-3.5 w-3.5" />
-          </Button>
+            className="inline-flex shrink-0 items-center gap-1 border bg-transparent px-2.5 py-1 text-xs font-medium transition-colors hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40"
+            style={{ color: themeObj.text, borderColor: btnBorder }}>
+            <span className="hidden sm:inline">Next</span><ChevronRight className="h-3.5 w-3.5" />
+          </button>
         </div>
       </footer>
 

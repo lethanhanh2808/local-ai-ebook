@@ -23,11 +23,18 @@ try {
 
 // East-Asian paper direction (DESIGN.md). Noto Serif SC carries the
 // Song/Mincho-style stroke contrast; Noto Sans SC is the fallback for
-// inline sans tags (metadata, tabular numerals). Both are loaded as a
-// single stylesheet from Google Fonts and preconnected to remove the
-// extra DNS round-trip before first paint.
+// inline sans tags (metadata, tabular numerals). Be Vietnam Pro is the
+// primary Latin/Vietnamese face — designed for Vietnamese typography
+// first (proper tone-mark positioning, circumflex/breve weights), with
+// clean Latin fallback for English titles. The app's content is mostly
+// Vietnamese novels, so this MUST come before Noto Serif SC in the
+// stack or the chrome will render with Noto's CJK-glyph-mapped Latin
+// (visible diacritic-positioning quirks on ộ, ề, ứ).
+//
+// Loaded as a single stylesheet from Google Fonts, preconnected to
+// remove the extra DNS round-trip before first paint.
 const PAPER_FONTS_HREF =
-  'https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;500;600;700&display=swap';
+  'https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600&family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;500;600;700&display=swap';
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

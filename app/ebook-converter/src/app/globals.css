@@ -99,19 +99,24 @@
 
 @layer base {
   body { @apply bg-background text-foreground; }
-  /* Page chrome uses Noto Serif SC (Song/Mincho-style serif) for both
-     headings and body. The Literata TTF is reserved for the EPUB reader.
-     Load Noto Serif SC + Noto Sans SC from Google Fonts so both Latin and
-     CJK glyphs share the same metrics. */
+  /* Page chrome uses Be Vietnam Pro (designed for Vietnamese typography)
+     as the primary Latin/Vietnamese face, with Noto Serif SC behind it
+     to carry any CJK glyph that sneaks into a Vietnamese title. Be
+     Vietnam Pro was selected because Noto Serif SC maps Latin glyphs
+     through the CJK-shaping pipeline, which produces visible diacritic-
+     positioning quirks on ộ, ề, ứ (the most common Vietnamese tones).
+     Literata TTF is reserved for the EPUB reader iframe.
+     Load Be Vietnam Pro + Noto Serif SC + Noto Sans SC from Google
+     Fonts so Latin, Vietnamese, and CJK all share the same metric. */
   body {
-    font-family: 'Noto Serif SC', 'Songti SC', 'Cambria', 'Georgia', serif;
+    font-family: 'Be Vietnam Pro', 'Noto Serif SC', 'Songti SC', 'Cambria', 'Georgia', serif;
     font-feature-settings: 'kern' 1, 'liga' 1;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
   }
   /* System sans stack kept available as `.font-sans` for inline tags and
      metadata where the brushed serif would be too loud. */
-  .font-sans { font-family: 'Noto Sans SC', 'Inter', system-ui, sans-serif; }
+  .font-sans { font-family: 'Be Vietnam Pro', 'Noto Sans SC', 'Inter', system-ui, sans-serif; }
   .font-mono { font-family: 'JetBrains Mono', 'SF Mono', 'Menlo', monospace; }
 
   /* The whole document is a sheet of paper. Use SVG fractal noise

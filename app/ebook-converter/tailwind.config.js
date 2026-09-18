@@ -19,14 +19,19 @@ module.exports = {
     container: false,
     extend: {
       fontFamily: {
-        // Brushed serif — the chrome voice. Song/Mincho style. Used for
-        // headings, body prose, and the page chrome itself. `serif` is
-        // the final fallback so a user with no web fonts still sees a
-        // serif app, not a slabby system sans.
-        serif: ['Noto Serif SC', 'Songti SC', 'Cambria', 'Georgia', 'serif'],
-        // Sans is reserved for inline metadata and tabular data; the
-        // shell never uses it as the body voice.
-        sans: ['Noto Sans SC', 'Inter', 'system-ui', 'sans-serif'],
+        // Brushed serif — the chrome voice. Be Vietnam Pro leads because
+        // the app's content is Vietnamese novels and BVP has the best
+        // Vietnamese tone-mark positioning of any free serif/sans pair
+        // (proper circumflex/breve/horn weights, no Noto CJK-glyph
+        // substitution on ộ/ề/ứ). Noto Serif SC provides CJK fallback for
+        // any CJK glyph that slips into a Vietnamese title; Songti SC +
+        // Cambria + Georgia are the platform fallbacks. `serif` is the
+        // final fallback so a user with no web fonts still sees a serif.
+        serif: ['"Be Vietnam Pro"', '"Noto Serif SC"', '"Songti SC"', 'Cambria', 'Georgia', 'serif'],
+        // Sans is reserved for inline metadata and tabular data. Be
+        // Vietnam Pro's sans cuts handle Vietnamese just as cleanly as
+        // the serif cuts.
+        sans: ['"Be Vietnam Pro"', '"Noto Sans SC"', 'Inter', 'system-ui', 'sans-serif'],
         // Literata is bundled as a TTF for the EPUB enhancer (Reader
         // surface). Kept here so `font-literata` resolves if a future
         // shell surface needs the same bookish voice.
