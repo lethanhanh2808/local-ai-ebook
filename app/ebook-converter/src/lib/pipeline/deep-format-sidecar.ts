@@ -53,8 +53,11 @@ export interface DeepFormatSidecar {
    *  (false = sidecar was written but with raw HTML — currently we only
    *  write the sidecar when deepFormat is on, so this is always true). */
   deepFormatUsed: boolean;
-  /** AI model used to produce the cleaned text (best-effort — may be null
-   *  if the worker ran without an AI provider). */
+  /** Reserved for forward-compat. The conversion pipeline does not yet
+   *  expose the model that produced the cleaned text (the deep-format
+   *  stage hashes on bookId rather than per-call AI config). New writes
+   *  always carry `null`; old sidecars preserved on disk may carry a
+   *  string and are returned as-is by the reader. */
   model?: string | null;
   /** Number of AI calls consumed producing these chapters. Diagnostic. */
   aiCalls?: number;
@@ -77,7 +80,6 @@ export async function writeDeepFormatSidecar(opts: {
   outputPath: string;
   bookId: string;
   chapters: SidecarChapter[];
-  model?: string | null;
   aiCalls?: number;
 }): Promise<{ ok: true; path: string; bytes: number } | { ok: false; error: string }> {
   const sidecar: DeepFormatSidecar = {
@@ -85,7 +87,7 @@ export async function writeDeepFormatSidecar(opts: {
     bookId: opts.bookId,
     generatedAt: new Date().toISOString(),
     deepFormatUsed: true,
-    model: opts.model ?? null,
+    model: null,
     aiCalls: opts.aiCalls ?? 0,
     chapters: opts.chapters,
   };

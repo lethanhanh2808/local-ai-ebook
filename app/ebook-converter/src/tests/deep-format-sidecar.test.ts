@@ -45,7 +45,6 @@ describe('deep-format-sidecar', () => {
       outputPath: epubPath,
       bookId,
       chapters,
-      model: 'test-model',
       aiCalls: 2,
     });
     expect(written.ok).toBe(true);

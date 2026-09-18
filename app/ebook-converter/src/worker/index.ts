@@ -281,11 +281,10 @@ const worker = new Worker<ConversionJobData>(
           const chapterIndices = finalEpub.htmlFiles.map((_f: string, i: number) => i);
           const { enqueueBibleRefreshForChapters } = await import('@/lib/ai/character-bible-enqueue');
           const r = await enqueueBibleRefreshForChapters(jobId, chapterIndices, {
-            useDeepFormatSidecar: true,
             reason: 'deep-format',
           });
           bibleFanout = { enqueued: r.added, skipped: false };
-          log('info', 'bible-fanout', `Enqueued ${r.added} bible-refresh job(s) (deep-format source)`, {
+          log('info', 'bible-fanout', `Enqueued ${r.added} bible-refresh job(s) (${r.deduped} deduped, deep-format source)`, {
             bookId: jobId, chapters: chapterIndices.length,
           });
         } else if (result.aiUsed.deepFormat && !autoEnqueue) {

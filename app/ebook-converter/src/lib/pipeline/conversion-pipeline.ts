@@ -170,8 +170,13 @@ export async function runConversionPipeline(opts: PipelineOptions): Promise<Pipe
       outputPath,
       bookId: opts.bookId,
       chapters: sidecarChapters,
-      model: opts.aiPrompt ? null : null, // model is plumbed elsewhere
       aiCalls: deepFormatAiCalls,
+      // `model` is not plumbed yet: the deep-format stage currently
+      // hashes its cleaned text on bookId (not on per-AI-call config),
+      // so any model name we wrote here would be empty and never read
+      // back. Field stays in the sidecar schema for forward compat but
+      // is omitted from the write. When we add per-book model
+      // selection to PipelineOptions, this is the place to thread it.
     });
     if (result.ok) {
       deepFormatSidecar = { path: result.path, bytes: result.bytes };
