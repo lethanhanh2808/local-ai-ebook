@@ -208,7 +208,7 @@ export function AudioStudio({ bookId, bookTitle }: { bookId: string; bookTitle: 
                 className={cn(
                   'relative flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-all',
                   active
-                    ? 'bg-background text-foreground shadow-sm'
+                    ? 'bg-background text-foreground shadow-acetate'
                     : 'text-muted-foreground hover:text-foreground',
                 )}
               >
