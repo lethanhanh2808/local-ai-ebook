@@ -210,18 +210,6 @@ export function AppNav() {
             </Link>
           )}
 
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="Sign out"
-            title="Sign out"
-            onClick={handleLogout}
-            className="hidden h-8 w-8 sm:inline-flex"
-          >
-            <LogOut className="h-4 w-4" />
-          </Button>
-
           <ThemeToggle />
           {/* Hamburger (< md) */}
           <button

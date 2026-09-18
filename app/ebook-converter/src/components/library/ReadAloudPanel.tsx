@@ -639,7 +639,7 @@ export function ReadAloudPanel({
           backdrop's z-index doesn't matter (panel is later in DOM). */}
       <aside
         className={cn(
-          'fixed top-0 right-0 bottom-0 z-[60] w-full sm:w-[380px] shadow-2xl',
+          'fixed top-0 right-0 bottom-0 z-[60] w-full sm:w-[380px] shadow-acetate',
           'flex flex-col border-l border-border transition-transform',
           themeCls, borderCls,
         )}

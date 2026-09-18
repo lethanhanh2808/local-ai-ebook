@@ -718,7 +718,7 @@ export function RelationshipGraph({ nodes, edges, width = 720, height = 460, onS
       {/* Main graph canvas. Drag to pan, Ctrl+wheel (or the +/- buttons
           above) to zoom. Nodes have data-node="1" so the drag handler
           can ignore clicks on them. */}
-      <div className="relative overflow-hidden rounded-lg border border-border/60 bg-gradient-to-br from-slate-950/40 to-slate-900/20 select-none">
+      <div className="relative overflow-hidden rounded-md border border-border/60 bg-card select-none">
         <svg
           ref={svgRef}
           width="100%"

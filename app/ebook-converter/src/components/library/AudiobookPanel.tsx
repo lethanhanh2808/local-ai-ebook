@@ -201,7 +201,7 @@ export function AudiobookPanel({ bookId, onChapterAudioReady }: Props) {
 
   return (
     <div className="space-y-4">
-      <Card className="rounded-xl border border-border p-4">
+      <Card className="border border-border p-4">
         <div className="flex items-center justify-between gap-3 mb-3">
           <h3 className="text-sm font-semibold flex items-center gap-1.5">
             <Headphones className="h-4 w-4 text-primary" />Audiobook đọc trước
@@ -329,7 +329,7 @@ export function AudiobookPanel({ bookId, onChapterAudioReady }: Props) {
 
       {/* Chapter list */}
       {chapters.length > 0 && (
-        <Card className="rounded-xl border border-border">
+        <Card className="border border-border">
           <div className="px-4 py-2 border-b border-border text-xs font-semibold text-muted-foreground">Danh sách chương</div>
           <div className="max-h-80 overflow-y-auto divide-y divide-border">
             {chapters.map((c, idx) => (

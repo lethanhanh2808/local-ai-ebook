@@ -359,7 +359,7 @@ export function AudiobookPlayer({ bookId, chapters, initialChapterIdx, onClose, 
   }, [togglePlay, skip]);
 
   return (
-    <div ref={rootRef} role="region" aria-label="Audiobook player" className="fixed bottom-0 left-0 right-0 z-40 border-t border-border bg-background/95 backdrop-blur-xl shadow-2xl">
+    <div ref={rootRef} role="region" aria-label="Audiobook player" className="fixed bottom-0 left-0 right-0 z-40 border-t border-border bg-background/95 backdrop-blur-xl shadow-acetate">
       <div className="container mx-auto max-w-6xl px-4 py-3">
         {/* Title + close */}
         <div className="flex items-start gap-2 mb-2">

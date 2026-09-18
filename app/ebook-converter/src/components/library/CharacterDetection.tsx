@@ -316,7 +316,7 @@ export function CharacterDetection({ bookId, existingCharacters, onApplied }: Pr
 
   return (
     <div className="space-y-4">
-      <Card className="rounded-xl border border-border p-4">
+      <Card className="border border-border p-4">
         <div className="flex items-center justify-between mb-2">
           <div>
             <h3 className="text-sm font-semibold flex items-center gap-1.5">
@@ -348,7 +348,7 @@ export function CharacterDetection({ bookId, existingCharacters, onApplied }: Pr
 
       {result && (
         <>
-          <Card className="rounded-xl border border-border p-4">
+          <Card className="border border-border p-4">
             <div className="flex items-center justify-between mb-2">
               <div className="text-xs text-muted-foreground">
                 <strong className="text-foreground">{result.characters.length}</strong> nhân vật được phát hiện

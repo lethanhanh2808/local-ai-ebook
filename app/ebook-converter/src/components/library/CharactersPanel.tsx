@@ -971,7 +971,7 @@ export function CharactersPanel({ bookId, bookLanguage, refreshSignal }: Props) 
                 <select
                   value={editRole}
                   onChange={(e) => setEditRole(e.target.value)}
-                  className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                  className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                 >
                   <option value="main">Chính</option>
                   <option value="supporting">Phụ</option>
@@ -983,7 +983,7 @@ export function CharactersPanel({ bookId, bookLanguage, refreshSignal }: Props) 
                 <select
                   value={editGender}
                   onChange={(e) => setEditGender(e.target.value)}
-                  className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                  className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                 >
                   <option value="unknown">Không rõ</option>
                   <option value="male">Nam</option>
@@ -996,7 +996,7 @@ export function CharactersPanel({ bookId, bookLanguage, refreshSignal }: Props) 
               <select
                 value={editAge}
                 onChange={(e) => setEditAge(e.target.value)}
-                className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
               >
                 <option value="unknown">Không rõ</option>
                 <option value="young">Trẻ</option>
@@ -1022,7 +1022,7 @@ export function CharactersPanel({ bookId, bookLanguage, refreshSignal }: Props) 
                 onChange={(e) => setEditDescription(e.target.value)}
                 placeholder="Đặc điểm, tính cách, ngữ cảnh…"
                 rows={3}
-                className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
               />
             </div>
           </DialogBody>
@@ -1087,7 +1087,7 @@ function CharacterCard({
           wrap and never shift the sections below. */}
       <div className="flex h-[76px] shrink-0 items-start gap-3">
         <div
-          className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-lg font-bold shadow-sm"
+          className="flex h-12 w-12 shrink-0 items-center justify-center rounded text-lg font-bold shadow-acetate"
           style={{ background: tint.bg, color: tint.ring }}
         >
           {char.name.slice(0, 1).toUpperCase()}

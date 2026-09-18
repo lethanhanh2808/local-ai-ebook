@@ -132,12 +132,12 @@ export function AudioStudio({ bookId, bookTitle }: { bookId: string; bookTitle: 
   const isGenerating = status?.audiobookStatus === 'generating';
 
   return (
-    <div className="flex h-screen flex-col bg-gradient-to-b from-muted/40 to-background text-foreground">
+    <div className="flex h-screen flex-col bg-background text-foreground">
       {/* Header */}
       <header className="flex items-center gap-3 border-b border-border/70 bg-background/80 px-5 py-3.5 backdrop-blur">
         <Link
           href={`/library/${bookId}/read`}
-          className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-border/70 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="inline-flex h-9 w-9 items-center justify-center rounded border border-border/70 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           aria-label="Quay lại đọc"
         >
           <ArrowLeft className="h-4 w-4" />
@@ -153,7 +153,7 @@ export function AudioStudio({ bookId, bookTitle }: { bookId: string; bookTitle: 
         </div>
         <Link
           href={`/library/${bookId}/read`}
-          className="inline-flex items-center gap-1.5 rounded-xl border border-border/70 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="inline-flex items-center gap-1.5 rounded border border-border/70 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           <Headphones className="h-3.5 w-3.5" /> Đọc sách
         </Link>
@@ -194,7 +194,7 @@ export function AudioStudio({ bookId, bookTitle }: { bookId: string; bookTitle: 
 
       {/* Segmented tab bar */}
       <div className="flex justify-center border-b border-border/70 bg-background/40 px-4 py-2.5">
-        <div className="inline-flex w-full max-w-5xl items-center gap-1 rounded-xl border border-border/70 bg-muted/40 p-1">
+        <div className="inline-flex w-full max-w-5xl items-center gap-1 rounded border border-border/70 bg-muted/40 p-1">
           {TABS.map((t) => {
             const b = badge(t.id);
             const active = tab === t.id;
@@ -283,7 +283,7 @@ export function AudioStudio({ bookId, bookTitle }: { bookId: string; bookTitle: 
             size="sm"
             onClick={() => void generateAudiobook()}
             disabled={generating || isGenerating}
-            className="shrink-0 rounded-xl"
+            className="shrink-0 rounded"
           >
             {generating || isGenerating ? (
               <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />Đang tạo…</>

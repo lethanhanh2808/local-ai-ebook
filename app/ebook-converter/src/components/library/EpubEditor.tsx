@@ -1064,7 +1064,7 @@ export function EpubEditor({ bookId, initialChapterId }: EpubEditorProps) {
                   setDirty(true);
                 }}
                 onBlur={() => { composingRef.current = false; }}
-                className="min-h-[70vh] px-8 py-8 font-serif text-[18px] leading-8 outline-none shadow-sm focus:ring-2 focus:ring-primary/30 [&_blockquote]:mx-8 [&_blockquote]:my-6 [&_blockquote]:border-l-2 [&_blockquote]:pl-4 [&_h1]:mb-6 [&_h1]:mt-8 [&_h1]:text-center [&_h1]:text-3xl [&_h2]:mb-4 [&_h2]:mt-8 [&_h2]:text-center [&_h2]:text-2xl [&_hr]:my-8 [&_p]:my-0 [&_p]:indent-8"
+                className="min-h-[70vh] px-8 py-8 font-serif text-[18px] leading-8 outline-none focus:ring-2 focus:ring-primary/30 [&_blockquote]:mx-8 [&_blockquote]:my-6 [&_blockquote]:border-l-2 [&_blockquote]:pl-4 [&_h1]:mb-6 [&_h1]:mt-8 [&_h1]:text-center [&_h1]:text-3xl [&_h2]:mb-4 [&_h2]:mt-8 [&_h2]:text-center [&_h2]:text-2xl [&_hr]:my-8 [&_p]:my-0 [&_p]:indent-8"
               />
             )}
             {/* Live stats footer — runs on every keystroke (cheap, in-memory). */}

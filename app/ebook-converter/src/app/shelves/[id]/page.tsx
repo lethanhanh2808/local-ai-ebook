@@ -80,7 +80,7 @@ function StatusPill({ bookId, current, onChange }: { bookId: string; current: st
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 top-full z-20 mt-1 min-w-[110px] border border-border bg-popover text-popover-foreground shadow-lg overflow-hidden">
+          <div className="absolute left-0 top-full z-20 mt-1 min-w-[110px] border border-border bg-popover text-popover-foreground shadow-acetate overflow-hidden">
             {Object.keys(STATUS_LABELS).map((s) => (
               <button key={s} onClick={() => set(s)}
                 className={cn('w-full px-3 py-1.5 text-left text-xs hover:bg-muted transition-colors',

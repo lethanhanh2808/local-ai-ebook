@@ -113,7 +113,7 @@ function BookListRow({
   };
 
   return (
-    <Card className="flex items-center gap-3 rounded-xl border border-border p-3 hover:bg-muted/30 transition-colors group">
+    <Card className="flex items-center gap-3 border border-border p-3 hover:bg-muted/30 transition-colors group">
       {/* Cover */}
       <div className="relative h-16 w-11 shrink-0 overflow-hidden rounded bg-muted">
         {/* eslint-disable-next-line @next/next/no-img-element */}

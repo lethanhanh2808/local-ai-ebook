@@ -21,7 +21,7 @@ export default function ShelvesPage() {
         description="Những bộ sưu tập bạn tự tạo — gom sách theo chủ đề, series hoặc tâm trạng."
         icon={<BookMarked className="h-4 w-4" />}
       />
-      <Suspense fallback={<div className="h-48 animate-pulse rounded-xl bg-muted" />}>
+      <Suspense fallback={<div className="h-48 animate-pulse rounded bg-muted" />}>
         <ShelvesView />
       </Suspense>
     </div>

@@ -164,7 +164,7 @@ export const JobCard = forwardRef<HTMLDivElement, JobCardProps>(function JobCard
         // Base border (color set explicitly because this element sits inside a
         // Card without one). Conditional classes override `border-border` for
         // status highlights; later classes win in Tailwind's cascade.
-        'min-w-0 border border-border shadow-sm transition-colors overflow-hidden',
+        'min-w-0 border border-border shadow-acetate transition-colors overflow-hidden',
         job.status === 'failed' && 'border-destructive/40',
         job.status === 'completed' && 'border-success-fg/40',
         isActive && 'border-primary/40',
