@@ -1,31 +1,35 @@
 // src/app/convert/page.tsx
 // Dedicated converter page — focused on the import/EPUB-conversion workflow.
 //
-// Page layout (paper world):
-//   • Page header (eyebrow + title + description + actions)
-//   • Worker status — single block, two states (offline banner / online
-//     compact line) with action feedback appended underneath
-//   • Hero upload card (Card wraps UploadZone; UploadZone keeps its own
-//     inner cards for the dropzone / AI toggle / preset / deep-format rows)
-//   • Two-column main area at lg+ (1.5fr / 1fr split):
-//       LEFT  → Queue (Card) + AI Pipeline (numbered vertical timeline Card)
-//       RIGHT → Stats (hero success-rate Card) + Supported formats (Card)
+// Page shape (paper world):
+//   • PageHeader (eyebrow + title + description + actions)
+//   • Worker status block — single wrapper, two states (offline banner /
+//     online emerald band) with feedback message appended
+//   • Reference bar — two paper popovers (Quy trình / Định dạng) that
+//     summarise the AI pipeline and supported file formats on demand,
+//     rather than occupying permanent right-column cards
+//   • Tab rail — Upload | Progress
+//       Upload  → Hero upload card (the action)
+//       Progress → Queue (left, 1.4fr) + Stats card (right, 1fr)
 //
-// All section headers use the same CardHeader / CardEyebrow / CardTitle
+// All section headers use the CardHeader / CardEyebrow / CardTitle
 // pattern so the rhythm reads as one cohesive page.
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import type { ReactNode } from 'react';
 import {
   FileText, Sparkles, ShieldOff, Settings, ListChecks,
   CheckCircle2, AlertTriangle, Loader2, Languages, BookCheck, Server, RefreshCw,
-  Play, Check, Square, Wifi,
+  Play, Check, Square, Wifi, Wand2, ChevronDown, Upload as UploadIcon,
+  Activity, X,
 } from 'lucide-react';
 import { Button, buttonClasses } from '@/components/ui/button';
 import {
   Card, CardHeader, CardTitle, CardDescription, CardEyebrow, CardContent, CardFooter,
 } from '@/components/ui/card';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { useToast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { UploadZone } from '@/components/jobs/UploadZone';
@@ -63,6 +67,119 @@ const PIPELINE_STEPS = [
   { icon: CheckCircle2, label: 'Embed fonts',  desc: 'Nhúng font và metadata cho Kindle / Boox / Kobo' },
 ] as const;
 
+/* ------------------------------------------------------------------ */
+/* Paper popover — click-triggered, dismiss on outside-click / Esc     */
+/* ------------------------------------------------------------------ */
+
+interface PaperPopoverProps {
+  /** Short label used as the trigger button text and aria-label. */
+  label: string;
+  /** Optional icon shown left of `label` inside the trigger button. */
+  triggerIcon?: ReactNode;
+  /** Body rendered inside the popover sheet. */
+  children: ReactNode;
+  /** Accessible label for the popover sheet. Defaults to `label`. */
+  ariaLabel?: string;
+  /** Optional hint shown on the right side of the trigger button
+   *  (e.g. a count badge). Rendered as a 1-cell flex child. */
+  rightHint?: ReactNode;
+  /** Alignment of the popover sheet against the trigger. */
+  align?: 'left' | 'right';
+}
+
+/**
+ * Lightweight paper-style popover. Click the trigger to toggle; click
+ * outside or press Esc to dismiss. We follow the same hand-rolled pattern
+ * as `EbookReader.aaPopover` because the project doesn't bundle Radix
+ * Popover as a dependency. Uses paper-leaved bg, hairline rule, no
+ * rounded corners — fits the East-Asian paper visual world.
+ */
+function PaperPopover({
+  label, triggerIcon, children, ariaLabel, rightHint, align = 'left',
+}: PaperPopoverProps) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  // Outside-click + Escape dismissal.
+  useEffect(() => {
+    if (!open) return;
+    function onPointerDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)
+          && triggerRef.current && !triggerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false);
+    }
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative inline-block">
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-label={ariaLabel ?? label}
+        className={cn(
+          'inline-flex items-center gap-2 border border-border bg-card px-3 py-2 text-xs font-medium text-foreground transition-colors',
+          'hover:bg-muted/40',
+          open && 'border-primary text-primary',
+        )}
+      >
+        {triggerIcon && <span className="text-primary">{triggerIcon}</span>}
+        <span>{label}</span>
+        {rightHint}
+        <ChevronDown
+          className={cn(
+            'h-3 w-3 text-muted-foreground transition-transform',
+            open && 'rotate-180 text-primary',
+          )}
+        />
+      </button>
+      {open && (
+        <div
+          ref={ref}
+          role="dialog"
+          aria-label={ariaLabel ?? label}
+          className={cn(
+            'absolute z-50 mt-2 w-80 sm:w-96 border border-border bg-card shadow-acetate',
+            align === 'left' ? 'left-0' : 'right-0',
+          )}
+        >
+          <div className="flex items-start justify-between gap-2 px-4 pt-4 pb-2 border-b border-border">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-primary">
+              {label}
+            </span>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              aria-label="Đóng"
+              className="inline-flex h-6 w-6 items-center justify-center text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="p-4">{children}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Page                                                                */
+/* ------------------------------------------------------------------ */
+
 export default function ConvertPage() {
   const toast = useToast();
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -76,9 +193,6 @@ export default function ConvertPage() {
   } | null>(null);
   const [workerStarting, setWorkerStarting] = useState(false);
   const [workerActionMsg, setWorkerActionMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
-  // Phase 4.3 — Calibre probe. When ok, the "Định dạng hỗ trợ" card
-  // surfaces Calibre-handled formats (MOBI for v1) so users discover that
-  // they can drag in Kindle files.
   const [calibreFormats, setCalibreFormats] = useState<CalibreFormat[]>([]);
 
   const fetchJobs = useCallback(async () => {
@@ -102,8 +216,7 @@ export default function ConvertPage() {
     } catch { /* ignore */ }
   }, []);
 
-  // Phase 4.3 — Calibre probe is independent of worker status. We fire-and-
-  // forget on mount; the 60s server-side cache keeps this cheap.
+  // Calibre probe — fire-and-forget; 60s server-side cache.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -117,10 +230,6 @@ export default function ConvertPage() {
     return () => { cancelled = true; };
   }, []);
 
-  // Phase 4.3 — merge base formats with Calibre-discoverable ones for the
-  // "Định dạng hỗ trợ" card. When the probe returns no formats (Calibre
-  // missing), we render just the base trio. `viaCalibre` flags which entries
-  // came from the Calibre probe so the row gets an amber extension tag.
   const supportedFormats = useMemo<SupportedFormat[]>(() => {
     if (calibreFormats.length === 0) {
       return BASE_SUPPORTED_FORMATS.map((f) => ({ ...f, viaCalibre: false }));
@@ -153,13 +262,10 @@ export default function ConvertPage() {
     }
   };
 
-  // Poll while there are active or pending jobs. When the queue empties, do
-  // one more refresh 3s later to ensure the stats settle to their final values.
   useEffect(() => {
     const hasActive = jobs.some((j) => j.status === 'processing' || j.status === 'queued');
     const hasPending = jobs.some((j) => j.status === 'pending');
     if (!hasActive && !hasPending) {
-      // No active work — refresh once after 3s to catch any final state changes.
       const t = setTimeout(() => setRefreshKey((k) => k + 1), 3000);
       return () => clearTimeout(t);
     }
@@ -167,7 +273,6 @@ export default function ConvertPage() {
     return () => clearInterval(t);
   }, [jobs]);
 
-  // Also poll worker status every 15s to detect when worker comes back online
   useEffect(() => {
     const t = setInterval(() => { void fetchWorkerStatus(); }, 15_000);
     return () => clearInterval(t);
@@ -183,8 +288,6 @@ export default function ConvertPage() {
   };
   const successRate = stats.total ? Math.round((stats.completed / stats.total) * 100) : 0;
 
-  // Show the worker status block when we know either state (online OR offline)
-  // — never when null/unknown, so first-paint doesn't flash a banner.
   const showWorkerStatus = workerStatus !== null;
 
   return (
@@ -323,232 +426,220 @@ export default function ConvertPage() {
         </div>
       )}
 
-      {/* ── Hero: Upload zone ────────────────────────────────────────────── */}
-      <Card>
-        <CardHeader>
-          <CardEyebrow>Bước 1 — Tải lên</CardEyebrow>
-          <CardTitle>Upload file EPUB / HTML / TXT</CardTitle>
-          <CardDescription>
-            5 giai đoạn: validate → repair → convert → embed → done. Kéo thả một hoặc nhiều file cùng lúc.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="pt-0">
-          <UploadZone onJobCreated={onJobCreated} />
-        </CardContent>
-      </Card>
-
-      {/* ── Two-column main area ─────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-[1.5fr_1fr] gap-6 items-start">
-        {/* LEFT: workflow (queue) + learning (pipeline) */}
-        <div className="space-y-6">
-          {/* Queue */}
-          <Card id="queue">
-            <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-3">
-              <div className="space-y-1 flex-1 min-w-0">
-                <CardEyebrow>Workflow</CardEyebrow>
-                <CardTitle>Hàng đợi chuyển đổi</CardTitle>
-                <CardDescription>
-                  Click job để xem chi tiết / download. Đang chạy: <span className="font-bold tabular-nums text-foreground">{stats.active}</span> · Lỗi: <span className="font-bold tabular-nums text-foreground">{stats.failed}</span>
-                </CardDescription>
-              </div>
-              <Button
-                size="icon"
-                variant="ghost"
-                onClick={() => setRefreshKey((k) => k + 1)}
-                aria-label="Refresh conversion queue"
-                className="shrink-0 mt-1"
-              >
-                <Loader2 className={cn(loading && 'animate-spin', 'h-4 w-4')} />
-              </Button>
-            </div>
-            <CardContent className="pt-0">
-              <JobList refreshTrigger={refreshKey} />
-            </CardContent>
-          </Card>
-
-          {/* AI pipeline — numbered vertical timeline */}
-          <Card>
-            <CardHeader>
-              <CardEyebrow>Quy trình</CardEyebrow>
-              <CardTitle>AI pipeline</CardTitle>
-              <CardDescription>
-                Mỗi conversion chạy qua 5 giai đoạn liên tiếp — từ validate đến embed font.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ol className="relative">
-                {PIPELINE_STEPS.map((step, i) => (
-                  <li
-                    key={step.label}
-                    className={cn(
-                      'relative flex gap-4 pb-5 last:pb-0',
-                    )}
-                  >
-                    <div className="relative flex flex-col items-center shrink-0">
-                      <span className="flex h-7 w-7 items-center justify-center bg-primary text-primary-foreground text-[11px] font-bold tabular-nums">
-                        {i + 1}
-                      </span>
-                      {i < PIPELINE_STEPS.length - 1 && (
-                        <span
-                          className="w-px flex-1 bg-border mt-1.5 min-h-3"
-                          aria-hidden="true"
-                        />
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0 pt-0.5">
-                      <p className="text-[13px] font-semibold leading-tight flex items-center gap-1.5">
-                        <step.icon className="h-3.5 w-3.5 text-primary" />
-                        {step.label}
-                      </p>
-                      <p className="text-[11px] text-muted-foreground leading-snug mt-0.5">
-                        {step.desc}
-                      </p>
-                    </div>
-                  </li>
-                ))}
-              </ol>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* RIGHT: overview (stats) + capability (formats) */}
-        <div className="space-y-6">
-          {/* Stats — hero success rate + 3-cell mini grid */}
-          <Card>
-            <CardHeader>
-              <CardEyebrow>Tổng quan</CardEyebrow>
-              <CardTitle>Thống kê chuyển đổi</CardTitle>
-              <CardDescription>
-                Cập nhật realtime theo hàng đợi. Khoảng vài giây khi không có job mới.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              {/* Hero: success rate */}
-              <div className="space-y-2">
-                <div className="flex items-baseline justify-between">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                    Tỉ lệ thành công
-                  </p>
-                  <p className="text-[10px] text-muted-foreground tabular-nums">
-                    trên {stats.total} file
-                  </p>
-                </div>
-                <p className="text-5xl font-bold leading-none tracking-[-0.02em] text-emerald-600 dark:text-emerald-400 tabular-nums">
-                  {stats.total ? successRate : '—'}
-                  {stats.total > 0 && (
-                    <span className="text-2xl text-emerald-600/60 dark:text-emerald-400/60 ml-0.5">%</span>
+      {/* ── Reference popovers — Quy trình / Định dạng (on demand) ──────── */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground mr-1">
+          Tham khảo
+        </span>
+        <PaperPopover
+          label="Quy trình AI"
+          ariaLabel="Quy trình AI pipeline"
+          triggerIcon={<Wand2 className="h-3.5 w-3.5" />}
+        >
+          <ol className="relative">
+            {PIPELINE_STEPS.map((step, i) => (
+              <li key={step.label} className="relative flex gap-3 pb-4 last:pb-0">
+                <div className="relative flex flex-col items-center shrink-0">
+                  <span className="flex h-6 w-6 items-center justify-center bg-primary text-primary-foreground text-[10px] font-bold tabular-nums">
+                    {i + 1}
+                  </span>
+                  {i < PIPELINE_STEPS.length - 1 && (
+                    <span className="w-px flex-1 bg-border mt-1.5 min-h-2" aria-hidden="true" />
                   )}
-                </p>
-                {stats.total > 0 && (
-                  <div className="h-1 w-full bg-muted overflow-hidden">
-                    <div
-                      className="h-full bg-emerald-500 transition-all duration-500"
-                      style={{ width: `${successRate}%` }}
-                    />
-                  </div>
+                </div>
+                <div className="flex-1 min-w-0 pt-0.5">
+                  <p className="text-xs font-semibold leading-tight flex items-center gap-1.5">
+                    <step.icon className="h-3 w-3 text-primary" />
+                    {step.label}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground leading-snug mt-0.5">
+                    {step.desc}
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </PaperPopover>
+
+        <PaperPopover
+          label="Định dạng hỗ trợ"
+          ariaLabel="Định dạng file hỗ trợ"
+          triggerIcon={<FileText className="h-3.5 w-3.5" />}
+          rightHint={
+            <span className="text-[10px] font-bold tabular-nums text-muted-foreground">
+              {supportedFormats.length}
+            </span>
+          }
+          align="right"
+        >
+          <p className="text-[11px] text-muted-foreground mb-3 leading-snug">
+            {calibreFormats.length > 0
+              ? `${supportedFormats.length} định dạng — EPUB / HTML / TXT và ${calibreFormats.length} qua Calibre.`
+              : '3 định dạng cơ bản. Cài Calibre để mở khoá Kindle (MOBI / AZW3).'}
+          </p>
+          <ul className="space-y-1">
+            {supportedFormats.map((f) => (
+              <li
+                key={f.ext}
+                className="flex items-center gap-2 border border-border bg-muted/30 px-2 py-1.5"
+              >
+                <span
+                  className={cn(
+                    'border border-current px-1.5 py-0.5 text-[10px] font-bold tabular-nums shrink-0',
+                    f.viaCalibre
+                      ? 'text-amber-700 dark:text-amber-400'
+                      : 'text-primary',
+                  )}
+                >
+                  .{f.ext.toLowerCase()}
+                </span>
+                <span className="text-[11px] flex-1 min-w-0 truncate">{f.desc}</span>
+                {f.viaCalibre && (
+                  <span className="border border-current px-1 py-px text-[8px] font-semibold uppercase tracking-[0.16em] text-amber-700 dark:text-amber-400 shrink-0">
+                    Calibre
+                  </span>
                 )}
-              </div>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-3 pt-3 border-t border-border text-[11px] text-muted-foreground flex items-center gap-1.5">
+            <Sparkles className="h-3 w-3 text-primary shrink-0" />
+            <span>
+              AI provider đang dùng có thể thay đổi trong{' '}
+              <Link href="/settings" className="text-primary hover:underline font-medium">
+                Cài đặt
+              </Link>
+              .
+            </span>
+          </p>
+        </PaperPopover>
+      </div>
 
-              {/* Mini grid — totals / active / failed */}
-              <div className="grid grid-cols-3 gap-4 pt-4 border-t border-border">
-                <div className="space-y-1">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                    Tổng
-                  </p>
-                  <p className="flex items-center gap-1.5">
-                    <FileText className="h-3.5 w-3.5 text-muted-foreground" />
-                    <span className="text-lg font-bold tabular-nums">
-                      {loading ? '—' : stats.total}
-                    </span>
-                  </p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                    Đang xử lý
-                  </p>
-                  <p className="flex items-center gap-1.5">
-                    <Loader2 className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
-                    <span className="text-lg font-bold tabular-nums">
-                      {loading ? '—' : stats.active}
-                    </span>
-                  </p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                    Lỗi
-                  </p>
-                  <p className="flex items-center gap-1.5">
-                    <AlertTriangle
-                      className={cn(
-                        'h-3.5 w-3.5',
-                        stats.failed > 0 ? 'text-destructive' : 'text-muted-foreground',
-                      )}
-                    />
-                    <span
-                      className={cn(
-                        'text-lg font-bold tabular-nums',
-                        stats.failed > 0 && 'text-destructive',
-                      )}
-                    >
-                      {loading ? '—' : stats.failed}
-                    </span>
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+      {/* ── Tab rail ────────────────────────────────────────────────────── */}
+      <Tabs defaultValue="upload">
+        <TabsList>
+          <TabsTrigger value="upload">
+            <UploadIcon className="h-3.5 w-3.5" /> Upload
+          </TabsTrigger>
+          <TabsTrigger value="progress">
+            <Activity className="h-3.5 w-3.5" /> Progress
+            {stats.total > 0 && (
+              <span className="ml-1 inline-flex items-center justify-center px-1.5 min-w-[18px] h-4 bg-muted text-[10px] font-bold tabular-nums">
+                {stats.total}
+              </span>
+            )}
+          </TabsTrigger>
+        </TabsList>
 
-          {/* Supported formats — single render (no duplicate Calibre row) */}
+        {/* Upload tab — the action */}
+        <TabsContent value="upload">
           <Card>
             <CardHeader>
-              <CardEyebrow>Hỗ trợ</CardEyebrow>
-              <CardTitle>Định dạng file</CardTitle>
+              <CardEyebrow>Bước 1 — Tải lên</CardEyebrow>
+              <CardTitle>Upload file EPUB / HTML / TXT</CardTitle>
               <CardDescription>
-                {calibreFormats.length > 0
-                  ? `${supportedFormats.length} định dạng — EPUB / HTML / TXT và ${calibreFormats.length} qua Calibre.`
-                  : '3 định dạng cơ bản. Cài Calibre để mở khoá Kindle (MOBI / AZW3).'}
+                5 giai đoạn: validate → repair → convert → embed → done. Kéo thả một hoặc nhiều file cùng lúc.
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <ul className="space-y-1.5">
-                {supportedFormats.map((f) => (
-                  <li
-                    key={f.ext}
-                    className="flex items-center gap-3 border border-border bg-muted/30 px-3 py-2"
-                  >
-                    <span
-                      className={cn(
-                        'border border-current px-2 py-0.5 text-[10px] font-bold tabular-nums shrink-0',
-                        f.viaCalibre
-                          ? 'text-amber-700 dark:text-amber-400'
-                          : 'text-primary',
-                      )}
-                    >
-                      .{f.ext.toLowerCase()}
-                    </span>
-                    <span className="text-xs flex-1 min-w-0">{f.desc}</span>
-                    {f.viaCalibre && (
-                      <span className="border border-current px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-amber-700 dark:text-amber-400 shrink-0">
-                        via Calibre
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ul>
+            <CardContent className="pt-0">
+              <UploadZone onJobCreated={onJobCreated} />
             </CardContent>
-            <CardFooter className="text-[11px] text-muted-foreground gap-1.5">
-              <Sparkles className="h-3 w-3 text-primary shrink-0" />
-              <span>
-                AI provider đang dùng có thể thay đổi trong{' '}
-                <Link href="/settings" className="text-primary hover:underline font-medium">
-                  Cài đặt
-                </Link>
-                .
-              </span>
-            </CardFooter>
           </Card>
-        </div>
-      </div>
+        </TabsContent>
+
+        {/* Progress tab — queue + stats */}
+        <TabsContent value="progress">
+          <div className="grid grid-cols-1 lg:grid-cols-[1.4fr_1fr] gap-6 items-start">
+            {/* Queue */}
+            <Card id="queue">
+              <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-3">
+                <div className="space-y-1 flex-1 min-w-0">
+                  <CardEyebrow>Workflow</CardEyebrow>
+                  <CardTitle>Hàng đợi chuyển đổi</CardTitle>
+                  <CardDescription>
+                    Click job để xem chi tiết / download. Đang chạy: <span className="font-bold tabular-nums text-foreground">{stats.active}</span> · Lỗi: <span className="font-bold tabular-nums text-foreground">{stats.failed}</span>
+                  </CardDescription>
+                </div>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  onClick={() => setRefreshKey((k) => k + 1)}
+                  aria-label="Refresh conversion queue"
+                  className="shrink-0 mt-1"
+                >
+                  <Loader2 className={cn(loading && 'animate-spin', 'h-4 w-4')} />
+                </Button>
+              </div>
+              <CardContent className="pt-0">
+                <JobList refreshTrigger={refreshKey} />
+              </CardContent>
+            </Card>
+
+            {/* Stats — hero success rate + 3-cell mini grid */}
+            <Card>
+              <CardHeader>
+                <CardEyebrow>Tổng quan</CardEyebrow>
+                <CardTitle>Thống kê chuyển đổi</CardTitle>
+                <CardDescription>
+                  Cập nhật realtime theo hàng đợi.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-5">
+                <div className="space-y-2">
+                  <div className="flex items-baseline justify-between">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                      Tỉ lệ thành công
+                    </p>
+                    <p className="text-[10px] text-muted-foreground tabular-nums">
+                      trên {stats.total} file
+                    </p>
+                  </div>
+                  <p className="text-5xl font-bold leading-none tracking-[-0.02em] text-emerald-600 dark:text-emerald-400 tabular-nums">
+                    {stats.total ? successRate : '—'}
+                    {stats.total > 0 && (
+                      <span className="text-2xl text-emerald-600/60 dark:text-emerald-400/60 ml-0.5">%</span>
+                    )}
+                  </p>
+                  {stats.total > 0 && (
+                    <div className="h-1 w-full bg-muted overflow-hidden">
+                      <div
+                        className="h-full bg-emerald-500 transition-all duration-500"
+                        style={{ width: `${successRate}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-3 gap-4 pt-4 border-t border-border">
+                  <div className="space-y-1">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Tổng</p>
+                    <p className="flex items-center gap-1.5">
+                      <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="text-lg font-bold tabular-nums">{loading ? '—' : stats.total}</span>
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Đang xử lý</p>
+                    <p className="flex items-center gap-1.5">
+                      <Loader2 className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                      <span className="text-lg font-bold tabular-nums">{loading ? '—' : stats.active}</span>
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Lỗi</p>
+                    <p className="flex items-center gap-1.5">
+                      <AlertTriangle className={cn('h-3.5 w-3.5', stats.failed > 0 ? 'text-destructive' : 'text-muted-foreground')} />
+                      <span className={cn('text-lg font-bold tabular-nums', stats.failed > 0 && 'text-destructive')}>
+                        {loading ? '—' : stats.failed}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
