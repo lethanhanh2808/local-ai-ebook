@@ -28,10 +28,10 @@ const READ_STATUS_OPTS = [
 ];
 
 const STATUS_COLOR: Record<string, string> = {
-  read:     'bg-green-500/15 text-green-700 dark:text-green-400',
-  reading:  'bg-blue-500/15 text-blue-700 dark:text-blue-400',
-  unread:   'bg-muted text-muted-foreground',
-  archived: 'bg-muted/50 text-muted-foreground/60',
+  read:     'text-green-700 dark:text-green-400',
+  reading:  'text-blue-700 dark:text-blue-400',
+  unread:   'text-muted-foreground border-border',
+  archived: 'text-muted-foreground/60 border-border',
 };
 
 function formatBytes(b: number) {
@@ -152,7 +152,7 @@ function BookListRow({
         )}
         <div className="flex items-center flex-wrap gap-1.5 mt-1">
           <Badge className="border border-border text-[9px] px-1.5 h-4 py-0">{book.language.toUpperCase()}</Badge>
-          <span className={cn('rounded-full px-1.5 py-0.5 text-[9px] font-medium', STATUS_COLOR[book.readStatus] ?? STATUS_COLOR.unread)}>
+          <span className={cn('border border-current px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.16em]', STATUS_COLOR[book.readStatus] ?? STATUS_COLOR.unread)}>
             {book.readStatus}
           </span>
           {starRating > 0 && (
@@ -183,7 +183,7 @@ function BookListRow({
       <div className="flex items-center gap-1 shrink-0 opacity-100 transition-opacity lg:opacity-0 lg:group-hover:opacity-100 group-focus-within:opacity-100">
         <Link
           href={`/library/${book.id}/read`}
-          className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[11px] font-medium text-primary-foreground hover:bg-primary/90"
+          className="flex items-center gap-1 bg-primary px-2.5 py-1.5 text-[11px] font-medium text-primary-foreground hover:bg-primary/90"
         >
           <BookOpen className="h-3 w-3" /> Read
         </Link>
@@ -380,7 +380,7 @@ export function BookGrid() {
         ) : (
           <div className={cn('grid gap-4', viewMode === 'compact' ? 'grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7' : 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5')}>
             {Array.from({ length: viewMode === 'compact' ? 14 : 10 }).map((_, i) => (
-              <div key={i} className={cn('animate-pulse rounded-xl bg-muted', viewMode === 'compact' ? 'h-48' : 'h-72')} />
+              <div key={i} className={cn('animate-pulse bg-muted', viewMode === 'compact' ? 'h-48' : 'h-72')} />
             ))}
           </div>
         )
@@ -401,7 +401,7 @@ export function BookGrid() {
           action={hasFilters ? (
             <Button size="sm" variant="outline" onClick={clearFilters}>Xoá bộ lọc</Button>
           ) : (
-            <Link href="/convert" className="inline-flex h-8 items-center justify-center rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground shadow hover:bg-primary/90">
+            <Link href="/convert" className="inline-flex h-8 items-center justify-center bg-primary px-3 text-xs font-medium text-primary-foreground hover:bg-primary/90">
               <Plus className="h-3.5 w-3.5 mr-1.5" />Thêm sách mới
             </Link>
           )}

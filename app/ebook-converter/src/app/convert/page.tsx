@@ -178,7 +178,7 @@ export default function ConvertPage() {
 
       {/* ── Worker status banner (offline) ──────────────────────────────── */}
       {workerStatus && !workerStatus.online && (
-        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 flex flex-wrap items-start gap-3">
+        <div className="border border-amber-500/40 border-l-2 border-l-amber-500 bg-amber-500/10 p-4 flex flex-wrap items-start gap-3">
           <Server className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-amber-700 dark:text-amber-400">
@@ -231,10 +231,10 @@ export default function ConvertPage() {
       )}
       {workerActionMsg && (
         <div className={cn(
-          'flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs',
+          'flex items-center gap-2 border px-3 py-1.5 text-xs',
           workerActionMsg.kind === 'ok'
-            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-400'
-            : 'bg-destructive/10 border-destructive/30 text-destructive',
+            ? 'border-l-2 border-l-emerald-500 bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-400'
+            : 'border-l-2 border-l-destructive bg-destructive/10 border-destructive/30 text-destructive',
         )}>
           {workerActionMsg.kind === 'ok' ? <Check className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
           <span>{workerActionMsg.text}</span>
@@ -244,8 +244,8 @@ export default function ConvertPage() {
       {/* ── Worker status (compact, when online) — shows counts + stop btn ── */}
       {workerStatus?.online && (
         <div className="flex items-center gap-2 text-[10px] text-muted-foreground px-1">
-          <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+          <span className="inline-flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400">
+            <span className="h-2 w-2 bg-emerald-500" aria-hidden="true" />
             Worker đang chạy
           </span>
           {workerStatus.counts && workerStatus.counts.processing > 0 && (
@@ -279,9 +279,9 @@ export default function ConvertPage() {
       <div className="grid grid-cols-1 lg:grid-cols-[1.4fr_1fr] gap-6 items-start">
         {/* Left: upload + AI options + queue */}
         <div className="space-y-6">
-          <Card className="rounded-2xl border border-border p-5 sm:p-6">
+          <Card className="p-5 sm:p-6">
             <div className="flex items-center gap-2 mb-4">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <div className="flex h-8 w-8 items-center justify-center bg-primary text-primary-foreground">
                 <Upload className="h-4 w-4" />
               </div>
               <div>
@@ -295,7 +295,7 @@ export default function ConvertPage() {
           <section id="queue">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <div className="flex h-8 w-8 items-center justify-center bg-primary text-primary-foreground">
                   <ListChecks className="h-4 w-4" />
                 </div>
                 <div>
@@ -317,7 +317,7 @@ export default function ConvertPage() {
           <div>
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <div className="flex h-8 w-8 items-center justify-center bg-primary text-primary-foreground">
                   <Zap className="h-4 w-4" />
                 </div>
                 <h2 className="text-sm font-semibold">Thống kê chuyển đổi</h2>
@@ -335,7 +335,7 @@ export default function ConvertPage() {
           </div>
 
           {/* AI pipeline */}
-          <Card className="rounded-xl border border-border p-5">
+          <Card className="p-5">
             <h3 className="text-sm font-semibold flex items-center gap-2 mb-3">
               <Wand2 className="h-4 w-4 text-primary" />
               AI pipeline
@@ -349,7 +349,7 @@ export default function ConvertPage() {
                 { icon: CheckCircle2, label: 'Embed fonts',  desc: 'Nhúng font và metadata cho Kindle/Boox/Kobo' },
               ].map((step, i) => (
                 <li key={step.label} className="flex items-start gap-3">
-                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-bold">
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center bg-primary text-primary-foreground text-xs font-bold tabular-nums">
                     {i + 1}
                   </span>
                   <div className="flex-1 min-w-0">
@@ -364,23 +364,23 @@ export default function ConvertPage() {
           </Card>
 
           {/* Supported formats */}
-          <Card className="rounded-xl border border-border p-5">
+          <Card className="p-5">
             <h3 className="text-sm font-semibold flex items-center gap-2 mb-3">
               <FileText className="h-4 w-4 text-primary" />
               Định dạng hỗ trợ
             </h3>
             <div className="space-y-1.5">
               {supportedFormats.map((f) => (
-                <div key={f.ext} className="flex items-center gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
-                  <span className="rounded bg-primary/15 px-2 py-0.5 text-[10px] font-bold text-primary tabular-nums">
+                <div key={f.ext} className="flex items-center gap-3 border border-border bg-muted/30 px-3 py-2">
+                  <span className="border border-current px-2 py-0.5 text-[10px] font-bold text-primary tabular-nums">
                     .{f.ext.toLowerCase()}
                   </span>
                   <span className="text-xs">{f.desc}</span>
                 </div>
               ))}
               {calibreFormats.map((f) => (
-                <div key={f.extension} className="flex items-center gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
-                  <span className="rounded bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-300 tabular-nums">
+                <div key={f.extension} className="flex items-center gap-3 border border-border bg-muted/30 px-3 py-2">
+                  <span className="border border-current px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-300 tabular-nums">
                     .{f.extension}
                   </span>
                   <span className="text-xs">
@@ -390,7 +390,7 @@ export default function ConvertPage() {
                 </div>
               ))}
             </div>
-            <div className="mt-4 rounded-md border border-border border-dashed bg-muted/30 p-3 text-[11px] text-muted-foreground">
+            <div className="mt-4 border border-dashed border-border bg-muted/30 p-3 text-[11px] text-muted-foreground">
               <Sparkles className="inline h-3 w-3 mr-1 text-primary" />
               AI provider đang dùng có thể thay đổi trong{' '}
               <Link href="/settings" className="text-primary hover:underline font-medium">Cài đặt</Link>.
