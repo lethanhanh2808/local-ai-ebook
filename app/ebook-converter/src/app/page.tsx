@@ -508,7 +508,7 @@ function RecentBookCard({ book }: { book: BookSummary }) {
       <Card className="flex flex-col overflow-hidden transition-colors hover:bg-secondary/40 hover:border-foreground/30">
         <div className="aspect-[2/3] bg-muted overflow-hidden">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={`/api/library/${book.id}/cover?v=${book.updatedAt ? new Date(book.updatedAt).getTime() : 0}`} alt={book.title} className="h-full w-full object-cover"
+          <img src={`/api/library/${book.id}/cover?v=${book.updatedAt ? new Date(book.updatedAt).getTime() : 0}`} alt={book.title} className="h-full w-full object-fill"
             onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
         </div>
         <div className="p-2">
