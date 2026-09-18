@@ -26,6 +26,12 @@ import {
   type ParagraphRange,
 } from '@/lib/attribution';
 
+/** How many non-quoted narration paragraphs to look back when deciding
+ *  whether a propagation speaker "flipped" between two quoted blocks.
+ *  Web-novel monologue spacing rarely exceeds 3-4 paragraphs; capping
+ *  the scan here turns an O(n²) loop into O(n × MAX_FLIP_LOOKAHEAD). */
+export const MAX_FLIP_LOOKAHEAD = 6;
+
 export type SentenceSource = 'narration' | 'character' | 'manual';
 
 export interface VoicePlanSentence {
@@ -191,8 +197,12 @@ export function buildSuggestedVoicePlan(params: {
       // Look at the gap paragraphs (pi-1, pi-2, …) to see whether any of
       // them is a non-quoted narration paragraph that names a *different*
       // character. If so, the speaker flipped and we break propagation.
+      // Capped at MAX_FLIP_LOOKAHEAD (was unbounded → O(n²) — see code
+      // review). The cap covers typical web-novel monologue spans
+      // without losing real flips; scans past the cap almost always hit
+      // the previous quote and break out of the inner loop anyway.
       let speakerFlipped = false;
-      for (let look = 1; look < pi; look++) {
+      for (let look = 1; look <= MAX_FLIP_LOOKAHEAD && look < pi; look++) {
         const prev = paragraphs[pi - look];
         if (sentenceHasQuote(prev.text)) break; // stop at the previous quote
         const txt = prev.text;
@@ -203,12 +213,20 @@ export function buildSuggestedVoicePlan(params: {
             if (n && txt.includes(n)) mentionedHere.add(c.name);
           }
         }
-        if (mentionedHere.size === 1) {
-          const [only] = [...mentionedHere];
-          if (only !== lastQuotedSpeaker) {
-            speakerFlipped = true;
-            break;
-          }
+        // Two cases count as a flip:
+        //   1. Exactly one character is named and it's NOT the previous
+        //      speaker ("A hỏi thăm" before quote from B means A's turn
+        //      is over).
+        //   2. Multiple characters are named but the previous speaker is
+        //      NOT among them — e.g. "[quote A] / A hỏi B thăm C /
+        //      [quote]" where the gap paragraph mentions B and C but
+        //      not A, so the next quote is unlikely to be A's. The
+        //      previous strict `size === 1` missed this and propagated
+        //      A's voice onto B's quote.
+        if (mentionedHere.size >= 1 && mentionedHere.size <= 3
+            && !mentionedHere.has(lastQuotedSpeaker)) {
+          speakerFlipped = true;
+          break;
         }
       }
       if (!speakerFlipped) {
