@@ -120,13 +120,20 @@ export async function POST(
       wasNew: a?.isNew ?? false,
     };
   });
-  const newOnes = items.filter((i) => i.wasNew);
+
+  // `assigned` = characters that received a voice this call (regardless
+  // of whether the picker created a new voice row or reused an existing
+  // one with a matching profile). `created` is a strict subset of
+  // `assigned` and is reported separately for diagnostics.
+  const successfullyAssigned = items.filter((i) => i.builtinName).length;
+  const newlyCreated = items.filter((i) => i.wasNew).length;
 
   return NextResponse.json({
     scanned: chars.length,
     considered: targets.length,
-    assigned: newOnes.length,
-    skipped: targets.length - newOnes.length,
+    assigned: successfullyAssigned,
+    created: newlyCreated,
+    skipped: targets.length - successfullyAssigned,
     alreadyHadVoice: chars.filter((c) => !!c.voiceId && c.role !== 'main').length,
     items,
   });

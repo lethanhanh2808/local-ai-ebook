@@ -25,10 +25,6 @@ export async function enqueueBibleRefreshForChapters(
   bookId: string,
   chapterIndices: number[],
   opts?: {
-    /** When true, the worker prefers the deep-format sidecar when present.
-     *  Defaults to true so that a "fresh" book gets the cleaned text by
-     *  default; existing books that opt-in by reason get the same flag. */
-    useDeepFormatSidecar?: boolean;
     /** BullMQ `reason` enum value. 'deep-format' is the value the
      *  enqueue-all-after-conversion path uses. */
     reason?: CharacterBibleJobData['reason'];
@@ -36,7 +32,6 @@ export async function enqueueBibleRefreshForChapters(
 ): Promise<{ added: number; deduped: number }> {
   if (chapterIndices.length === 0) return { added: 0, deduped: 0 };
   const queue = getCharacterBibleQueue();
-  const useSidecar = opts?.useDeepFormatSidecar ?? true;
   const reason = opts?.reason ?? 'deep-format';
 
   const jobs = chapterIndices.map((chapterIndex) => ({
@@ -47,7 +42,6 @@ export async function enqueueBibleRefreshForChapters(
       chapterFile: null,
       autoMerge: true,
       reason,
-      useDeepFormatSidecar: useSidecar,
     } satisfies CharacterBibleJobData,
     opts: {
       // Stable jobId so duplicate enqueues collapse. Matches the
@@ -55,12 +49,18 @@ export async function enqueueBibleRefreshForChapters(
       jobId: `bible:${bookId}:${chapterIndex}`,
     },
   }));
+  // Capture a timestamp just before addBulk. BullMQ stamps every newly
+  // inserted job with the Redis-side insert time; pre-existing jobs
+  // (deduped by jobId) keep their original timestamp. Anything with
+  // `timestamp >= before` was just inserted, the rest are deduped hits.
+  // 1ms lead accommodates clock granularity inside the Redis server.
+  const before = Date.now() - 1;
   const result = await queue.addBulk(jobs);
-  // BullMQ doesn't expose a dedupe counter directly, but the returned
-  // array contains the jobs that were either newly added or fetched
-  // from the existing queue. We can count vs `jobs.length` by checking
-  // timestamps, but for the worker's purposes we only need to know
-  // "how many chapters did we just touch". Return the requested count
-  // so the worker log is informative.
-  return { added: result.length, deduped: 0 };
+  let added = 0;
+  for (const job of result) {
+    const ts = (job as { timestamp?: number }).timestamp;
+    if (typeof ts === 'number' && ts >= before) added++;
+  }
+  const deduped = Math.max(0, result.length - added);
+  return { added, deduped };
 }

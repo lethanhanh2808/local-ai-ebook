@@ -542,10 +542,15 @@ export function CharactersPanel({ bookId, bookLanguage, refreshSignal }: Props) 
       const assignedCount = bulkData.assigned ?? 0;
 
       // ── Phase 2: detect any characters the bible might have missed ────
-      // Skip if all characters already have voices (saves an LLM call).
+      // Skip when every supporting/minor/crowd character already has a
+      // voiceId after Phase 1 — calling detect again in that case burns
+      // an LLM round-trip for no upside. (Phase 1 always reports
+      // `assigned` accurately now, so we no longer need the historical
+      // "if assignedCount === 0, run anyway" workaround that fired the
+      // detector on every click because of an upstream counter bug.)
       let newlyDetected = 0;
       const hasUnassigned = characters.some((c) => !c.voiceId && c.role !== 'main');
-      if (hasUnassigned || assignedCount === 0) {
+      if (hasUnassigned) {
         const det = await fetch(`/api/library/${bookId}/characters/detect`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
