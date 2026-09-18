@@ -247,14 +247,14 @@ export function ReadAloudPanel({
         <div className={cn('flex border-b border-border shrink-0', borderCls)}>
           <button
             onClick={() => setActiveTab('voices')}
-            className={cn('flex-1 py-2 text-xs font-medium transition-colors',
-              activeTab === 'voices' ? activeCls : mutedCls)}>
+            className={cn('flex-1 py-2 text-xs font-medium transition-colors -mb-px border-b-2',
+              activeTab === 'voices' ? 'text-primary border-primary' : 'border-transparent text-muted-foreground hover:text-foreground')}>
             🎙️ Giọng đọc
           </button>
           <button
             onClick={() => setActiveTab('settings')}
-            className={cn('flex-1 py-2 text-xs font-medium transition-colors',
-              activeTab === 'settings' ? activeCls : mutedCls)}>
+            className={cn('flex-1 py-2 text-xs font-medium transition-colors -mb-px border-b-2',
+              activeTab === 'settings' ? 'text-primary border-primary' : 'border-transparent text-muted-foreground hover:text-foreground')}>
             ⚙️ Cài đặt
           </button>
         </div>
