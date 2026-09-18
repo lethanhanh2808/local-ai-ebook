@@ -238,7 +238,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5 min-w-0">
               <Zap className="h-4 w-4 text-primary shrink-0" />
-              <span className="text-sm font-medium flex-1 min-w-[8rem] truncate">Auto-start conversion</span>
+              <span className="text-sm font-medium whitespace-nowrap">Auto-start conversion</span>
               {!autoStart && <span className="border border-current px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-700 dark:text-amber-400 shrink-0">MANUAL</span>}
               <Tooltip content={autoStart
                 ? 'Files start converting as soon as upload completes.'
@@ -303,7 +303,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5 min-w-0">
               <Sparkles className="h-4 w-4 text-primary shrink-0" />
-              <span className="text-sm font-medium flex-1 min-w-[8rem] truncate">AI Enhancement</span>
+              <span className="text-sm font-medium whitespace-nowrap">AI Enhancement</span>
               {aiEnhance && <span className="border border-current px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-primary shrink-0">FAST</span>}
               <Tooltip content="Quick parallel pass: fixes watermarks, encoding, broken images. ~30s per book." side="top">
                 <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help shrink-0">
@@ -320,7 +320,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5 min-w-0">
               <Wand2 className="h-4 w-4 text-primary shrink-0" />
-              <span className="text-sm font-medium flex-1 min-w-[8rem] truncate">Deep Format (Vietnamese novel)</span>
+              <span className="text-sm font-medium whitespace-nowrap">Deep Format (Vietnamese novel)</span>
               {deepFormat && <span className="border border-current px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-600 dark:text-amber-400 shrink-0">SLOW</span>}
               <Tooltip content={<><strong>Recommended cho tiểu thuyết.</strong> AI re-formats từng chương: gộp/tách đoạn văn, định dạng hội thoại (nháy cong), ngắt cảnh (&lt;hr/&gt;). ~2-5 phút/chương.</>} side="top">
                 <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help shrink-0">
@@ -337,7 +337,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5 min-w-0">
               <Smartphone className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-              <span className="text-sm font-medium flex-1 min-w-[8rem] truncate">Reader-friendly (Onyx Boox / Kobo / Kindle)</span>
+              <span className="text-sm font-medium whitespace-nowrap">Reader-friendly (Onyx Boox / Kobo / Kindle)</span>
               {readerFriendly && <span className="border border-current px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-700 dark:text-emerald-300 shrink-0">QUICK</span>}
               <Tooltip content={<><strong>Dùng khi sách chỉ hiện 1–2 trang trên máy đọc e-ink.</strong> Bỏ animation, blur, text-shadow, hyphens, background gradient, font custom. Dùng stylesheet tối giản — convert xong trong vài chục giây.</>} side="top">
                 <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help shrink-0">
@@ -460,7 +460,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5 min-w-0">
               <ShieldOff className="h-4 w-4 text-primary shrink-0" />
-              <span className="text-sm font-medium flex-1 min-w-[8rem] truncate">AI Watermark Cleanup</span>
+              <span className="text-sm font-medium whitespace-nowrap">AI Watermark Cleanup</span>
               {aiWatermarkClean && <span className="border border-current px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-primary shrink-0">ON</span>}
               <Tooltip content="Detects repeated watermark phrases in the ebook and removes them during conversion" side="top">
                 <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help shrink-0">
