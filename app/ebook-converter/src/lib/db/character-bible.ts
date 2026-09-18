@@ -406,29 +406,41 @@ export async function removeRelationship(id: string): Promise<void> {
 // ── Appearances ───────────────────────────────────────────────────────────
 
 /** Bump a sparse ledger entry. Idempotent on chapterIndex — calling twice
- *  with mentions=1 writes { mentions: 2 }, etc. */
+ *  with the same args sums the mentions counters. */
 export async function recordAppearances(args: {
   bookId: string;
   chapterIndex: number;
   /** Names as recognised by the LLM (must match existing Character.name). */
   names: string[];
+  /** Per-name mention increments aligned 1-to-1 with `names`. Defaults
+   *  to 1 each when omitted (matches legacy single-mention behaviour for
+   *  callers that haven't been updated to count mentions yet). */
+  mentions?: number[];
 }): Promise<{ added: number; skipped: string[] }> {
   if (args.names.length === 0) return { added: 0, skipped: [] };
+  // Coerce mentions to a safe default + sanity-check lengths so a buggy
+  // caller can't write skewed counts into the ledger.
+  const counts = args.names.map((_, i) =>
+    typeof args.mentions?.[i] === 'number' && args.mentions[i]! > 0
+      ? Math.floor(args.mentions[i]!)
+      : 1,
+  );
   const characters = await prisma.character.findMany({
     where: { bookId: args.bookId, name: { in: args.names } },
     select: { id: true, name: true },
   });
   const known = new Map(characters.map((c) => [c.name, c.id]));
   const skipped = args.names.filter((n) => !known.has(n));
-  const ids = args.names
-    .map((n) => known.get(n))
-    .filter((v): v is string => Boolean(v));
-  if (ids.length === 0) return { added: 0, skipped };
+  // Walk names (not ids) so we can pull each name's count.
+  const paired = args.names
+    .map((name, i) => ({ name, count: counts[i], id: known.get(name) }))
+    .filter((p): p is { name: string; count: number; id: string } => Boolean(p.id));
+  if (paired.length === 0) return { added: 0, skipped };
   // Upsert one row per (characterId, chapterIndex). SQLite doesn't have a
   // "RETURNING id" on INSERT ... ON CONFLICT, so we read-then-insert.
   // For typical chapter-sizes (<200 characters) this is fine.
   await prisma.$transaction(
-    ids.map((characterId) =>
+    paired.map(({ id: characterId, count }) =>
       prisma.characterChapterAppearance.upsert({
         where: {
           characterId_chapterIndex: { characterId, chapterIndex: args.chapterIndex },
@@ -436,13 +448,13 @@ export async function recordAppearances(args: {
         create: {
           characterId,
           chapterIndex: args.chapterIndex,
-          mentions: 1,
+          mentions: count,
         },
-        update: { mentions: { increment: 1 }, analyzedAt: new Date() },
+        update: { mentions: { increment: count }, analyzedAt: new Date() },
       }),
     ),
   );
-  return { added: ids.length, skipped };
+  return { added: paired.length, skipped };
 }
 
 // ── Character upsert ──────────────────────────────────────────────────────

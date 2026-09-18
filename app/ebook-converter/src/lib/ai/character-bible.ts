@@ -588,6 +588,10 @@ interface RawBiblePatch {
   character_name?: string;
   chapter_index?: number;
   evidence_quote?: string;
+  /** For kind='appearance' — how many times the LLM detected this
+   *  character mentioned in the chapter text. We previously hardcoded 1
+   *  when queueing which undercounted the appearance ledger by N. */
+  mentions?: number;
 }
 
 /** Stage 1: sanitize the LLM output BEFORE applying. Each raw patch either
@@ -740,13 +744,11 @@ async function normalizePatches(
             'appearance',
       characterId: null,
       evidenceQuote: q.patch.evidence_quote ?? '',
-      autoReason: q.reason.startsWith('new-character-already-exists')
-        ? 'conflict-with-user-edit'
-        : q.reason.startsWith('unknown-target') || q.reason.startsWith('appearance-unknown')
-          ? 'conflict-with-user-edit'
-          : q.reason.startsWith('evidence') || q.reason.startsWith('relationship-self-loop')
-            ? 'conflict-with-user-edit'
-            : 'conflict-with-user-edit',
+      // Queued diffs always arrive here for user review, regardless of
+      // which sanitizer reason pushed them into the queue — every branch
+      // of the original chain mapped to the same value. The original
+      // reason is preserved separately in `conflictWith` for diagnostics.
+      autoReason: 'conflict-with-user-edit',
       // The full raw patch body is preserved inside newCharacter so the UI
       // can show it verbatim without losing information.
       ...(q.patch.kind === 'new'
@@ -771,7 +773,7 @@ async function normalizePatches(
       ...(q.patch.kind === 'appearance'
         ? { targetName, appearance: {
             chapterIndex: typeof q.patch.chapter_index === 'number' ? q.patch.chapter_index : 0,
-            mentions: 1,
+            mentions: q.patch.mentions ?? 1,
           } }
         : {}),
       conflictWith: q.reason,
@@ -1012,7 +1014,11 @@ export async function applyBiblePatch(
       // so this won't double-count when the user clicks refresh twice on
       // the same chapter (it'll see "already applied, skip").
       await recordAppearances({
-        bookId, chapterIndex: patch.appearance.chapterIndex, names: [cs.name],
+        bookId,
+        chapterIndex: patch.appearance.chapterIndex,
+        names: [cs.name],
+        // Builder path: trusts the LLM-emitted count when present.
+        mentions: [patch.appearance.mentions ?? 1],
       });
       return { applied: true, isConflict: false };
     }
@@ -1075,6 +1081,20 @@ export async function setUserProfile(args: {
  * `applied` without actually mutating the bible.
  */
 
+/** Vietnamese demonstratives & articles that legitimately capitalise at
+ *  sentence start. When `extractNameFromEvidence` captures one of these
+ *  as the leading noun phrase, we know the candidate is not a character
+ *  name and should bail out. Without this guard, "Trong làng có một
+ *  người đàn ông…" promoted "Trong làng" as a ghost Character row. */
+const EVIDENCE_LEAD_REJECT = new Set([
+  'Trong', 'Ngoài', 'Một', 'Hai', 'Ba', 'Bốn', 'Năm', 'Sáu', 'Bảy',
+  'Tám', 'Chín', 'Mười', 'Đây', 'Đó', 'Kia', 'Trên', 'Dưới', 'Trước',
+  'Sau', 'Ngang', 'Dọc', 'Anh', 'Chị', 'Em', 'Ông', 'Bà', 'Cô', 'Chú',
+  'Bác', 'Cậu', 'Mày', 'Ta', 'Tôi', 'Hắn', 'Nó', 'Họ', 'Chúng',
+  'Chàng', 'Nàng', 'Người', 'Kẻ', 'Bọn', 'Đám', 'Lão',
+  'Phía', 'Phương', 'Nơi',
+]);
+
 /** Best-effort name hint from an evidence snippet for legacy diffs queued
  *  before `targetName` was stored. The snippet almost always starts with
  *  the character name followed by a verb in Vietnamese ("Vũ An Bang là
@@ -1083,11 +1103,19 @@ export async function setUserProfile(args: {
  *  no confident guess can be made — caller falls back to "no resolution".
  *  This is intentionally narrow (1 helper call, no DB) so it can be used
  *  inline during apply without blocking the SSE. */
-function extractNameFromEvidence(evidence: string): string | null {
+export function extractNameFromEvidence(evidence: string): string | null {
   if (!evidence) return null;
-  // The first sentence usually contains the name; cut at common Vietnamese
-  // verbs that follow a subject noun phrase.
-  const m = evidence.match(/^\s*([^,.;:()\n]+?)\s*(?:là|mặc|thấy|có|đứng|ngồi|nói|hỏi|cầm|mang|bước|vung|cảm)/i);
+  // The first sentence usually contains the name. Require a capitalised
+  // proper-noun first letter (Vietnamese names always capitalise at the
+  // start of a sentence) and cut at common Vietnamese verbs that follow
+  // a subject noun phrase. The leading character class `[A-ZÀ-Ú]` covers
+  // ASCII A–Z + accented Latin uppercase (Vũ, Ảnh, Y, Đ, …). Without it
+  // the lazy `[^,.;:()\n]+?` captures generic noun phrases like "Trong
+  // làng" or "Anh ta" and ensureCharacter() then promotes them to ghost
+  // Character rows.
+  const m = evidence.match(
+    /^\s*["'"“”]*\s*([A-ZÀ-Ú][^,.;:()\n]+?)\s*(?:là|mặc|thấy|có|đứng|ngồi|nói|hỏi|cầm|mang|bước|vung|cảm)/i,
+  );
   if (!m) return null;
   const candidate = m[1].trim().replace(/^["'"\u201C\u201D]+|["'"\u201C\u201D]+$/g, '');
   // The helper phrases "Người của X" → strip the "Người của" prefix and
@@ -1096,8 +1124,18 @@ function extractNameFromEvidence(evidence: string): string | null {
   if (/^người\s+của\s+/i.test(candidate)) {
     return candidate.replace(/^người\s+của\s+/i, '').trim();
   }
-  // Reject very short or stop-word-only candidates.
-  if (candidate.length < 2 || /^(và|hoặc|nhưng|rồi|thì|mà|của|trong|ngoài)$/i.test(candidate)) {
+  // Reject very short candidates.
+  if (candidate.length < 2) return null;
+  // Reject demonstrative-led phrases that are not character names. These
+  // are words that legitimately capitalise at sentence start in
+  // Vietnamese (so the `A-ZÀ-Ú` gate above cannot filter them) but are
+  // almost never a character's proper name. Without this guard,
+  // "Trong làng có một..." would have promoted "Trong làng" as a ghost
+  // character via ensureCharacter().
+  const firstWord = candidate.split(/\s+/)[0] ?? '';
+  if (EVIDENCE_LEAD_REJECT.has(firstWord)) return null;
+  // Reject stop-word-only candidates.
+  if (/^(và|hoặc|nhưng|rồi|thì|mà|của|trong|ngoài)$/i.test(candidate)) {
     return null;
   }
   return candidate;
@@ -1123,40 +1161,50 @@ export async function applyAcceptedBiblePatch(
     if (!patch.updateFields || Object.keys(patch.updateFields).length === 0) {
       return { applied: false, reason: 'update-missing-target-or-fields' };
     }
-    // 2026-09-02: queued update diffs frequently have characterId=null
-    // because they were queued at analysis time when the LLM's
-    // update_target_name didn't resolve to any existing character (e.g. a
-    // new character introduced in the same chapter). When the user later
-    // accepts the "Apply" (Ghi đè), we must NOT just 422 — we should
-    // try to recover the target. Resolution order:
-    //   1. Use the embedded characterId if it's still in this book.
-    //   2. Otherwise re-resolve by targetName against the current book.
-    //   3. Otherwise extract a name hint from the evidence quote
-    //      (the first quoted phrase is usually the character name) so
-    //      legacy diffs queued before this fix can also be applied.
-    //   4. Otherwise auto-create the character (the diff effectively
-    //      doubles as a new-character proposal — the user's "Ghi đè"
-    //      click should be honoured).
-    let characterId = patch.characterId;
+    // Resolve the target character. Resolution order:
+    //   1. If `patch.characterId` is set AND points to a row in this book,
+    //      use it.
+    //   2. If `patch.characterId` was set but the row has since been
+    //      deleted (most common cause: a user removed the character via
+    //      the Edit dialog between queueing and applying the diff), we
+    //      must NOT fall through to the legacy auto-create path — that
+    //      silently resurrected the character under a new id, polluting
+    //      the bible. Return `update-target-deleted` so the UI can prompt
+    //      the user to pick a replacement.
+    //   3. If `patch.characterId` was never provided (legacy queued diffs
+    //      from before the patch gained an embedded id), fall through to
+    //      the `targetName`/`evidenceQuote` lookup, which preserves the
+    //      pre-fix behaviour of auto-creating when the user explicitly
+    //      accepted a 'new character' update via "Ghi đè".
+    const explicitIdProvided = typeof patch.characterId === 'string';
+    let characterId: string | null = patch.characterId;
     if (characterId) {
       const found = await prisma.character.findFirst({
         where: { id: characterId, bookId },
         select: { id: true },
       });
-      if (!found) characterId = null;
+      if (!found) return { applied: false, reason: 'update-target-deleted' };
     }
     let resolvedTargetName: string | null = (patch.targetName ?? '').trim() || null;
     if (!characterId && resolvedTargetName) {
       characterId = await findCharacterIdByName(bookId, resolvedTargetName);
     }
-    if (!characterId && !resolvedTargetName) {
+    if (!characterId && !resolvedTargetName && !explicitIdProvided) {
+      // Evidence-quote-based name extraction is only safe for legacy
+      // diffs that never had an embedded id — otherwise we'd resurrect
+      // a "ghost" character under a new id when a user previously
+      // deleted it.
       const guessed = extractNameFromEvidence(patch.evidenceQuote ?? '');
       if (guessed) {
         resolvedTargetName = guessed;
         characterId = await findCharacterIdByName(bookId, guessed);
       }
     }
-    if (!characterId && resolvedTargetName) {
+    if (!characterId && resolvedTargetName && !explicitIdProvided) {
+      // Legacy "Ghi đè" semantics: accepting a queued update diff that
+      // never had a character id auto-promotes it to a new-character
+      // diff. Only fires when `patch.characterId` was genuinely absent
+      // from the queued payload (not when it was present-but-deleted).
       const created = await ensureCharacter({
         bookId,
         name: resolvedTargetName,
@@ -1238,6 +1286,14 @@ export async function applyAcceptedBiblePatch(
       chapterIndex = 0;
       mentions = 1;
     }
+    // Same hardening as the `update` branch: when the diff was queued
+    // with an explicit characterId that has since been deleted (user
+    // removed the character between analysis and apply), do NOT fall
+    // through to the auto-create fallback — that resurrected a "ghost"
+    // character. Return `appearance-target-deleted` and let the UI offer
+    // a replacement. The legacy fallbacks only run when no id was ever
+    // embedded in the patch.
+    const explicitIdProvided = typeof patch.characterId === 'string';
     let characterId = patch.characterId;
     let characterName: string | null = null;
     if (characterId) {
@@ -1245,8 +1301,11 @@ export async function applyAcceptedBiblePatch(
         where: { id: characterId, bookId },
         select: { name: true },
       });
-      if (found) characterName = found.name;
-      else characterId = null;
+      if (found) {
+        characterName = found.name;
+      } else {
+        return { applied: false, reason: 'appearance-target-deleted' };
+      }
     }
     if (!characterId && patch.targetName) {
       const name = patch.targetName.trim();
@@ -1255,14 +1314,20 @@ export async function applyAcceptedBiblePatch(
         characterId = foundId;
         const c = await prisma.character.findFirst({ where: { id: foundId }, select: { name: true } });
         characterName = c?.name ?? name;
-      } else {
+      } else if (!explicitIdProvided) {
+        // Legacy queued diffs: the absence of an id means the diff
+        // predates the embedded-id era. Honour the LLM's
+        // character_name by auto-creating a supporting row.
         const created = await ensureCharacter({ bookId, name, role: 'supporting' });
         characterId = created.id;
         characterName = name;
       }
     }
-    if (!characterId && !characterName) {
-      // Try extracting a name from the evidence quote (legacy fallback).
+    if (!characterId && !characterName && !explicitIdProvided) {
+      // Evidence-quote-based name extraction is reserved for legacy
+      // diffs that never had an embedded id. Skipped for explicit-id
+      // diffs because resurrecting a deleted character here is exactly
+      // the bug this hardening prevents.
       const guessed = extractNameFromEvidence(patch.evidenceQuote ?? '');
       if (guessed) {
         const foundId = await findCharacterIdByName(bookId, guessed);
@@ -1280,10 +1345,14 @@ export async function applyAcceptedBiblePatch(
     if (!characterId || !characterName) {
       return { applied: false, reason: 'appearance-missing-target' };
     }
+    // Pass the LLM-detected mention count through to the ledger. legacy
+    // diffs without an `appearance.mentions` fall back to 1 (same value
+    // as before this fix — see recordAppearances default).
     await recordAppearances({
       bookId,
       chapterIndex,
       names: [characterName],
+      mentions: [mentions],
     });
     return { applied: true };
   }
@@ -1416,18 +1485,37 @@ function extractErrorMessage(e: unknown): string {
  *    - 429 (rate limit — usually transient)
  *    - "AI returned empty response" (model dropped the connection)
  *    - "AbortError" / fetch-failed (network drop) */
-function isTransientGatewayError(e: unknown): boolean {
+export function isTransientGatewayError(e: unknown): boolean {
   const msg = e instanceof Error ? e.message : String(e);
-  if (!msg) return false;
+  if (!msg && !(e && typeof e === 'object')) return false;
   // JsonChatError and parse failures are model-side — retrying won't help.
   if (e && typeof e === 'object' && 'name' in e && (e as { name: string }).name === 'JsonChatError') return false;
-  // Detect retryable HTTP status codes regardless of where they appear in
-  // the message (rawChat formats them as `AI <status>: <body>`).
+  // Structured status-code classification takes precedence. When an
+  // HTTP error carries an explicit status, trust it: the message may
+  // also contain "fetch failed" or "aborted" (common in undici wrappers
+  // for ANY non-2xx response), but those words only mean "transient"
+  // when the status itself is transient. Without this precedence,
+  // 4xx errors (401/403/400) were being retried because the regex
+  // matched their generic message text.
+  if (e && typeof e === 'object') {
+    const codes: number[] = [];
+    const direct = (e as { statusCode?: unknown }).statusCode;
+    const directStatus = (e as { status?: unknown }).status;
+    const cause = (e as { cause?: { statusCode?: unknown; status?: unknown } }).cause;
+    for (const v of [direct, directStatus, cause?.statusCode, cause?.status]) {
+      if (typeof v === 'number' && !Number.isNaN(v)) codes.push(v);
+    }
+    if (codes.length > 0) {
+      return codes.some((c) => c === 408 || c === 429 || c === 502 || c === 503 || c === 504);
+    }
+  }
+  // Regex backstop for legacy string-only errors (no structured
+  // statusCode). rawChat formats these as `AI <status>: <body>`, plus
+  // we catch generic abort / network-drop messages and the
+  // openresty-leakage 504 HTML page.
   if (/\bAI (?:502|503|504|408|429)\b/.test(msg)) return true;
-  // Empty response and aborted fetches (timeout / network drop).
   if (/AI returned empty response/i.test(msg)) return true;
   if (/AbortError|aborted|fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(msg)) return true;
-  // 504 page-style HTML leakage (openresty default page).
   if (/504 Gateway Time-out|<title>504/.test(msg)) return true;
   return false;
 }

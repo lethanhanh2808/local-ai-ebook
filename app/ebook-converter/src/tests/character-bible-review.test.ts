@@ -120,7 +120,7 @@ describe('Character Bible review/commit boundary', () => {
     });
     expect(result.applied).toBe(true);
     expect(db.recordAppearances).toHaveBeenCalledWith({
-      bookId: 'book-1', chapterIndex: 3, names: ['Lan'],
+      bookId: 'book-1', chapterIndex: 3, names: ['Lan'], mentions: [1],
     });
   });
 });

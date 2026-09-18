@@ -118,16 +118,54 @@ const STYLE_HINTS: Record<ImageStyle, string> = {
 /** Suffix appended for B&W-family styles to lock the provider out of color. */
 const MONOCHROME_LOCK = 'STRICT PALETTE: black ink, mid-greys, white. No colour, no flat fills, no gradient washes. Pure white background. Hand-inked strokes only.';
 
-/** Quick-and-dirty check that the imagePrompt is English-only — if it
- *  contains non-ASCII letters (Vietnamese diacritics, CJK, cyrillic, ...)
- *  we treat it as contaminated and use our per-genre fallback instead.
- *  Intentionally lenient — accented Latin and basic punctuation are
- *  fine; what we want to ban is the AI emitting entire Vietnamese
- *  paragraphs or the title. Shared between cover + chapter pipelines. */
+/** Quick-and-dirty check that the imagePrompt is English-only. Shared
+ *  between cover + chapter pipelines.
+ *  - Hard-rejects on CJK / Greek / Cyrillic scripts (no English prompt
+ *    should contain those).
+ *  - Counts words containing accented Latin (Vietnamese, Polish, French,
+ *    …) and falls back to the generic English template when those make
+ *    up the majority of the prompt (i.e. the LLM emitted pure
+ *    Vietnamese prose rather than English-with-a-character-name).
+ *  - Accepts prompts with a small number of accented-Latin words so
+ *    legitimate prose like "Vũ An Bang stands in the rain" still passes. */
 export function isLikelyEnglishPrompt(s: string | null | undefined): boolean {
   if (!s) return false;
   if (s.length < 40) return false;
-  return !/[\u00C0-\u024F\u0300-\u036F\u0370-\u03FF\u0400-\u04FF\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF]/.test(s);
+  // Hard reject on scripts that have no business in an English prompt:
+  // Greek, Cyrillic, CJK ideographs, hiragana, katakana. The previous
+  // version included Latin Extended-A (0x00C0-0x024F = Vietnamese
+  // diacritics) which incorrectly rejected valid prompts whenever the
+  // LLM included one character name beside English prose \u2014 "V\u0169 An Bang
+  // stands in the rain" was being replaced by the generic fallback.
+  if (/[\u0370-\u03FF\u0400-\u04FF\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF]/.test(s)) {
+    return false;
+  }
+  // Ratio guard: if a majority of words contain non-ASCII Latin letters
+  // (Vietnamese, Polish, French, \u2026), the LLM emitted pure non-English
+  // prose and we want the fallback. One Vietnamese name next to English
+  // text stays well below this threshold.
+  const words = s.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return false;
+  let nonAsciiLatinWordCount = 0;
+  for (const w of words) {
+    let hasAccentedLatin = false;
+    let hasOtherNonAscii = false;
+    for (const ch of w) {
+      const cp = ch.codePointAt(0) ?? 0;
+      // Latin Extended-A (0x00C0-0x024F) holds most basic Latin diacritics,
+      // Latin Extended Additional (0x1E00-0x1EFF) holds the Vietnamese
+      // tone-mark letters (Ấ Ầ Ậ Ệ Ộ …). The earlier 0x00C0-0x024F-only
+      // range silently classified those Vietnamese tones as "other script"
+      // and a pure-Vietnamese paragraph slipped through as English.
+      if ((cp >= 0x80 && cp <= 0x024F) || (cp >= 0x1E00 && cp <= 0x1EFF)) {
+        hasAccentedLatin = true;
+      } else if (cp > 0x7F) {
+        hasOtherNonAscii = true;
+      }
+    }
+    if (hasAccentedLatin && !hasOtherNonAscii) nonAsciiLatinWordCount++;
+  }
+  return nonAsciiLatinWordCount / words.length <= 0.5;
 }
 
 /** Generic English fallback when the LLM returns a Vietnamese / non-ASCII
