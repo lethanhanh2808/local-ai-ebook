@@ -165,7 +165,12 @@ function chapterNotFoundHtml(
     body {
       background: ${t.bg};
       color: ${t.text};
-      font-family: 'Inter', 'Segoe UI', 'Helvetica Neue', sans-serif;
+      // Match the project sans stack (globals.css .font-sans) so the
+      // error page inside the reader iframe reads with the same voice
+      // as the rest of the chrome. Be Vietnam Pro leads for
+      // Vietnamese diacritic positioning; Inter is kept as a final
+      // fallback for hosts that don't have Be Vietnam Pro.
+      font-family: 'Be Vietnam Pro', 'Noto Sans SC', 'Inter', 'Segoe UI', 'Helvetica Neue', sans-serif;
       display: flex; align-items: center; justify-content: center;
       padding: 2rem; box-sizing: border-box;
     }

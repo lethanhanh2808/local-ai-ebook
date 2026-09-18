@@ -827,6 +827,12 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   // column width without opening the full Settings panel.
   const [aaPopoverOpen, setAaPopoverOpen] = useState(false);
   const aaPopoverRef = useRef<HTMLDivElement>(null);
+  // The popover content lives OUTSIDE the trigger button (it anchors to
+  // the toolbar's right edge, not the button itself, so a wide popover
+  // can never overflow the Aa button's narrow 32px trigger). A second
+  // ref is needed so the click-outside handler knows to keep the
+  // popover open when the user interacts with the content.
+  const aaPopoverContentRef = useRef<HTMLDivElement>(null);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -1622,9 +1628,16 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
   useEffect(() => {
     if (!aaPopoverOpen) return;
     const onDown = (e: MouseEvent) => {
-      if (aaPopoverRef.current && !aaPopoverRef.current.contains(e.target as Node)) {
-        setAaPopoverOpen(false);
-      }
+      // Both the trigger and the popover content live in separate DOM
+      // subtrees (the popover anchors to the toolbar, not the button),
+      // so we have to check both refs before treating the click as
+      // "outside".
+      const target = e.target as Node;
+      if (
+        aaPopoverRef.current?.contains(target) ||
+        aaPopoverContentRef.current?.contains(target)
+      ) return;
+      setAaPopoverOpen(false);
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
@@ -4240,7 +4253,11 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       className={cn(
         'absolute inset-y-0 z-20 flex flex-col transition-transform duration-200 ease-in-out overflow-y-auto',
         panelCls,
-        side === 'left' ? 'left-0 w-72 border-r' : 'right-0 w-80 border-l',
+        // Left rail (TOC, Bookmarks) widened from w-72 → w-80 so long
+        // Vietnamese chapter titles have room to wrap on two lines
+        // instead of clipping. Right rail (Settings) stays w-80 — same
+        // width for visual symmetry.
+        side === 'left' ? 'left-0 w-80 border-r' : 'right-0 w-80 border-l',
         'translate-x-0',
       )}
     >{children}</aside>
@@ -4365,7 +4382,15 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
 
         {/* Row 2 — toolbar (every remaining control, inline, hairline rules
             between groups). Wraps gracefully on narrow viewports because
-            every button has `shrink-0` and a fixed `w-8` size. */}
+            every button has `shrink-0` and a fixed `w-8` size.
+
+            The outer `relative` wrapper exists so the AA quick-settings
+            popover can anchor to the toolbar's right edge (`absolute
+            right-2`) instead of to the narrow 32-px Aa button itself.
+            Anchoring to the button would push a 256-px popover off the
+            left edge of the viewport whenever the button sits anywhere
+            in the left half of the toolbar. */}
+        <div className="relative">
         <div className="flex flex-wrap items-center gap-1 border-t border-current/10 px-2 py-1.5">
 
           {/* Group A — Reading tools (TOC, Gallery, Bookmarks, Bookmark, Aa, ?) */}
@@ -4405,7 +4430,16 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
               {isBookmarked ? <BookmarkCheck className="h-4 w-4" /> : <Bookmark className="h-4 w-4" />}
             </button>
           </Tooltip>
-          <div className="relative" ref={aaPopoverRef}>
+          {/* The Aa trigger is just a button now — the popover used to
+              live in a `relative` wrapper around the button, but that
+              forced the popover to extend leftward off the Aa button's
+              32-px right edge, which lands inside the toolbar's left
+              half and overflows the viewport. The popover is now
+              rendered as a sibling of the entire toolbar Row 2 (below
+              this </div>), positioned `absolute right-2` against the
+              toolbar's right edge so it always fits inside the
+              viewport. */}
+          <div ref={aaPopoverRef}>
             <button type="button" onClick={() => setAaPopoverOpen((o) => !o)}
               aria-label="Cài đặt nhanh (cỡ chữ, giao diện, khổ)"
               aria-expanded={aaPopoverOpen}
@@ -4413,63 +4447,6 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
               className={cn('inline-flex h-8 w-8 shrink-0 items-center justify-center transition-colors', aaPopoverOpen ? activeCls : 'border border-transparent hover:bg-foreground/5')}>
               <span className="text-[13px] font-semibold leading-none">Aa</span>
             </button>
-            {aaPopoverOpen && (
-              <div
-                role="dialog"
-                aria-label="Cài đặt đọc nhanh"
-                onClick={(e) => e.stopPropagation()}
-                className={cn(
-                  'absolute right-0 top-10 z-50 w-64 border border-border p-3 space-y-3',
-                  panelCls,
-                )}
-              >
-                {/* Theme */}
-                <div>
-                  <p className={cn('mb-1.5 text-[10px] font-semibold uppercase tracking-widest', mutedCls)}>Giao diện</p>
-                  <div className="flex gap-1.5">
-                    {THEMES.map((t) => (
-                      <button key={t.id} type="button" onClick={() => updateSetting('theme', t.id)} aria-pressed={settings.theme === t.id}
-                        className={cn('flex-1 border border-border py-1.5 text-[11px] font-medium transition-all',
-                          settings.theme === t.id ? 'border-b-2 border-b-primary' : 'opacity-60')}
-                        style={{ background: t.bg, color: t.text }}>
-                        {t.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                {/* Font size */}
-                <div>
-                  <div className="flex justify-between mb-1">
-                    <p className={cn('text-[10px] font-semibold uppercase tracking-widest', mutedCls)}>Cỡ chữ</p>
-                    <span className="text-[11px] font-mono">{settings.fontSize}px</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button type="button" onClick={() => updateSetting('fontSize', Math.max(12, settings.fontSize - 1))} aria-label="Giảm cỡ chữ"
-                      className={cn('flex h-7 w-7 items-center justify-center border border-border', hoverCls)}><Minus className="h-3.5 w-3.5" /></button>
-                    <input type="range" min={12} max={28} step={1} value={settings.fontSize}
-                      onChange={(e) => updateSetting('fontSize', parseInt(e.target.value, 10))} className="flex-1" style={{ accentColor }} aria-label="Cỡ chữ" aria-valuetext={`${settings.fontSize}px`} />
-                    <button type="button" onClick={() => updateSetting('fontSize', Math.min(28, settings.fontSize + 1))} aria-label="Tăng cỡ chữ"
-                      className={cn('flex h-7 w-7 items-center justify-center border border-border', hoverCls)}><Plus className="h-3.5 w-3.5" /></button>
-                  </div>
-                </div>
-                {/* Column width */}
-                <div>
-                  <p className={cn('mb-1.5 text-[10px] font-semibold uppercase tracking-widest', mutedCls)}>Khổ trang</p>
-                  <div className="grid grid-cols-4 gap-1.5">
-                    {WIDTHS.map((w) => (
-                      <button key={w.px} type="button" onClick={() => updateSetting('width', w.px)} aria-pressed={settings.width === w.px}
-                        className={cn('border border-border py-1.5 text-[10px] font-medium transition-all bg-transparent', settings.width === w.px ? activeCls + ' border-b-2 border-b-primary' : `${hoverCls} opacity-70`)}>
-                        {w.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <button type="button" onClick={() => { setSettingsOpen(true); setAaPopoverOpen(false); }}
-                  className={cn('w-full flex items-center justify-center gap-1.5 border border-border py-1.5 text-[11px]', hoverCls)}>
-                  <Settings2 className="h-3.5 w-3.5" /> Tất cả cài đặt
-                </button>
-              </div>
-            )}
           </div>
           <Tooltip content={<span className="inline-flex items-center gap-1.5">Phím tắt <KbdHint keys={['?']} /></span>} side="bottom">
             <button type="button" onClick={() => setShortcutsOpen(true)}
@@ -4651,6 +4628,78 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
               entirely — the TTS button on the title bar covers the
               critical audio action. */}
           <ServiceHealth showWorker={false} className="hidden md:inline-flex" />
+        </div>
+
+        {/* AA quick-settings popover — sibling of the toolbar, anchored
+            to the toolbar's right edge (NOT the Aa button) so a 256-px
+            wide popover can never overflow the viewport's left edge.
+            The `right-2` (8 px) keeps the popover's right edge flush
+            with the toolbar's right padding. `top-full mt-1` tracks
+            the toolbar's actual bottom edge. The content ref is
+            separate from the trigger ref so the click-outside handler
+            (EbookReader.tsx mousedown effect above) can keep the
+            popover open while the user interacts with controls
+            inside it. */}
+        {aaPopoverOpen && (
+          <div
+            ref={aaPopoverContentRef}
+            role="dialog"
+            aria-label="Cài đặt đọc nhanh"
+            onClick={(e) => e.stopPropagation()}
+            className={cn(
+              'absolute right-2 top-full mt-1 z-50 w-64 border border-border p-3 space-y-3',
+              panelCls,
+            )}
+          >
+            {/* Theme */}
+            <div>
+              <p className={cn('mb-1.5 text-[10px] font-semibold uppercase tracking-widest', mutedCls)}>Giao diện</p>
+              <div className="flex gap-1.5">
+                {THEMES.map((t) => (
+                  <button key={t.id} type="button" onClick={() => updateSetting('theme', t.id)} aria-pressed={settings.theme === t.id}
+                    title={t.label}
+                    className={cn('inline-flex flex-1 items-center justify-center text-center border border-border py-1.5 text-[11px] font-medium transition-all',
+                      settings.theme === t.id ? 'border-b-2 border-b-primary' : 'opacity-60')}
+                    style={{ background: t.bg, color: t.text }}>
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {/* Font size */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <p className={cn('text-[10px] font-semibold uppercase tracking-widest', mutedCls)}>Cỡ chữ</p>
+                <span className="text-[11px] font-mono tnum">{settings.fontSize}px</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={() => updateSetting('fontSize', Math.max(12, settings.fontSize - 1))} aria-label="Giảm cỡ chữ"
+                  className={cn('inline-flex h-7 w-7 items-center justify-center border border-border', hoverCls)}><Minus className="h-3.5 w-3.5" /></button>
+                <input type="range" min={12} max={28} step={1} value={settings.fontSize}
+                  onChange={(e) => updateSetting('fontSize', parseInt(e.target.value, 10))} className="flex-1" style={{ accentColor }} aria-label="Cỡ chữ" aria-valuetext={`${settings.fontSize}px`} />
+                <button type="button" onClick={() => updateSetting('fontSize', Math.min(28, settings.fontSize + 1))} aria-label="Tăng cỡ chữ"
+                  className={cn('inline-flex h-7 w-7 items-center justify-center border border-border', hoverCls)}><Plus className="h-3.5 w-3.5" /></button>
+              </div>
+            </div>
+            {/* Column width */}
+            <div>
+              <p className={cn('mb-1.5 text-[10px] font-semibold uppercase tracking-widest', mutedCls)}>Khổ trang</p>
+              <div className="grid grid-cols-4 gap-1.5">
+                {WIDTHS.map((w) => (
+                  <button key={w.px} type="button" onClick={() => updateSetting('width', w.px)} aria-pressed={settings.width === w.px}
+                    title={w.label}
+                    className={cn('inline-flex items-center justify-center text-center border border-border py-1.5 text-[10px] font-medium transition-all bg-transparent', settings.width === w.px ? activeCls + ' border-b-2 border-b-primary' : `${hoverCls} opacity-70`)}>
+                    {w.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <button type="button" onClick={() => { setSettingsOpen(true); setAaPopoverOpen(false); }}
+              className={cn('w-full inline-flex items-center justify-center gap-1.5 border border-border py-1.5 text-[11px]', hoverCls)}>
+              <Settings2 className="h-3.5 w-3.5" /> Tất cả cài đặt
+            </button>
+          </div>
+        )}
         </div>
       </header>
 
@@ -4924,11 +4973,20 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
                       data-testid={`toc-chapter-${ri}`}
                       data-chapter-id={ch.id}
                       aria-current={active ? 'page' : undefined}
-                      className={cn('w-full text-left px-3 py-2 text-xs leading-snug flex items-center gap-1.5 border-l-2 transition-colors',
+                      title={ch.title}
+                      className={cn('w-full text-left px-3 py-2 text-xs leading-snug flex items-start gap-1.5 border-l-2 transition-colors',
                         active ? activeCls : `border-transparent ${hoverCls}`)}>
-                      {marked && <Bookmark className="h-2.5 w-2.5 shrink-0 fill-amber-500 text-amber-500" />}
-                      <span className="flex-1 truncate">{ch.title}</span>
-                      {active && <span className={cn('shrink-0 text-[9px]', mutedCls)}>now</span>}
+                      {marked && <Bookmark className="mt-0.5 h-2.5 w-2.5 shrink-0 fill-amber-500 text-amber-500" />}
+                      {/* min-w-0 lets the flex child shrink below its
+                          intrinsic content width so long Vietnamese
+                          titles wrap instead of pushing the row wider;
+                          `break-words` breaks on character boundaries
+                          (no horizontal overflow even on a single token).
+                          The `title` attribute on the parent button
+                          still surfaces the full title on hover for
+                          accessibility / very long titles. */}
+                      <span className="min-w-0 flex-1 whitespace-normal break-words">{ch.title}</span>
+                      {active && <span className={cn('mt-0.5 shrink-0 text-[9px]', mutedCls)}>now</span>}
                     </button>
                   </li>
                 );
@@ -4961,8 +5019,9 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
               if (!ch) return null;
               return (
                 <button key={idx} onClick={() => goToChapter(idx)}
+                  title={ch.title}
                   className={cn('w-full text-left px-3 py-2 text-xs leading-snug', hoverCls, idx === currentIdx && activeCls)}>
-                  <span className="block truncate">{ch.title}</span>
+                  <span className="block min-w-0 whitespace-normal break-words">{ch.title}</span>
                   <span className={cn('text-[10px]', mutedCls)}>Chapter {idx + 1}</span>
                 </button>
               );
