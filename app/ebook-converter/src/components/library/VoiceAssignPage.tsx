@@ -740,9 +740,9 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
           type="button"
           onClick={() => { setSelectionMode((v) => !v); setSelected(new Set()); }}
           className={cn(
-            'rounded-md border px-2 py-1 text-xs font-medium transition-colors',
+            'border px-2 py-1 text-xs font-medium transition-colors',
             selectionMode
-              ? 'border-primary bg-primary/10 text-primary'
+              ? 'border-l-2 border-l-primary border-border bg-primary/[0.04] text-primary'
               : 'border-border hover:bg-accent',
           )}
         >
@@ -804,7 +804,7 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
           <History className="h-3.5 w-3.5" />
           Lịch sử
           {history.length > 0 && (
-            <span className="ml-0.5 rounded-full bg-muted px-1.5 text-[10px] tabular-nums text-muted-foreground">
+            <span className="ml-0.5 border border-border bg-muted px-1.5 text-[10px] tabular-nums text-muted-foreground">
               {history.length}
             </span>
           )}
@@ -1278,9 +1278,9 @@ function VoiceRow({
         }
       }}
       className={cn(
-        'flex w-full cursor-pointer items-center gap-2.5 rounded-md border px-2.5 py-2 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'flex w-full cursor-pointer items-center gap-2.5 border px-2.5 py-2 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring',
         selected
-          ? 'border-primary bg-primary/10'
+          ? 'border-l-2 border-l-primary border-border bg-primary/[0.04]'
           : 'border-border hover:bg-accent',
       )}
     >

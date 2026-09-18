@@ -632,7 +632,7 @@ export function CharactersPanel({ bookId, bookLanguage, refreshSignal }: Props) 
       <Card className="overflow-hidden border-border">
         <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-start gap-3">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center bg-primary text-primary-foreground">
               <Users className="h-5 w-5" />
             </div>
             <div>
@@ -640,7 +640,7 @@ export function CharactersPanel({ bookId, bookLanguage, refreshSignal }: Props) 
               <p className="mt-0.5 text-xs text-muted-foreground">
                 {characters.length} nhân vật · {assignedCount} đã gán giọng
                 {unassignedSupportingCount > 0 && (
-                  <span className="ml-1.5 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                  <span className="ml-1.5 border border-current px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.16em] text-amber-700 dark:text-amber-300">
                     {unassignedSupportingCount} nhân vật phụ chưa có giọng
                   </span>
                 )}
@@ -658,7 +658,7 @@ export function CharactersPanel({ bookId, bookLanguage, refreshSignal }: Props) 
               {autoAssigning ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 mr-1" />}
               Gán giọng tự động
               {unassignedSupportingCount > 0 && (
-                <span className="ml-1 rounded-full bg-primary/15 px-1.5 py-0 text-[10px] font-medium text-primary">
+                <span className="ml-1 border border-current px-1.5 py-0 text-[10px] font-medium text-primary">
                   {unassignedSupportingCount}
                 </span>
               )}

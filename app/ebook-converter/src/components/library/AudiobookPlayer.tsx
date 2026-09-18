@@ -363,7 +363,7 @@ export function AudiobookPlayer({ bookId, chapters, initialChapterIdx, onClose, 
       <div className="container mx-auto max-w-6xl px-4 py-3">
         {/* Title + close */}
         <div className="flex items-start gap-2 mb-2">
-          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center bg-primary text-primary-foreground">
             <Volume2 className="h-4 w-4" />
           </div>
           <div className="min-w-0 flex-1">
@@ -530,10 +530,10 @@ export function AudiobookPlayer({ bookId, chapters, initialChapterIdx, onClose, 
                       onClick={() => setChapterIdx(idx)}
                       aria-current={isCurrent ? 'true' : undefined}
                       className={cn(
-                        'flex w-full items-center gap-2 px-2 py-1 text-left text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                        'flex w-full items-center gap-2 px-2 py-1 text-left text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring border-l-2',
                         isCurrent
-                          ? 'bg-primary/10 text-primary font-medium'
-                          : 'hover:bg-muted/50 text-foreground/90',
+                          ? 'border-l-primary bg-primary/5 text-primary font-medium'
+                          : 'border-l-transparent hover:bg-muted/50 text-foreground/90',
                       )}
                     >
                       <span className={cn(
@@ -566,11 +566,11 @@ export function AudiobookPlayer({ bookId, chapters, initialChapterIdx, onClose, 
         {bookmarks.length > 0 && (
           <div className="mt-2 flex gap-1.5 overflow-x-auto pb-1">
             {bookmarks.map((bm) => (
-              <div key={bm.id} className="flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted/40 pl-2 pr-1 py-0.5 text-[10px]">
+              <div key={bm.id} className="flex shrink-0 items-center gap-1 border border-border bg-muted/40 pl-2 pr-1 py-0.5 text-[10px]">
                 <button onClick={() => jumpToBookmark(bm)} className="max-w-36 truncate hover:text-primary" title={`${bm.title} · ${formatDuration(bm.time * 1000)}`}>
                   {bm.chapterIdx + 1}: {formatDuration(bm.time * 1000)}
                 </button>
-                <button onClick={() => removeBookmark(bm.id)} className="rounded-full p-0.5 text-muted-foreground hover:text-destructive" title="Xoá bookmark">
+                <button onClick={() => removeBookmark(bm.id)} className="p-0.5 text-muted-foreground hover:text-destructive" title="Xoá bookmark">
                   <X className="h-2.5 w-2.5" />
                 </button>
               </div>
