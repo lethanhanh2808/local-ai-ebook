@@ -481,7 +481,10 @@ function ContinueReadingCard({ book }: { book: BookSummary }) {
         {/* Cover */}
         <div className="aspect-[2/3] w-full bg-muted overflow-hidden relative">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={`/api/library/${book.id}/cover?v=${book.updatedAt ? new Date(book.updatedAt).getTime() : 0}`} alt={book.title} className="h-full w-full object-cover"
+          {/* object-contain keeps the full cover visible (no cropping) for
+              covers whose aspect ratio doesn't match the 2:3 slot — the muted
+              paper background shows through as letterbox bars. */}
+          <img src={`/api/library/${book.id}/cover?v=${book.updatedAt ? new Date(book.updatedAt).getTime() : 0}`} alt={book.title} className="h-full w-full object-contain"
             onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
           {/* Progress bar overlay — vermilion ink-stroke on aged paper. */}
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-foreground/15">
