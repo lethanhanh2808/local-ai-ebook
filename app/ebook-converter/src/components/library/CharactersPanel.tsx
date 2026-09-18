@@ -1076,18 +1076,13 @@ function CharacterCard({
   // characters sharing a voice stay independent.
   const vs = voiceSettings[char.id] ?? { speed: 1.0, emotion: 'neutral' };
   const isSaving = savingVoice === char.id;
-  const roleAccent: Record<string, string> = {
-    main: 'border-l-4 border-l-amber-400',
-    supporting: 'border-l-4 border-l-sky-400',
-    minor: 'border-l-4 border-l-slate-300',
-    crowd: 'border-l-4 border-l-slate-200',
-  };
   // Every section below has a FIXED height (shrink-0) so that:
   //   1. the card height is identical for every character, and
   //   2. the voice picker + customization rows line up perfectly across the grid,
   //      regardless of how much data (name length, description, voice) each card has.
+  // Role is signalled by the header Badge — no side stripe needed.
   return (
-    <Card className={cn('flex flex-col gap-3 p-4', roleAccent[char.role ?? 'supporting'])}>
+    <Card className="flex flex-col gap-3 p-4">
       {/* HEADER — fixed height (h-[76px]) so the name/role/attributes rows never
           wrap and never shift the sections below. */}
       <div className="flex h-[76px] shrink-0 items-start gap-3">
