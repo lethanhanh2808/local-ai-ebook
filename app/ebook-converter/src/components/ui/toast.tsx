@@ -142,7 +142,7 @@ function ToastItem({ toast }: { toast: ToastModel }) {
       role={toast.variant === 'error' ? 'alert' : 'status'}
       aria-live={toast.variant === 'error' ? 'assertive' : 'polite'}
       className={cn(
-        'pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-lg border border-border bg-card p-4 shadow-lg',
+        'pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-md border border-border bg-card p-4 shadow-acetate',
         BORDER[toast.variant],
         exiting ? 'animate-out fade-out-0 slide-out-to-right-full' : 'animate-in slide-in-from-right-full fade-in-0',
       )}

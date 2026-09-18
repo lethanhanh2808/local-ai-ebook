@@ -1,4 +1,9 @@
 /** @type {import('tailwindcss').Config} */
+// East-Asian classical paper direction (DESIGN.md). The container cap
+// is removed — the shell is always full viewport width, individual
+// regions carry their own max-widths (`max-w-content` = 960 px centre
+// column; rails have fixed widths). This is the session decision:
+// "Always full-width, internal max-width per region".
 module.exports = {
   darkMode: ['class'],
   content: [
@@ -7,15 +12,44 @@ module.exports = {
     './src/app/**/*.{js,ts,jsx,tsx,mdx}',
   ],
   theme: {
-    container: {
-      center: true,
-      padding: '2rem',
-      screens: { '2xl': '1400px' },
-    },
+    // The Tailwind `container` utility is intentionally NOT capped. Pages
+    // compose their own regions with `max-w-content` / `max-w-rail-*` so
+    // a 1920×1080 monitor reads as a folio laid on a desk surface, not
+    // a centred SaaS card.
+    container: false,
     extend: {
       fontFamily: {
+        // Brushed serif — the chrome voice. Be Vietnam Pro leads because
+        // the app's content is Vietnamese novels and BVP has the best
+        // Vietnamese tone-mark positioning of any free serif/sans pair
+        // (proper circumflex/breve/horn weights, no Noto CJK-glyph
+        // substitution on ộ/ề/ứ). Noto Serif SC provides CJK fallback for
+        // any CJK glyph that slips into a Vietnamese title; Songti SC +
+        // Cambria + Georgia are the platform fallbacks. `serif` is the
+        // final fallback so a user with no web fonts still sees a serif.
+        serif: ['"Be Vietnam Pro"', '"Noto Serif SC"', '"Songti SC"', 'Cambria', 'Georgia', 'serif'],
+        // Sans is reserved for inline metadata and tabular data. Be
+        // Vietnam Pro's sans cuts handle Vietnamese just as cleanly as
+        // the serif cuts.
+        sans: ['"Be Vietnam Pro"', '"Noto Sans SC"', 'Inter', 'system-ui', 'sans-serif'],
+        // Literata is bundled as a TTF for the EPUB enhancer (Reader
+        // surface). Kept here so `font-literata` resolves if a future
+        // shell surface needs the same bookish voice.
         literata: ['Literata', 'Georgia', 'serif'],
-        sans: ['Inter', 'system-ui', 'sans-serif'],
+        mono: ['JetBrains Mono', 'SF Mono', 'Menlo', 'monospace'],
+      },
+      maxWidth: {
+        // The content column on the dashboard / library / convert pages.
+        // Centre of the three-column layout. Bounded so a single page
+        // reads like a folded leaf on the larger canvas.
+        content: '960px',
+        // Wide content surface for the reader itself (the page area,
+        // not the surrounding chrome).
+        reader: '760px',
+        // Tailwind's default `screen-2xl` is 1536 px — kept here for
+        // rails or modal widths that want a different bound than the
+        // centre column.
+        canvas: '1800px',
       },
       colors: {
         border: 'hsl(var(--border))',
@@ -51,12 +85,17 @@ module.exports = {
           DEFAULT: 'hsl(var(--popover))',
           foreground: 'hsl(var(--popover-foreground))',
         },
-        // Modal backdrop tint. Resolves to `hsl(0 0% 0%)` so callers can
-        // tweak alpha per use site via the `/NN` Tailwind syntax
-        // (`bg-modal-overlay/50` → 50 % black). The bare class
-        // (`bg-modal-overlay`) defaults to the underlying fill at 100 %
-        // — too heavy for a backdrop, prefer the explicit alpha variant.
+        // Modal backdrop tint.
         'modal-overlay': 'hsl(var(--modal-overlay) / <alpha-value>)',
+        // Paper-depth — the slightly darker canvas tone that surrounds
+        // the content card on wide viewports. Exposed as `bg-paper-deep`.
+        'paper-deep': 'hsl(var(--paper-deep))',
+        // Reader paper / ink — exposed so reader sub-surfaces can be
+        // painted without re-declaring CSS variables.
+        'reader-paper': 'hsl(var(--reader-paper))',
+        'reader-ink': 'hsl(var(--reader-ink))',
+        'reader-ink-soft': 'hsl(var(--reader-ink-soft))',
+        'reader-divider': 'hsl(var(--reader-divider))',
       },
       borderRadius: {
         lg: 'var(--radius)',
@@ -72,15 +111,10 @@ module.exports = {
           from: { height: 'var(--radix-accordion-content-height)' },
           to: { height: '0' },
         },
-        shimmer: {
-          '0%': { backgroundPosition: '-200% 0' },
-          '100%': { backgroundPosition: '200% 0' },
-        },
       },
       animation: {
         'accordion-down': 'accordion-down 0.2s ease-out',
         'accordion-up': 'accordion-up 0.2s ease-out',
-        shimmer: 'shimmer 1.5s infinite',
       },
     },
   },

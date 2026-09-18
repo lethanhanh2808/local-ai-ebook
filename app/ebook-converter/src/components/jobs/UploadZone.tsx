@@ -166,7 +166,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
           works for EPUB/HTML/TXT and we don't want to flash a banner for a
           transient probe miss. */}
       {calibre && !calibre.ok && (
-        <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-800 dark:text-amber-200">
+        <div className="flex items-start gap-2 border border-amber-500/40 border-l-2 border-l-amber-500 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-800 dark:text-amber-200">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <div className="min-w-0 flex-1">
             <p className="font-medium">Calibre chưa được cài — MOBI / AZW3 không upload được.</p>
@@ -175,7 +175,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
               <Link href="/settings#importers" className="font-medium underline underline-offset-2">
                 Settings → Importers
               </Link>{' '}
-              để cài <code className="bg-amber-500/15 px-1 rounded">ebook-convert</code>.
+              để cài <code className="bg-amber-500/15 px-1">ebook-convert</code>.
             </p>
           </div>
         </div>
@@ -183,7 +183,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
       <div
         {...getRootProps()}
         className={cn(
-          'relative flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed',
+          'relative flex min-h-44 cursor-pointer flex-col items-center justify-center border-2 border-dashed',
           'transition-all duration-200 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
           isDragActive
             ? 'border-primary bg-primary/5 scale-[1.01]'
@@ -212,8 +212,8 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
             <motion.div key="idle" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               className="flex flex-col items-center gap-3 p-6 text-center"
             >
-              <div className="rounded-full bg-primary/10 p-4">
-                <FileText className="h-8 w-8 text-primary" />
+              <div className="flex h-12 w-12 items-center justify-center bg-primary/10 text-primary">
+                <FileText className="h-6 w-6" />
               </div>
               <div>
                 <p className="text-base font-medium">Drop ebooks here or click to browse</p>
@@ -228,7 +228,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
       </div>
 
       {/* Auto-start toggle */}
-      <Card className="rounded-xl border overflow-hidden">
+      <Card className="border-border overflow-hidden">
         <div className="flex items-center gap-3 px-4 py-3 select-none">
           <Switch
             checked={autoStart}
@@ -236,14 +236,14 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
             label="Auto-start conversion"
           />
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-1.5">
-              <Zap className="h-4 w-4 text-primary" />
-              <span className="text-sm font-medium">Auto-start conversion</span>
-              {!autoStart && <span className="text-[10px] rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-400 px-1.5 py-0.5 font-medium">MANUAL</span>}
+            <div className="flex items-center gap-1.5 min-w-0">
+              <Zap className="h-4 w-4 text-primary shrink-0" />
+              <span className="text-sm font-medium whitespace-nowrap">Auto-start conversion</span>
+              {!autoStart && <span className="border border-current px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-700 dark:text-amber-400 shrink-0">MANUAL</span>}
               <Tooltip content={autoStart
                 ? 'Files start converting as soon as upload completes.'
                 : 'Files go to "Pending". Click ▶ Start in the queue below to begin.'} side="top">
-                <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help">
+                <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help shrink-0">
                   <Info className="h-3 w-3" />
                 </span>
               </Tooltip>
@@ -253,7 +253,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
       </Card>
 
       {/* AI Enhancement Options */}
-      <Card className="rounded-xl border overflow-hidden divide-y divide-border">
+      <Card className="border-border overflow-hidden divide-y divide-border">
         {/* Preset selector */}
         <div className="flex flex-wrap items-center gap-2 px-4 py-3 bg-muted/30">
           <span className="text-xs font-medium text-muted-foreground mr-1">Preset:</span>
@@ -261,7 +261,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
             type="button"
             onClick={() => applyPreset('fast')}
             className={cn(
-              'text-xs px-2.5 py-1 rounded-full border transition-colors',
+              'text-xs px-2.5 py-1 border transition-colors',
               preset === 'fast'
                 ? 'bg-primary text-primary-foreground border-primary'
                 : 'border-border hover:bg-accent',
@@ -273,7 +273,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
             type="button"
             onClick={() => applyPreset('balanced')}
             className={cn(
-              'text-xs px-2.5 py-1 rounded-full border transition-colors',
+              'text-xs px-2.5 py-1 border transition-colors',
               preset === 'balanced'
                 ? 'bg-primary text-primary-foreground border-primary'
                 : 'border-border hover:bg-accent',
@@ -285,7 +285,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
             type="button"
             onClick={() => applyPreset('thorough')}
             className={cn(
-              'text-xs px-2.5 py-1 rounded-full border transition-colors',
+              'text-xs px-2.5 py-1 border transition-colors',
               preset === 'thorough'
                 ? 'bg-primary text-primary-foreground border-primary'
                 : 'border-border hover:bg-accent',
@@ -294,19 +294,19 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
             Thorough
           </button>
           {preset === 'custom' && (
-            <span className="text-[10px] rounded-full bg-muted-foreground/15 text-muted-foreground px-1.5 py-0.5 font-medium">CUSTOM</span>
+            <span className="border border-current px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">CUSTOM</span>
           )}
         </div>
         {/* Light AI enhance (fast) */}
         <div className="flex items-center gap-3 px-4 py-3 select-none">
           <Switch checked={aiEnhance} onCheckedChange={(v) => { setAiEnhance(v); setPreset('custom'); }} label="AI Enhancement" />
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-1.5">
-              <Sparkles className="h-4 w-4 text-primary" />
-              <span className="text-sm font-medium">AI Enhancement</span>
-              {aiEnhance && <span className="text-[10px] rounded-full bg-primary/15 text-primary px-1.5 py-0.5 font-medium">FAST</span>}
+            <div className="flex items-center gap-1.5 min-w-0">
+              <Sparkles className="h-4 w-4 text-primary shrink-0" />
+              <span className="text-sm font-medium whitespace-nowrap">AI Enhancement</span>
+              {aiEnhance && <span className="border border-current px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-primary shrink-0">FAST</span>}
               <Tooltip content="Quick parallel pass: fixes watermarks, encoding, broken images. ~30s per book." side="top">
-                <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help">
+                <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help shrink-0">
                   <Info className="h-3 w-3" />
                 </span>
               </Tooltip>
@@ -318,12 +318,12 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
         <div className="flex items-center gap-3 px-4 py-3 select-none">
           <Switch checked={deepFormat} onCheckedChange={(v) => { setDeepFormat(v); setPreset('custom'); }} label="Deep Format" />
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-1.5">
-              <Wand2 className="h-4 w-4 text-primary" />
-              <span className="text-sm font-medium">Deep Format (Vietnamese novel)</span>
-              {deepFormat && <span className="text-[10px] rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 font-medium">SLOW</span>}
+            <div className="flex items-center gap-1.5 min-w-0">
+              <Wand2 className="h-4 w-4 text-primary shrink-0" />
+              <span className="text-sm font-medium whitespace-nowrap">Deep Format (Vietnamese novel)</span>
+              {deepFormat && <span className="border border-current px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-600 dark:text-amber-400 shrink-0">SLOW</span>}
               <Tooltip content={<><strong>Recommended cho tiểu thuyết.</strong> AI re-formats từng chương: gộp/tách đoạn văn, định dạng hội thoại (nháy cong), ngắt cảnh (&lt;hr/&gt;). ~2-5 phút/chương.</>} side="top">
-                <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help">
+                <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help shrink-0">
                   <Info className="h-3 w-3" />
                 </span>
               </Tooltip>
@@ -335,12 +335,12 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
         <div className="flex items-center gap-3 px-4 py-3 select-none">
           <Switch checked={readerFriendly} onCheckedChange={setReaderFriendly} label="Reader-friendly output" />
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-1.5">
-              <Smartphone className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-              <span className="text-sm font-medium">Reader-friendly (Onyx Boox / Kobo / Kindle)</span>
-              {readerFriendly && <span className="text-[10px] rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 font-medium">QUICK</span>}
+            <div className="flex items-center gap-1.5 min-w-0">
+              <Smartphone className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span className="text-sm font-medium whitespace-nowrap">Reader-friendly (Onyx Boox / Kobo / Kindle)</span>
+              {readerFriendly && <span className="border border-current px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-700 dark:text-emerald-300 shrink-0">QUICK</span>}
               <Tooltip content={<><strong>Dùng khi sách chỉ hiện 1–2 trang trên máy đọc e-ink.</strong> Bỏ animation, blur, text-shadow, hyphens, background gradient, font custom. Dùng stylesheet tối giản — convert xong trong vài chục giây.</>} side="top">
-                <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help">
+                <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help shrink-0">
                   <Info className="h-3 w-3" />
                 </span>
               </Tooltip>
@@ -378,7 +378,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
                   placeholder="vd: 'Bỏ qua các đoạn recap. Giữ nguyên tên riêng Nhật/Hán-Việt.'"
                   rows={3}
                   aria-label="Custom AI prompt"
-                  className="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 text-xs font-mono outline-none focus-visible:ring-2 focus-visible:ring-ring resize-y"
+                  className="mt-2 w-full border border-border bg-background px-3 py-2 text-xs font-mono outline-none focus-visible:ring-2 focus-visible:ring-ring resize-y"
                 />
               )}
             </AnimatePresence>
@@ -386,84 +386,18 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
         )}
       </Card>
 
-      {/* (Legacy single-toggle kept for back-compat with old saved state — see below) */}
-      {false && (
-      <Card className="rounded-xl border overflow-hidden">
-        <label className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none">
-          <div
-            onClick={(e) => { e.preventDefault(); setAiEnhance((v) => !v); if (aiEnhance) setShowPrompt(false); }}
-            className={cn(
-              'relative w-9 h-5 rounded-full transition-colors duration-200 shrink-0',
-              aiEnhance ? 'bg-primary' : 'bg-muted-foreground/30',
-            )}
-          >
-            <div className={cn(
-              'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200',
-              aiEnhance ? 'translate-x-4' : 'translate-x-0',
-            )} />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-1.5">
-              <Sparkles className="h-4 w-4 text-primary" />
-              <span className="text-sm font-medium">AI Enhancement</span>
-              {aiEnhance && <span className="text-[10px] rounded-full bg-primary/15 text-primary px-1.5 py-0.5 font-medium">ON</span>}
-            </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              AI processes each chapter in parallel: fixes formatting, removes broken images, standardizes Vietnamese text
-            </p>
-          </div>
-          {aiEnhance && (
-            <button
-              type="button"
-              onClick={(e) => { e.preventDefault(); setShowPrompt((v) => !v); }}
-              className="shrink-0 p-1 rounded hover:bg-muted transition-colors"
-              title={showPrompt ? 'Hide custom prompt' : 'Add custom prompt'}
-            >
-              {showPrompt ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-            </button>
-          )}
-        </label>
-
-        <AnimatePresence>
-          {aiEnhance && showPrompt && (
-            <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              className="overflow-hidden"
-            >
-              <div className="px-4 pb-3 border-t border-border">
-                <label className="block text-xs font-medium mb-1.5 mt-2 text-muted-foreground">
-                  Custom AI instructions (optional)
-                </label>
-                <textarea
-                  value={aiPrompt}
-                  onChange={(e) => setAiPrompt(e.target.value)}
-                  placeholder="e.g. Translate chapter titles to English. Fix dialogue format. Ensure proper paragraph breaks."
-                  rows={3}
-                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none resize-none focus-visible:ring-2 focus-visible:ring-ring"
-                />
-                <p className="text-[10px] text-muted-foreground mt-1">
-                  Leave blank to use default enhancement (formatting, broken image removal, Vietnamese text cleanup)
-                </p>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </Card>
-      )}
 
       {/* AI Watermark Cleanup */}
-      <Card className="rounded-xl border overflow-hidden">
+      <Card className="border-border overflow-hidden">
         <div className="flex items-center gap-3 px-4 py-3 select-none">
           <Switch checked={aiWatermarkClean} onCheckedChange={(v) => { setAiWatermarkClean(v); setPreset('custom'); }} label="AI Watermark Clean" />
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-1.5">
-              <ShieldOff className="h-4 w-4 text-primary" />
-              <span className="text-sm font-medium">AI Watermark Cleanup</span>
-              {aiWatermarkClean && <span className="text-[10px] rounded-full bg-primary/15 text-primary px-1.5 py-0.5 font-medium">ON</span>}
+            <div className="flex items-center gap-1.5 min-w-0">
+              <ShieldOff className="h-4 w-4 text-primary shrink-0" />
+              <span className="text-sm font-medium whitespace-nowrap">AI Watermark Cleanup</span>
+              {aiWatermarkClean && <span className="border border-current px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-primary shrink-0">ON</span>}
               <Tooltip content="Detects repeated watermark phrases in the ebook and removes them during conversion" side="top">
-                <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help">
+                <span tabIndex={0} className="inline-flex text-muted-foreground/70 hover:text-foreground cursor-help shrink-0">
                   <Info className="h-3 w-3" />
                 </span>
               </Tooltip>
@@ -476,7 +410,7 @@ export function UploadZone({ onJobCreated }: UploadZoneProps) {
         {error && (
           <motion.p initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
             role="alert"
-            className="rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive"
+            className="border border-destructive/40 border-l-2 border-l-destructive bg-destructive/10 px-4 py-2 text-sm text-destructive"
           >
             {error}
           </motion.p>

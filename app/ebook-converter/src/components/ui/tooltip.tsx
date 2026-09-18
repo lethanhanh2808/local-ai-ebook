@@ -132,8 +132,19 @@ export function Tooltip({ content, side = 'top', children, className, maxHeight 
 
   // Position is computed in `reposition` (centred over the trigger and
   // clamped to the viewport), so no CSS transform is needed.
+  //
+  // Why `inline-flex` (not `flex w-full`): the wrapper used to be `flex
+  // w-full` so the trigger could fill its parent (e.g. when the trigger
+  // sat inside a column layout). But that default broke any parent that
+  // was itself a flex-wrap row — every trigger became width:100% and
+  // collapsed onto its own line (visible regression on the EPUB reader
+  // header before this fix). `inline-flex` shrinks to the trigger's
+  // intrinsic width, which is the right default for the 95% case where
+  // the trigger is an icon button / link in a toolbar. Callers that
+  // actually need block layout can pass `className="flex w-full"` to
+  // opt back in.
   return (
-    <span className={cn('relative flex w-full', className)}>
+    <span className={cn('relative inline-flex', className)}>
       {enhanced}
       {mounted && open && typeof document !== 'undefined' && createPortal(
         <span
@@ -142,7 +153,7 @@ export function Tooltip({ content, side = 'top', children, className, maxHeight 
           id={id}
           style={{ position: 'fixed', top: coords.top, left: coords.left }}
           className={cn(
-            'pointer-events-none z-[100] w-fit max-w-[30rem] overflow-hidden whitespace-normal break-words rounded-md border border-border bg-popover px-3 py-2 text-xs leading-snug text-popover-foreground shadow-md',
+            'pointer-events-none z-[100] w-fit max-w-[30rem] overflow-hidden whitespace-normal break-words rounded-md border border-border bg-popover px-3 py-2 text-xs leading-snug text-popover-foreground shadow-acetate',
             `max-h-[${maxHeight}rem]`,
             'animate-in fade-in-0',
           )}

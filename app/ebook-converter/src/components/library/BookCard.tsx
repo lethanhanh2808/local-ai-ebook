@@ -201,7 +201,7 @@ export function BookCard({ book: initialBook, onDelete, onUpdate, onEnhanced, co
       {showMeta && (
         <MetadataModal book={book} onClose={() => setShowMeta(false)} onSaved={handleMetaSaved} />
       )}
-      <Card className={cn('group flex flex-col overflow-hidden shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5', compact && 'text-[10px]')}>
+      <Card className={cn('group flex flex-col overflow-hidden shadow-acetate transition-colors hover:border-primary/40', compact && 'text-[10px]')}>
         {/* Cover */}
         <div className="relative aspect-[2/3] bg-muted overflow-hidden">
           {!coverError ? (
@@ -214,7 +214,7 @@ export function BookCard({ book: initialBook, onDelete, onUpdate, onEnhanced, co
               onError={() => setCoverError(true)}
             />
           ) : (
-            <div className="h-full w-full flex flex-col items-center justify-center bg-gradient-to-br from-muted to-muted/60 p-4">
+            <div className="h-full w-full flex flex-col items-center justify-center bg-muted p-4">
               <p className="text-center text-xs font-medium text-muted-foreground line-clamp-4">{book.title}</p>
             </div>
           )}
@@ -291,7 +291,7 @@ export function BookCard({ book: initialBook, onDelete, onUpdate, onEnhanced, co
 
           {/* Visible "Generate cover" prompt when the cover is missing */}
           {!book.hasCover && (
-            <div className="absolute inset-x-0 bottom-0 flex items-center justify-center bg-gradient-to-t from-black/70 to-transparent p-2 pt-6">
+            <div className="absolute inset-x-0 bottom-0 flex items-center justify-center bg-foreground/60 p-2 pt-6">
               <button
                 type="button"
                 onClick={handleGenerateCover}

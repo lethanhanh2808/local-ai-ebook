@@ -358,7 +358,7 @@ export function WatermarksPanel({ bookId }: WatermarksPanelProps) {
         <div className="flex-1 min-w-0">
           <h2 className="text-sm font-semibold flex items-center gap-2">
             <Wand2 className="h-4 w-4 text-primary" /> Watermarks
-            <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wider bg-rose-500/15 text-rose-700 dark:text-rose-400">
+            <span className="border border-current px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-rose-700 dark:text-rose-400">
               {saved.length} saved
             </span>
           </h2>
@@ -395,7 +395,7 @@ export function WatermarksPanel({ bookId }: WatermarksPanelProps) {
           </Button>
         </div>
 
-        <div className="rounded-lg border border-border divide-y divide-border max-h-[260px] overflow-y-auto">
+        <div className="border border-border divide-y divide-border max-h-[260px] overflow-y-auto">
           {loadingSaved ? (
             <div className="p-6 text-center text-xs text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin mx-auto mb-1" /> Đang tải…
@@ -451,7 +451,7 @@ export function WatermarksPanel({ bookId }: WatermarksPanelProps) {
         </div>
 
         {candidates.length > 0 && (
-          <div className="rounded-lg border border-border max-h-[260px] overflow-y-auto">
+          <div className="border border-border max-h-[260px] overflow-y-auto">
             <div className="p-2 text-[10px] text-muted-foreground border-b border-border bg-muted/30">
               {candidates.length} candidates · pre-selected = AI-confirmed ∪ already-saved.
               Tick để thêm, bỏ tick để bỏ, rồi bấm Save.
@@ -524,7 +524,7 @@ export function WatermarksPanel({ bookId }: WatermarksPanelProps) {
         </div>
 
         {lastRerun && (
-          <div className="rounded-md border border-emerald-500/40 bg-emerald-500/5 p-3 text-xs space-y-1.5">
+          <div className="border border-emerald-500/40 border-l-2 border-l-emerald-500 bg-emerald-500/5 p-3 text-xs space-y-1.5">
             <p className="font-semibold flex items-center gap-1.5 text-emerald-700 dark:text-emerald-300">
               <ShieldCheck className="h-3.5 w-3.5" />
               Rerun xong: {lastRerun.totalHits} hits / {lastRerun.chaptersStripped} chapters
@@ -569,7 +569,7 @@ export function WatermarksPanel({ bookId }: WatermarksPanelProps) {
         </div>
 
         {rerunAllResult && (
-          <div className="rounded-md border border-emerald-500/40 bg-emerald-500/5 p-3 text-xs space-y-1">
+          <div className="border border-emerald-500/40 border-l-2 border-l-emerald-500 bg-emerald-500/5 p-3 text-xs space-y-1">
             <p className="font-semibold flex items-center gap-1.5 text-emerald-700 dark:text-emerald-300">
               <ShieldCheck className="h-3.5 w-3.5" />
               Đã xử lý {rerunAllResult.booksStripped}/{rerunAllResult.booksScanned} sách ·{' '}
@@ -616,7 +616,7 @@ export function WatermarksPanel({ bookId }: WatermarksPanelProps) {
         </div>
 
         {lastResult && (
-          <div className="rounded-md border border-emerald-500/40 bg-emerald-500/5 p-3 text-xs space-y-2">
+          <div className="border border-emerald-500/40 border-l-2 border-l-emerald-500 bg-emerald-500/5 p-3 text-xs space-y-2">
             <p className="font-semibold flex items-center gap-1.5 text-emerald-700 dark:text-emerald-300">
               <ShieldCheck className="h-3.5 w-3.5" />
               Đã xoá {lastResult.totalHits} lần × {lastResult.phrases.filter(p => p.hits > 0).length} cụm từ
@@ -654,7 +654,7 @@ export function WatermarksPanel({ bookId }: WatermarksPanelProps) {
       </div>
 
       {error && (
-        <div className="rounded-md border border-destructive/40 bg-destructive/5 p-2.5 text-xs text-destructive flex items-start gap-1.5">
+        <div className="border border-destructive/40 border-l-2 border-l-destructive bg-destructive/5 p-2.5 text-xs text-destructive flex items-start gap-1.5">
           <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
           <span>{error}</span>
         </div>

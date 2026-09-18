@@ -73,7 +73,7 @@ export function IllustrationsGallery({
   }
   if (err) {
     return (
-      <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">
+      <div className="border border-destructive/40 border-l-2 border-l-destructive bg-destructive/5 p-3 text-xs text-destructive">
         Không tải được ảnh: {err}
       </div>
     );
@@ -101,9 +101,9 @@ export function IllustrationsGallery({
               key={it.id}
               onClick={() => onJumpChapter(it.chapterIndex)}
               className={cn(
-                'group relative flex flex-col gap-1 rounded-md overflow-hidden border bg-card text-left transition-all hover:shadow-md',
+                'group relative flex flex-col gap-1 overflow-hidden border bg-card text-left transition-colors',
                 isCurrent
-                  ? 'border-primary ring-2 ring-primary/40'
+                  ? 'border-l-2 border-l-primary border-border'
                   : 'border-border hover:border-primary/50',
               )}
               title={`Chapter ${it.chapterIndex + 1}: ${it.chapterTitle || 'Chương ' + (it.chapterIndex + 1)}`}
@@ -116,11 +116,11 @@ export function IllustrationsGallery({
                   loading="lazy"
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                 />
-                <div className="absolute top-1 left-1 rounded-full bg-background/85 backdrop-blur px-1.5 py-0.5 text-[9px] font-semibold tabular-nums">
+                <div className="absolute top-1 left-1 bg-background/85 backdrop-blur px-1.5 py-0.5 text-[9px] font-semibold tabular-nums">
                   Ch. {it.chapterIndex + 1}
                 </div>
                 {isCurrent && (
-                  <div className="absolute top-1 right-1 rounded-full bg-primary text-primary-foreground px-1.5 py-0.5 text-[9px] font-semibold">
+                  <div className="absolute top-1 right-1 bg-primary text-primary-foreground px-1.5 py-0.5 text-[9px] font-semibold">
                     Hiện tại
                   </div>
                 )}

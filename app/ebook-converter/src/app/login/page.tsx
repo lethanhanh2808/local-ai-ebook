@@ -2,10 +2,11 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Lock, Loader2, LogIn, ShieldCheck } from 'lucide-react';
+import { Lock, Loader2, LogIn } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { SealStamp } from '@/components/ui/seal-stamp';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -52,11 +53,9 @@ export default function LoginPage() {
 
   return (
     <div className="mx-auto flex min-h-[calc(100vh-3.5rem)] max-w-5xl items-center justify-center px-4 py-10">
-      <Card className="w-full max-w-md overflow-hidden border border-border/80 bg-background/90 shadow-xl">
-        <div className="border-b border-border bg-gradient-to-r from-primary/10 via-primary/5 to-transparent p-6">
-          <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 text-primary">
-            <ShieldCheck className="h-6 w-6" />
-          </div>
+      <Card className="w-full max-w-md overflow-hidden border border-border/80 bg-background/90">
+        <div className="border-b border-border bg-secondary/40 p-6">
+          <SealStamp label="書" size="md" aria-label="Ebook Manager" className="mb-3" />
           <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">Local AI Ebook</p>
           <h1 className="mt-2 text-2xl font-bold tracking-tight">Sign in</h1>
           <p className="mt-1 text-sm text-muted-foreground">Use the local admin account to access the app and settings. We recommend changing the default password after your first sign-in.</p>

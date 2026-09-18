@@ -26,6 +26,7 @@ import { Card } from '@/components/ui/card';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { EmptyState, LoadingSkeleton } from '@/components/layout/EmptyState';
 import { ErrorState } from '@/components/layout/ErrorState';
+import { SealStamp } from '@/components/ui/seal-stamp';
 import { cn, formatDate } from '@/lib/utils';
 import type { BookSummary } from '@/components/library/BookCard';
 
@@ -166,29 +167,36 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-6 sm:py-8 space-y-6">
+    // Paper canvas extends full viewport width. The content column
+    // inside each section is bounded by `max-w-canvas` (1800 px). On
+    // 1920×1080 the outer paper-deep tone (provided by the layout
+    // `<main>`) fills the gutters to either side of the centre column
+    // — that is the "folio on a desk" raise from DESIGN.md.
+    <div className="mx-auto w-full max-w-canvas px-4 sm:px-6 lg:px-8 py-6 sm:py-10 space-y-8">
       {/* ── 1. Welcome bar (compact, single row) ─────────────────────────── */}
-      <section className="relative overflow-hidden rounded-2xl border border-border bg-gradient-to-br from-primary/8 via-primary/3 to-transparent p-5 sm:p-6">
-        <div className="relative z-10 flex flex-col gap-4">
+      <section className="bg-card border border-border shadow-acetate ruled-paper px-5 sm:px-7 py-6">
+        <div className="flex flex-col gap-5">
           {/* Top row: greeting + actions */}
-          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 mb-1">
-                <Sparkles className="h-3.5 w-3.5 text-primary" />
-                <span className="text-[10px] font-bold uppercase tracking-widest text-primary">
-                  Dashboard
-                </span>
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+            <div className="min-w-0 flex items-start gap-4">
+              <SealStamp label="閱" size="lg" aria-label="Trang chủ" />
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-primary">
+                    Dashboard
+                  </span>
+                </div>
+                <h1 className="text-2xl sm:text-[28px] font-semibold tracking-[-0.01em] leading-tight">
+                  Chào mừng trở lại
+                </h1>
+                <p className="text-[13px] text-muted-foreground mt-2 leading-snug">
+                  {error
+                    ? 'Không thể tải tổng quan thư viện.'
+                    : stats
+                    ? `Thư viện có ${stats.total} cuốn sách${stats.reading ? `, đang đọc dở ${stats.reading} cuốn` : ''}.`
+                    : 'Đang tải thư viện…'}
+                </p>
               </div>
-              <h1 className="text-xl sm:text-2xl font-bold tracking-tight">
-                Chào mừng trở lại 👋
-              </h1>
-              <p className="text-sm text-muted-foreground mt-1">
-                {error
-                  ? 'Không thể tải tổng quan thư viện.'
-                  : stats
-                  ? `Thư viện có ${stats.total} cuốn sách${stats.reading ? `, đang đọc dở ${stats.reading} cuốn` : ''}.`
-                  : 'Đang tải thư viện…'}
-              </p>
             </div>
             <div className="flex flex-wrap gap-2 shrink-0">
               <Link href="/convert" className={buttonClasses()}>
@@ -200,8 +208,8 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Inline stats strip */}
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 pt-3 border-t border-primary/10">
+          {/* Inline stats strip — hairline above, tabular numerals. */}
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 pt-4 border-t border-border">
             <InlineStat
               icon={<BookOpen className="h-3.5 w-3.5" />}
               label="Tổng"
@@ -241,19 +249,16 @@ export default function Dashboard() {
               loading={loading}
             />
             <div className="ml-auto flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
-              {/* Worker pill — surfaces pipeline health at a glance. The pill
-                  is hidden entirely while we're still loading to avoid
-                  flashing "offline" before the request completes. */}
+              {/* Worker pill — surfaces pipeline health at a glance. */}
               {worker !== null && (
                 <WorkerPill worker={worker} />
               )}
               {/* Active-job pill — only appears when something is cooking.
-                  Links to /convert where the JobList component renders the
-                  live queue with per-job progress, cancel, and download. */}
+                  Hairline border, no rounded pill; reads as a manuscript tag. */}
               {showActiveJobPill && worker && (
                 <Link
                   href="/convert"
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border border-primary/30 bg-primary/10 text-primary hover:bg-primary/15 transition-colors"
+                  className="inline-flex items-center gap-1 border border-primary/40 bg-primary/5 px-2 py-0.5 text-primary hover:bg-primary/10 transition-colors"
                   title={worker.counts.processing > 0
                     ? `Đang xử lý ${worker.counts.processing} job`
                     : `${activeJobCount} job đang chờ`}
@@ -271,8 +276,6 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
-        <div className="absolute -right-12 -top-12 h-40 w-40 rounded-full bg-primary/10 blur-3xl pointer-events-none" />
-        <div className="absolute -right-24 -bottom-12 h-48 w-48 rounded-full bg-primary/5 blur-3xl pointer-events-none" />
       </section>
 
       {error ? (
@@ -338,7 +341,7 @@ export default function Dashboard() {
             hint="Mở một cuốn sách và bắt đầu đọc — lịch sử sẽ xuất hiện ở đây."
           />
         ) : (
-          <ul className="divide-y divide-border rounded-xl border border-border bg-card overflow-hidden">
+          <ul className="divide-y divide-border border border-border bg-card overflow-hidden">
             {recentlyRead.map((book) => (
               <RecentlyReadRow key={book.id} book={book} />
             ))}
@@ -391,8 +394,8 @@ export default function Dashboard() {
           onClick={() => void load()}
           disabled={loading}
           className={cn(
-            'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors',
-            'border border-border bg-background hover:bg-muted hover:border-primary/30',
+            'inline-flex items-center gap-1.5 border border-border bg-card px-2.5 py-1 text-xs font-medium transition-colors',
+            'hover:bg-secondary hover:border-foreground/30',
             'disabled:opacity-60 disabled:cursor-not-allowed',
           )}
           title="Tải lại số liệu từ server"
@@ -474,19 +477,19 @@ function InlineStat({
 function ContinueReadingCard({ book }: { book: BookSummary }) {
   return (
     <Link href={`/library/${book.id}/read`} className="block group">
-      <Card className="flex flex-col overflow-hidden transition-all hover:bg-muted/30 hover:border-primary/30 h-full">
+      <Card className="flex flex-col overflow-hidden transition-colors hover:bg-secondary/40 hover:border-foreground/30 h-full">
         {/* Cover */}
         <div className="aspect-[2/3] w-full bg-muted overflow-hidden relative">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={`/api/library/${book.id}/cover?v=${book.updatedAt ? new Date(book.updatedAt).getTime() : 0}`} alt={book.title} className="h-full w-full object-cover"
             onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-          {/* Progress bar overlay */}
+          {/* Progress bar overlay — vermilion ink-stroke on aged paper. */}
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-foreground/15">
             <div className="h-full bg-primary" style={{ width: `${Math.min(100, Math.max(0, book.readProgress))}%` }} />
           </div>
         </div>
         <div className="p-3 flex-1 flex flex-col">
-          <p className="text-sm font-semibold truncate group-hover:text-primary transition-colors">{book.title}</p>
+          <p className="text-sm font-semibold truncate group-hover:text-foreground transition-colors">{book.title}</p>
           <p className="text-xs text-muted-foreground truncate">{book.author}</p>
           <div className="mt-auto pt-2 flex items-center justify-between text-[10px]">
             <span className="text-muted-foreground tabular-nums font-medium">{book.readProgress}% đã đọc</span>
@@ -502,10 +505,10 @@ function ContinueReadingCard({ book }: { book: BookSummary }) {
 function RecentBookCard({ book }: { book: BookSummary }) {
   return (
     <Link href={`/library/${book.id}/read`} className="block group shrink-0 w-32 sm:w-auto">
-      <Card className="flex flex-col rounded-lg border overflow-hidden transition-all hover:bg-muted/30 hover:border-primary/30">
+      <Card className="flex flex-col overflow-hidden transition-colors hover:bg-secondary/40 hover:border-foreground/30">
         <div className="aspect-[2/3] bg-muted overflow-hidden">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={`/api/library/${book.id}/cover?v=${book.updatedAt ? new Date(book.updatedAt).getTime() : 0}`} alt={book.title} className="h-full w-full object-cover"
+          <img src={`/api/library/${book.id}/cover?v=${book.updatedAt ? new Date(book.updatedAt).getTime() : 0}`} alt={book.title} className="h-full w-full object-fill"
             onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
         </div>
         <div className="p-2">
@@ -548,7 +551,7 @@ function WorkerPill({ worker }: { worker: WorkerStatus }) {
     <Link
       href="/convert"
       className={cn(
-        'inline-flex items-center gap-1 px-2 py-0.5 rounded-full border transition-colors hover:opacity-80',
+        'inline-flex items-center gap-1 border px-2 py-0.5 transition-colors hover:opacity-80',
         bgClass,
       )}
       title={title}
@@ -567,9 +570,9 @@ function RecentlyReadRow({ book }: { book: BookSummary }) {
     <li>
       <Link
         href={`/library/${book.id}/read`}
-        className="flex items-center gap-3 px-3 py-2.5 hover:bg-muted/40 transition-colors group"
+        className="flex items-center gap-3 px-4 py-3 hover:bg-secondary/40 transition-colors group"
       >
-        <div className="relative h-10 w-7 shrink-0 rounded overflow-hidden bg-muted ring-1 ring-border">
+        <div className="relative h-10 w-7 shrink-0 overflow-hidden bg-muted border border-border">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={`/api/library/${book.id}/cover?v=${book.updatedAt ? new Date(book.updatedAt).getTime() : 0}`}
@@ -579,7 +582,7 @@ function RecentlyReadRow({ book }: { book: BookSummary }) {
           />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium truncate group-hover:text-primary transition-colors">
+          <p className="text-sm font-medium truncate group-hover:text-foreground transition-colors">
             {book.title}
           </p>
           <p className="text-[11px] text-muted-foreground truncate">

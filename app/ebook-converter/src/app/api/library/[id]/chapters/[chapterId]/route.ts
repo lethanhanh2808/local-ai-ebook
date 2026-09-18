@@ -32,9 +32,15 @@ const THEME_COLORS = {
   sepia: { bg: '#f4ede4', text: '#3b2f20', htmlBg: '#ede0ce' },
 };
 
+// Reader body font stack — Be Vietnam Pro is the primary Latin /
+// Vietnamese face (designed for Vietnamese typography first), with
+// Georgia / Times New Roman as Latin fallbacks. Noto Serif keeps the
+// CJK glyphs covered. Note: Google Fonts CSS link is loaded by the
+// parent layout.tsx, so Be Vietnam Pro is already cached by the time
+// this iframe renders.
 const FONT_STACK = {
-  serif: "'Georgia', 'Times New Roman', 'Noto Serif', serif",
-  sans:  "'Inter', 'Segoe UI', 'Helvetica Neue', sans-serif",
+  serif: "'Be Vietnam Pro', 'Georgia', 'Times New Roman', 'Noto Serif', serif",
+  sans:  "'Be Vietnam Pro', 'Inter', 'Segoe UI', 'Helvetica Neue', sans-serif",
   mono:  "'JetBrains Mono', 'Consolas', 'Courier New', monospace",
 };
 
@@ -159,7 +165,12 @@ function chapterNotFoundHtml(
     body {
       background: ${t.bg};
       color: ${t.text};
-      font-family: 'Inter', 'Segoe UI', 'Helvetica Neue', sans-serif;
+      // Match the project sans stack (globals.css .font-sans) so the
+      // error page inside the reader iframe reads with the same voice
+      // as the rest of the chrome. Be Vietnam Pro leads for
+      // Vietnamese diacritic positioning; Inter is kept as a final
+      // fallback for hosts that don't have Be Vietnam Pro.
+      font-family: 'Be Vietnam Pro', 'Noto Sans SC', 'Inter', 'Segoe UI', 'Helvetica Neue', sans-serif;
       display: flex; align-items: center; justify-content: center;
       padding: 2rem; box-sizing: border-box;
     }

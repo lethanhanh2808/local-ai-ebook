@@ -472,7 +472,7 @@ export function VoicePanel({
         </div>
 
         {showUploadForm && (
-          <Card className="rounded-xl border border-border p-4 space-y-3 mb-3">
+          <Card className="border border-border p-4 space-y-3 mb-3">
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Tên giọng (vd: Người kể chuyện, Linh, Phong)</label>
               <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Narrator"

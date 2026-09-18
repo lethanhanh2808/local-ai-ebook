@@ -90,7 +90,7 @@ function ShelfCard({ shelf, onDelete, onRename }: {
   const initials = shelfInitials(shelf.name);
 
   return (
-    <Card className="group relative flex flex-col rounded-2xl border border-border overflow-hidden hover:shadow-lg transition-all duration-200">
+    <Card className="group relative flex flex-col border border-border overflow-hidden transition-colors">
       {/* Auto-generated gradient cover */}
       <div className="flex h-24 items-center justify-center relative overflow-hidden"
         style={{ background: gradient }}>
@@ -111,16 +111,16 @@ function ShelfCard({ shelf, onDelete, onRename }: {
           <div className="space-y-2">
             <input ref={inputRef} value={editName} onChange={(e) => setEditName(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit(); }}
-              className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+              className="w-full border border-border bg-background px-3 py-1.5 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring" />
             <input value={editDesc} onChange={(e) => setEditDesc(e.target.value)}
               placeholder="Description…"
-              className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+              className="w-full border border-border bg-background px-3 py-1.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring" />
             <div className="flex gap-2">
               <button onClick={commitEdit} disabled={saving || !editName.trim()}
-                className="flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
+                className="flex items-center gap-1 bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
                 {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />} Save
               </button>
-              <button onClick={cancelEdit} className="rounded-md px-3 py-1.5 text-xs hover:bg-muted">Cancel</button>
+              <button onClick={cancelEdit} className="px-3 py-1.5 text-xs hover:bg-muted">Cancel</button>
             </div>
           </div>
         ) : (
@@ -129,11 +129,11 @@ function ShelfCard({ shelf, onDelete, onRename }: {
               <h3 className="font-semibold text-sm leading-tight">{shelf.name}</h3>
               <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                 <button onClick={startEdit}
-                  className="rounded-md p-1.5 hover:bg-muted transition-colors" title="Rename">
+                  className="p-1.5 hover:bg-muted transition-colors" title="Rename">
                   <Pencil className="h-3 w-3" />
                 </button>
                 <button onClick={() => onDelete(shelf.id, shelf.name)}
-                  className="rounded-md p-1.5 hover:bg-destructive/10 text-destructive transition-colors" title="Delete">
+                  className="p-1.5 hover:bg-destructive/10 text-destructive transition-colors" title="Delete">
                   <Trash2 className="h-3 w-3" />
                 </button>
               </div>
@@ -158,15 +158,15 @@ function ShelfCard({ shelf, onDelete, onRename }: {
             )}
           </div>
           <Link href={`/shelves/${shelf.id}`}
-            className="flex items-center gap-1 rounded-md bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/20 transition-colors">
+            className="flex items-center gap-1 border border-current px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/5">
             Open <ChevronRight className="h-3 w-3" />
           </Link>
         </div>
 
         {/* Reading progress bar */}
         {shelf.bookCount > 0 && (
-          <div className="h-1 rounded-full bg-muted overflow-hidden">
-            <div className="h-full rounded-full bg-primary/40 transition-all"
+          <div className="h-1 bg-muted overflow-hidden">
+            <div className="h-full bg-primary/40 transition-all"
               style={{ width: `${readPct}%` }} />
           </div>
         )}
@@ -246,7 +246,7 @@ export function ShelvesView() {
     return (
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {Array.from({ length: 3 }).map((_, i) => (
-          <div key={i} className="h-52 animate-pulse rounded-2xl bg-muted" />
+          <div key={i} className="h-52 animate-pulse bg-muted" />
         ))}
       </div>
     );
@@ -270,14 +270,14 @@ export function ShelvesView() {
         {/* Stats chips */}
         {shelves.length > 0 && (
           <div className="flex items-center gap-2 mr-auto text-xs text-muted-foreground">
-            <span className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1">
+            <span className="flex items-center gap-1 border border-border px-2.5 py-1">
               <BookMarked className="h-3 w-3" />{shelves.length} shelf{shelves.length !== 1 ? 'ves' : ''}
             </span>
-            <span className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1">
+            <span className="flex items-center gap-1 border border-border px-2.5 py-1">
               <BookCopy className="h-3 w-3" />{totalBooks} books
             </span>
             {totalReading > 0 && (
-              <span className="flex items-center gap-1 rounded-full border border-border border-blue-300 bg-blue-50 dark:bg-blue-950/30 px-2.5 py-1 text-blue-600 dark:text-blue-400">
+              <span className="flex items-center gap-1 border border-current px-2.5 py-1 text-blue-600 dark:text-blue-400">
                 <BookOpen className="h-3 w-3" />{totalReading} reading
               </span>
             )}
@@ -285,10 +285,10 @@ export function ShelvesView() {
         )}
 
         {/* Sort */}
-        <div className="flex items-center rounded-lg border border-border overflow-hidden text-xs">
+        <div className="flex items-center border border-border overflow-hidden text-xs">
           {([['name', 'A–Z', ArrowDownAZ], ['count', 'Most books', Hash], ['recent', 'Recent', Clock]] as [SortKey, string, React.FC<{className?:string}>][]).map(([key, label, Icon]) => (
             <button key={key} onClick={() => setSortKey(key)}
-              className={cn('flex items-center gap-1 px-2.5 py-1.5 transition-colors',
+              className={cn('flex items-center gap-1 px-2.5 py-1.5 transition-colors border-r border-border last:border-r-0',
                 sortKey === key ? 'bg-primary text-primary-foreground' : 'hover:bg-muted')}>
               <Icon className="h-3 w-3" />{label}
             </button>
@@ -303,16 +303,16 @@ export function ShelvesView() {
 
       {/* Create form */}
       {showForm && (
-        <Card className="rounded-xl border border-border p-4 space-y-3">
+        <Card className="border border-border p-4 space-y-3">
           <h3 className="text-sm font-semibold">Create Reading List</h3>
           <div className="grid sm:grid-cols-2 gap-3">
             <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)}
               placeholder="Shelf name…"
-              className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
               onKeyDown={(e) => e.key === 'Enter' && handleCreate()} />
             <input type="text" value={newDesc} onChange={(e) => setNewDesc(e.target.value)}
               placeholder="Description (optional)…"
-              className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+              className="border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
           </div>
           <Button size="sm" onClick={handleCreate} disabled={creating || !newName.trim()}>
             {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Plus className="h-3.5 w-3.5 mr-1" />}

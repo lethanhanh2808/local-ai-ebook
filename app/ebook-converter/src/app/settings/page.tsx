@@ -481,16 +481,16 @@ export default function SettingsPage() {
 
   if (loading && !settings) {
     return (
-      <div className="mx-auto max-w-7xl px-4 py-8">
+      <div className="mx-auto w-full max-w-canvas px-4 sm:px-6 lg:px-8 py-8 sm:py-10">
         <PageHeader eyebrow="Cài đặt" title="Đang tải…" icon={<SettingsIcon className="h-4 w-4" />} />
-        <div className="space-y-2">{Array.from({length: 4}).map((_, i) => <div key={i} className="h-20 animate-pulse rounded-xl bg-muted" />)}</div>
+        <div className="space-y-2">{Array.from({length: 4}).map((_, i) => <div key={i} className="h-20 bg-secondary/60" />)}</div>
       </div>
     );
   }
 
   if (loadError && !settings) {
     return (
-      <div className="mx-auto max-w-7xl px-4 py-8">
+      <div className="mx-auto w-full max-w-canvas px-4 sm:px-6 lg:px-8 py-8 sm:py-10">
         <PageHeader eyebrow="Cài đặt" title="Cài đặt" icon={<SettingsIcon className="h-4 w-4" />} />
         <ErrorState title="Không thể tải cài đặt" message={loadError} details={loadError} onRetry={() => void fetchSettings()} retrying={loading} />
       </div>
@@ -503,7 +503,7 @@ export default function SettingsPage() {
   const ttsProvider = TTS_PROVIDERS.find((p) => p.id === settings.ttsProvider) ?? TTS_PROVIDERS[0];
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 space-y-6">
+    <div className="mx-auto w-full max-w-canvas px-4 sm:px-6 lg:px-8 py-8 sm:py-10 space-y-6">
       <PageHeader
         breadcrumbs={[{ label: 'Cài đặt' }]}
         title="Cài đặt"
@@ -553,32 +553,44 @@ export default function SettingsPage() {
           window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${next}`);
         }}
       >
-        <TabsList className="h-auto min-h-9 w-full justify-start overflow-x-auto flex-nowrap lg:justify-center" aria-label="Nhóm cài đặt">
-          <TabsTrigger value="ai" className="gap-1.5">
-            <Cpu className="h-3.5 w-3.5" /> AI Provider
-          </TabsTrigger>
-          <TabsTrigger value="tts" className="gap-1.5">
-            <Volume2 className="h-3.5 w-3.5" /> TTS
-          </TabsTrigger>
-          <TabsTrigger value="conversion" className="gap-1.5">
-            <Wand2 className="h-3.5 w-3.5" /> Conversion
-          </TabsTrigger>
-          <TabsTrigger value="watermarks" className="gap-1.5">
-            <ShieldOff className="h-3.5 w-3.5" /> Watermarks
-          </TabsTrigger>
-          <TabsTrigger value="image" className="gap-1.5">
-            <ImageIcon className="h-3.5 w-3.5" /> Image generation
-          </TabsTrigger>
-          <TabsTrigger value="appearance" className="gap-1.5">
-            <Palette className="h-3.5 w-3.5" /> Giao diện
-          </TabsTrigger>
-          <TabsTrigger value="importers" className="gap-1.5">
-            <Download className="h-3.5 w-3.5" /> Importers
-          </TabsTrigger>
-          <TabsTrigger value="users" className="gap-1.5">
-            <Users className="h-3.5 w-3.5" /> User &amp; access
-          </TabsTrigger>
-        </TabsList>
+        {/* Vertical left rail on lg+: 8 tabs would never fit horizontally.
+            Sticky so the active marker stays visible while scrolling
+            through long tab content. Mobile keeps the underline rail. */}
+        <div className="lg:grid lg:grid-cols-[220px_minmax(0,1fr)] lg:gap-8">
+          <TabsList
+            className="mb-4 flex flex-row overflow-x-auto flex-nowrap -mb-px
+                       lg:mb-0 lg:flex-col lg:overflow-visible lg:items-stretch
+                       lg:border-b-0 lg:border-l lg:border-border
+                       lg:sticky lg:top-20 lg:self-start"
+            aria-label="Nhóm cài đặt"
+          >
+            <TabsTrigger value="ai" className="shrink-0 gap-1.5 lg:justify-start lg:px-3 lg:py-2.5 lg:border-b-0 lg:border-l-2 lg:-ml-px">
+              <Cpu className="h-3.5 w-3.5" /> AI Provider
+            </TabsTrigger>
+            <TabsTrigger value="tts" className="shrink-0 gap-1.5 lg:justify-start lg:px-3 lg:py-2.5 lg:border-b-0 lg:border-l-2 lg:-ml-px">
+              <Volume2 className="h-3.5 w-3.5" /> TTS
+            </TabsTrigger>
+            <TabsTrigger value="conversion" className="shrink-0 gap-1.5 lg:justify-start lg:px-3 lg:py-2.5 lg:border-b-0 lg:border-l-2 lg:-ml-px">
+              <Wand2 className="h-3.5 w-3.5" /> Conversion
+            </TabsTrigger>
+            <TabsTrigger value="watermarks" className="shrink-0 gap-1.5 lg:justify-start lg:px-3 lg:py-2.5 lg:border-b-0 lg:border-l-2 lg:-ml-px">
+              <ShieldOff className="h-3.5 w-3.5" /> Watermarks
+            </TabsTrigger>
+            <TabsTrigger value="image" className="shrink-0 gap-1.5 lg:justify-start lg:px-3 lg:py-2.5 lg:border-b-0 lg:border-l-2 lg:-ml-px">
+              <ImageIcon className="h-3.5 w-3.5" /> Image generation
+            </TabsTrigger>
+            <TabsTrigger value="appearance" className="shrink-0 gap-1.5 lg:justify-start lg:px-3 lg:py-2.5 lg:border-b-0 lg:border-l-2 lg:-ml-px">
+              <Palette className="h-3.5 w-3.5" /> Giao diện
+            </TabsTrigger>
+            <TabsTrigger value="importers" className="shrink-0 gap-1.5 lg:justify-start lg:px-3 lg:py-2.5 lg:border-b-0 lg:border-l-2 lg:-ml-px">
+              <Download className="h-3.5 w-3.5" /> Importers
+            </TabsTrigger>
+            <TabsTrigger value="users" className="shrink-0 gap-1.5 lg:justify-start lg:px-3 lg:py-2.5 lg:border-b-0 lg:border-l-2 lg:-ml-px">
+              <Users className="h-3.5 w-3.5" /> User &amp; access
+            </TabsTrigger>
+          </TabsList>
+
+          <div className="min-w-0">
 
         {/* ── AI Provider tab ─────────────────────────────────────────────── */}
         <TabsContent value="ai" className="space-y-4 outline-none">
@@ -587,11 +599,11 @@ export default function SettingsPage() {
               <h2 className="text-sm font-semibold flex items-center gap-2">
                 <Cpu className="h-4 w-4 text-primary" /> AI Provider
               </h2>
-              <span className={cn('text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wider',
-                settings.aiProvider === 'omlx-local' ? 'bg-green-500/15 text-green-700 dark:text-green-400' :
-                settings.aiProvider === 'minimax-cloud' ? 'bg-purple-500/15 text-purple-700 dark:text-purple-400' :
-                settings.aiProvider === 'openai' ? 'bg-blue-500/15 text-blue-700 dark:text-blue-400' :
-                'bg-muted text-muted-foreground',
+              <span className={cn('border border-current px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em]',
+                settings.aiProvider === 'omlx-local' ? 'text-green-700 dark:text-green-400' :
+                settings.aiProvider === 'minimax-cloud' ? 'text-purple-700 dark:text-purple-400' :
+                settings.aiProvider === 'openai' ? 'text-blue-700 dark:text-blue-400' :
+                'border-border text-muted-foreground',
               )}>
                 Đang dùng: {aiProvider.label}
               </span>
@@ -604,11 +616,11 @@ export default function SettingsPage() {
                 const selected = settings.aiProvider === p.id;
                 return (
                   <button key={p.id} type="button" onClick={() => pickProviderDefaults(p.id)} aria-pressed={selected}
-                    className={cn('text-left rounded-lg border border-border p-3 transition-all',
-                      selected ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'hover:bg-muted/30',
+                    className={cn('text-left border border-border p-3 transition-colors',
+                      selected ? 'border-l-2 border-l-primary bg-primary/[0.04]' : 'hover:bg-muted/40',
                     )}>
                     <div className="flex items-start gap-2.5">
-                      <div className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
+                      <div className={cn('flex h-8 w-8 shrink-0 items-center justify-center',
                         selected ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground',
                       )}>
                         <Icon className="h-4 w-4" />
@@ -937,8 +949,8 @@ export default function SettingsPage() {
                 const selected = settings.ttsProvider === p.id;
                 return (
                   <button key={p.id} type="button" onClick={() => update('ttsProvider', p.id)} aria-pressed={selected}
-                    className={cn('text-left rounded-lg border border-border p-3 transition-all',
-                      selected ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'hover:bg-muted/30',
+                    className={cn('text-left border border-border p-3 transition-colors',
+                      selected ? 'border-l-2 border-l-primary bg-primary/[0.04]' : 'hover:bg-muted/40',
                     )}>
                     <div className="flex items-center gap-1.5">
                       <p className="text-xs font-semibold">{p.label}</p>
@@ -1130,15 +1142,15 @@ export default function SettingsPage() {
                     <Info className="h-3 w-3" />
                   </span>
                 </Tooltip>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-medium uppercase tracking-wider">
+                <span className="border border-border px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
                   BETA
                 </span>
               </h2>
-              <span className={cn('text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wider',
-                settings.imageProvider === 'none' ? 'bg-muted text-muted-foreground' :
-                settings.imageProvider === 'minimax' ? 'bg-purple-500/15 text-purple-700 dark:text-purple-400' :
-                settings.imageProvider === 'openai' ? 'bg-blue-500/15 text-blue-700 dark:text-blue-400' :
-                'bg-amber-500/15 text-amber-700 dark:text-amber-400',
+              <span className={cn('border border-current px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em]',
+                settings.imageProvider === 'none' ? 'border-border text-muted-foreground' :
+                settings.imageProvider === 'minimax' ? 'text-purple-700 dark:text-purple-400' :
+                settings.imageProvider === 'openai' ? 'text-blue-700 dark:text-blue-400' :
+                'text-amber-700 dark:text-amber-400',
               )}>
                 {settings.imageProvider === 'none' ? 'Tắt' : settings.imageProvider}
               </span>
@@ -1148,10 +1160,10 @@ export default function SettingsPage() {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {(['none', 'openai', 'minimax', 'custom'] as const).map((p) => (
                 <button key={p} type="button" onClick={() => update('imageProvider', p)} aria-pressed={settings.imageProvider === p}
-                  className={cn('rounded-lg border border-border p-2.5 text-left transition-all text-xs',
+                  className={cn('border border-border p-2.5 text-left transition-colors text-xs',
                     settings.imageProvider === p
-                      ? 'border-primary bg-primary/5 ring-1 ring-primary'
-                      : 'hover:bg-muted/30',
+                      ? 'border-l-2 border-l-primary bg-primary/[0.04]'
+                      : 'hover:bg-muted/40',
                   )}>
                   <p className="font-semibold capitalize">{p === 'none' ? 'Disabled' : p}</p>
                   <p className="text-[10px] text-muted-foreground mt-0.5">
@@ -1301,8 +1313,8 @@ export default function SettingsPage() {
                     onClick={() => setAppTheme(mode)}
                     aria-pressed={theme === mode}
                     className={cn(
-                      'w-full rounded-lg border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                      theme === mode ? 'border-primary bg-primary/5 ring-1 ring-primary/40' : 'border-border hover:bg-muted/40',
+                      'w-full border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                      theme === mode ? 'border-l-2 border-l-primary bg-primary/[0.04] border-border' : 'border-border hover:bg-muted/40',
                     )}
                   >
                     <span className="flex items-center gap-2 text-sm font-semibold"><Icon className="h-4 w-4" />{label}</span>
@@ -1432,11 +1444,11 @@ export default function SettingsPage() {
                 <div className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">No users found.</div>
               ) : (
                 userRows.map((user) => (
-                  <div key={user.id} className="flex flex-col gap-2 rounded-lg border border-border bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div key={user.id} className="flex flex-col gap-2 border border-border bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-semibold">{user.name || user.username}</span>
-                        <span className={cn('rounded-full px-2 py-0.5 text-[10px] font-medium uppercase', user.role === 'ADMIN' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground')}>
+                        <span className={cn('border border-current px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.18em]', user.role === 'ADMIN' ? 'text-primary' : 'border-border text-muted-foreground')}>
                           {user.role}
                         </span>
                       </div>
@@ -1474,7 +1486,7 @@ export default function SettingsPage() {
         ) : (
           <div className="space-y-2">
             {auditLogs.map((entry) => (
-              <div key={entry.id} className="rounded-lg border border-border bg-muted/20 p-3 text-xs">
+              <div key={entry.id} className="border border-border bg-muted/20 p-3 text-xs">
                 <div className="flex items-center justify-between gap-3">
                   <span className="font-medium uppercase tracking-wider text-primary">{entry.action}</span>
                   <span className="text-muted-foreground">{new Date(entry.createdAt).toLocaleString()}</span>
@@ -1490,6 +1502,8 @@ export default function SettingsPage() {
         )}
       </Card>
       </TabsContent>
+          </div>
+        </div>
       </Tabs>
 
       <footer className="text-center text-[10px] text-muted-foreground pt-4 border-t border-border">
@@ -1733,7 +1747,7 @@ function WatermarkMemoryPanel() {
               key={f}
               type="button"
               onClick={() => setFilter(f)}
-              className={cn('rounded-full px-2.5 py-0.5 font-semibold border transition-colors',
+              className={cn('border border-current px-2.5 py-0.5 font-semibold transition-colors',
                 filter === f
                   ? 'border-primary bg-primary text-primary-foreground'
                   : 'border-border bg-background hover:bg-muted/40')}>
@@ -1743,7 +1757,7 @@ function WatermarkMemoryPanel() {
         </div>
 
         {/* List */}
-        <div className="rounded-lg border border-border divide-y divide-border max-h-[420px] overflow-y-auto">
+        <div className="border border-border divide-y divide-border max-h-[420px] overflow-y-auto">
           {loading ? (
             <div className="p-6 text-center text-xs text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin mx-auto mb-1" />
@@ -1763,10 +1777,10 @@ function WatermarkMemoryPanel() {
           ) : (
             filtered.map((row) => (
               <div key={row.id} className="flex items-start gap-2 px-3 py-2 hover:bg-muted/30 transition-colors">
-                <span className={cn('shrink-0 mt-0.5 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold',
-                  row.source === 'auto' ? 'bg-primary/15 text-primary' :
-                  row.source === 'user' ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400' :
-                  'bg-muted text-muted-foreground',
+                <span className={cn('shrink-0 mt-0.5 inline-flex items-center border border-current px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em]',
+                  row.source === 'auto' ? 'text-primary' :
+                  row.source === 'user' ? 'text-emerald-700 dark:text-emerald-400' :
+                  'border-border text-muted-foreground',
                 )}>
                   {row.source}
                 </span>
@@ -1939,10 +1953,10 @@ function ToggleRow({
   return (
     <div
       onClick={() => onChange(!checked)}
-      className={cn('w-full flex items-start gap-3 rounded-lg border border-border p-3 text-left transition-all cursor-pointer',
-        checked ? 'bg-primary/5 ring-1 ring-primary/40 border-primary/20' : 'hover:bg-muted/30',
+      className={cn('w-full flex items-start gap-3 border border-border p-3 text-left transition-colors cursor-pointer',
+        checked ? 'border-l-2 border-l-primary bg-primary/[0.04]' : 'hover:bg-muted/40',
       )}>
-      <div className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
+      <div className={cn('flex h-8 w-8 shrink-0 items-center justify-center',
         checked ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground')}>
         {icon}
       </div>

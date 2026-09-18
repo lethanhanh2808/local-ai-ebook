@@ -72,7 +72,7 @@ function StatusPill({ bookId, current, onChange }: { bookId: string; current: st
   return (
     <div className="relative">
       <button onClick={() => setOpen((v) => !v)} disabled={saving}
-        className={cn('flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors',
+        className={cn('flex items-center gap-1 border border-current px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.18em] transition-colors',
           STATUS_COLOR[current] ?? STATUS_COLOR.unread)}>
         {saving ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : STATUS_LABELS[current] ?? current}
         <ChevronDown className="h-2.5 w-2.5 opacity-60" />
@@ -80,7 +80,7 @@ function StatusPill({ bookId, current, onChange }: { bookId: string; current: st
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 top-full z-20 mt-1 min-w-[110px] rounded-lg border border-border bg-popover text-popover-foreground shadow-lg overflow-hidden">
+          <div className="absolute left-0 top-full z-20 mt-1 min-w-[110px] border border-border bg-popover text-popover-foreground shadow-acetate overflow-hidden">
             {Object.keys(STATUS_LABELS).map((s) => (
               <button key={s} onClick={() => set(s)}
                 className={cn('w-full px-3 py-1.5 text-left text-xs hover:bg-muted transition-colors',
@@ -190,7 +190,7 @@ export default function ShelfDetailPage(props: { params: Promise<{ id: string }>
   );
 
   if (!shelf) return (
-    <div className="container mx-auto max-w-6xl px-4 py-16 text-center">
+    <div className="mx-auto w-full max-w-content px-4 py-16 text-center">
       <BookMarked className="mx-auto h-12 w-12 text-muted-foreground/40 mb-4" />
       <p className="text-muted-foreground">Shelf not found.</p>
       <Link href="/shelves" className="mt-4 inline-flex items-center gap-1 text-sm text-primary hover:underline">
@@ -200,7 +200,7 @@ export default function ShelfDetailPage(props: { params: Promise<{ id: string }>
   );
 
   return (
-    <div className="container mx-auto max-w-6xl px-4 py-8 space-y-6">
+    <div className="mx-auto w-full max-w-canvas px-4 sm:px-6 lg:px-8 py-8 sm:py-10 space-y-6">
       {/* Header */}
       <div>
         <PageHeader
@@ -241,13 +241,13 @@ export default function ShelfDetailPage(props: { params: Promise<{ id: string }>
           <div className="relative flex-1 min-w-[160px]">
             <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <input type="search" placeholder="Search in shelf…" value={search} onChange={(e) => setSearch(e.target.value)}
-              className="h-8 w-full rounded-lg border bg-background pl-8 pr-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+              className="h-8 w-full border bg-background pl-8 pr-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring" />
           </div>
           <div className="flex gap-1 flex-wrap">
             {(['all', 'reading', 'unread', 'read', 'archived'] as FilterStatus[]).map((s) => (
               <button key={s} onClick={() => setFilterStatus(s)}
-                className={cn('rounded-full border px-2.5 py-1 text-[10px] font-medium transition-colors',
-                  filterStatus === s ? 'bg-primary text-primary-foreground border-primary' : 'hover:bg-muted border-transparent')}>
+                className={cn('border border-current px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.18em] transition-colors',
+                  filterStatus === s ? 'bg-primary text-primary-foreground border-primary' : 'hover:bg-muted border-border')}>
                 {s === 'all' ? `All (${shelf.books.length})` : `${STATUS_LABELS[s]} (${statusCounts[s] ?? 0})`}
               </button>
             ))}
@@ -260,10 +260,10 @@ export default function ShelfDetailPage(props: { params: Promise<{ id: string }>
             <option value="status">Sort: Status</option>
             <option value="progress">Sort: Progress</option>
           </select>
-          <div className="flex rounded-lg border overflow-hidden">
+          <div className="flex border overflow-hidden">
             {([['list', List], ['grid', LayoutGrid]] as [ViewMode, React.FC<{ className?: string }>][]).map(([m, Icon]) => (
               <button key={m} type="button" onClick={() => setViewMode(m)} aria-label={`${m} view`} aria-pressed={viewMode === m}
-                className={cn('flex h-8 w-8 items-center justify-center transition-colors',
+                className={cn('flex h-8 w-8 items-center justify-center transition-colors border-r border-border last:border-r-0',
                   viewMode === m ? 'bg-primary text-primary-foreground' : 'hover:bg-muted')}>
                 <Icon className="h-3.5 w-3.5" />
               </button>
@@ -273,7 +273,7 @@ export default function ShelfDetailPage(props: { params: Promise<{ id: string }>
       )}
       {/* Book list */}
       {shelf.books.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed py-24 text-muted-foreground">
+        <div className="flex flex-col items-center justify-center gap-3 border-2 border-dashed py-24 text-muted-foreground">
           <BookOpen className="h-12 w-12 opacity-30" />
           <p className="text-sm">No books on this shelf yet.</p>
           <Button onClick={openAddModal} variant="outline" size="sm" className="gap-1.5">
@@ -285,7 +285,7 @@ export default function ShelfDetailPage(props: { params: Promise<{ id: string }>
       ) : viewMode === 'grid' ? (
         <div className="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
           {displayBooks.map((book) => (
-            <div key={book.id} className="group relative flex flex-col rounded-xl overflow-hidden border bg-card hover:shadow-md transition-all">
+            <div key={book.id} className="group relative flex flex-col overflow-hidden border bg-card transition-colors hover:border-primary/40">
               <div className="relative aspect-[2/3] bg-muted overflow-hidden">
                 {book.coverPath ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -304,7 +304,7 @@ export default function ShelfDetailPage(props: { params: Promise<{ id: string }>
                 )}
                 <div className="absolute inset-0 bg-modal-overlay/70 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5">
                   <Link href={`/library/${book.id}/read`}
-                    className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[11px] font-medium text-primary-foreground hover:bg-primary/90">
+                    className="flex items-center gap-1 bg-primary px-2.5 py-1.5 text-[11px] font-medium text-primary-foreground hover:bg-primary/90">
                     <BookOpen className="h-3 w-3" /> Read
                   </Link>
                   <Link href={`/library/${book.id}`}
@@ -352,8 +352,8 @@ export default function ShelfDetailPage(props: { params: Promise<{ id: string }>
                   <StatusPill bookId={book.id} current={book.readStatus} onChange={(s) => handleStatusChange(book.id, s)} />
                   {book.readProgress > 0 && (
                     <div className="flex items-center gap-1.5 min-w-0">
-                      <div className="h-1 w-20 rounded-full bg-muted overflow-hidden">
-                        <div className="h-full rounded-full bg-primary/60" style={{ width: `${book.readProgress}%` }} />
+                      <div className="h-1 w-20 bg-muted overflow-hidden">
+                        <div className="h-full bg-primary/60" style={{ width: `${book.readProgress}%` }} />
                       </div>
                       <span className="text-[10px] text-muted-foreground">{book.readProgress}%</span>
                     </div>
@@ -363,11 +363,11 @@ export default function ShelfDetailPage(props: { params: Promise<{ id: string }>
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 <Link href={`/library/${book.id}/read`}
-                  className="flex items-center gap-1 rounded-md bg-primary px-2 py-1.5 text-[11px] font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
+                  className="flex items-center gap-1 bg-primary px-2 py-1.5 text-[11px] font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
                   <BookOpen className="h-3 w-3" /> Read
                 </Link>
                 <Link href={`/library/${book.id}`}
-                  className="flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1.5 text-[11px] font-medium text-foreground hover:bg-muted transition-colors"
+                  className="flex items-center gap-1 border border-border bg-background px-2 py-1.5 text-[11px] font-medium text-foreground hover:bg-muted transition-colors"
                   title="Thông tin sách & AI Illustrations">
                   <Info className="h-3 w-3" /> Info
                 </Link>
@@ -395,8 +395,8 @@ export default function ShelfDetailPage(props: { params: Promise<{ id: string }>
                   {allBooks.length === 0 ? 'Loading…' : 'No books to add.'}
                 </p>
               ) : filteredLib.map((book) => (
-                <div key={book.id} className="flex items-center gap-3 rounded-lg p-2 hover:bg-muted/50">
-                  <div className="h-10 w-7 shrink-0 overflow-hidden rounded bg-muted">
+                <div key={book.id} className="flex items-center gap-3 p-2 hover:bg-muted/50">
+                  <div className="h-10 w-7 shrink-0 overflow-hidden bg-muted">
                     {book.coverPath && (
                       // eslint-disable-next-line @next/next/no-img-element
                       (<img src={`/api/library/${book.id}/cover`} alt={book.title} className="h-full w-full object-cover" />)

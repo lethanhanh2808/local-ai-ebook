@@ -1,20 +1,36 @@
 // src/components/ui/button.tsx
+// Button primitive for the East-Asian paper visual world (DESIGN.md).
+//
+// The world has one accent — vermilion (朱砂 cinnabar). Buttons that take
+// an action use vermilion ground with cream ink; outline and ghost
+// variants stay in sumi ink so the surface hierarchy is clear. No pillowy
+// corners, no shadows, no gradients. Default height 32 px to keep the
+// reference-manual tightness.
 import { cn } from '@/lib/utils';
 import { ButtonHTMLAttributes, forwardRef } from 'react';
 
 const variants = {
-  default: 'bg-primary text-primary-foreground hover:bg-primary/90 shadow',
-  outline: 'border border-input bg-background hover:bg-accent hover:text-accent-foreground',
-  ghost: 'hover:bg-accent hover:text-accent-foreground',
-  destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90',
-  secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
-  link: 'text-primary underline-offset-4 hover:underline',
+  // Primary = brush: vermilion ground, cream text, 1-px sumi-edge border.
+  default:
+    'bg-primary text-primary-foreground border border-primary hover:bg-primary/90',
+  outline:
+    'border border-border bg-transparent text-foreground hover:bg-secondary hover:border-foreground/30',
+  ghost:
+    'bg-transparent text-foreground hover:bg-secondary border border-transparent',
+  destructive:
+    'bg-destructive text-destructive-foreground border border-destructive hover:bg-destructive/90',
+  secondary:
+    'bg-secondary text-secondary-foreground border border-border hover:bg-secondary/80',
+  link:
+    'text-foreground underline-offset-4 hover:underline decoration-primary decoration-2 underline-offset-[3px]',
 };
 const sizes = {
-  default: 'h-9 px-4 py-2 text-sm',
-  sm: 'h-8 px-3 text-xs rounded-md',
-  lg: 'h-10 px-6 text-base',
-  icon: 'h-9 w-9',
+  // Slightly tighter than the SaaS default so the chrome stays in scale
+  // with the paper-ground cards.
+  default: 'h-8 px-3 text-[12px] font-semibold tracking-[0.04em]',
+  sm: 'h-7 px-2.5 text-[11px] font-semibold tracking-[0.04em]',
+  lg: 'h-10 px-5 text-sm font-semibold tracking-[0.04em]',
+  icon: 'h-8 w-8',
 };
 
 export type ButtonVariant = keyof typeof variants;
@@ -38,7 +54,10 @@ export function buttonClasses(opts: {
 } = {}): string {
   const { variant = 'default', size = 'default', className } = opts;
   return cn(
-    'inline-flex items-center justify-center whitespace-nowrap rounded-md font-medium',
+    // East-Asian paper: tight 2-px corners, no shadows (paper has
+    // hairlines, not Material elevation), uppercase tracking on every
+    // size variant except icon.
+    'inline-flex items-center justify-center whitespace-nowrap',
     'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
     'disabled:pointer-events-none disabled:opacity-50',
     variants[variant],

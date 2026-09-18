@@ -3,89 +3,185 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ─────────────────────────────────────────────────────────────────────────
+   East-Asian classical paper visual world (DESIGN.md, branch
+   design/system-reference-manual — rebased from chrome-yellow reference-
+   manual to aged xuan paper + sumi ink + vermilion seal).
+
+   Three colours carry the world:
+     • aged xuan paper (warm cream, ochre cast) — the canvas, the page
+     • sumi ink in three grades (dense / medium / dilute) — all text
+     • vermilion seal paste 朱砂 cinnabar — the one saturated accent
+
+   No chrome-yellow, no chrome-grey, no slate-blue. Paper is always warm.
+   ───────────────────────────────────────────────────────────────────────── */
+
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 221.2 83.2% 53.3%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 221.2 83.2% 53.3%;
-    --radius: 0.5rem;
-    /* Modal backdrop dim (formerly in orphaned theme.css). Exposed as
-       the `modal-overlay` Tailwind color in tailwind.config.js so
-       `bg-modal-overlay` / `bg-modal-overlay/50` actually paints
-       against the reader instead of being fully transparent. The
-       `<alpha-value>` slot is supported by Tailwind's color extension
-       so per-call opacity tweaks (e.g. `bg-modal-overlay/30`) work. */
+    /* ── Aged xuan paper palette (DESIGN.md) ─────────────────────────────
+       HSL values are space-separated so Tailwind's `<alpha-value>` slot
+       works on every utility (`bg-background/95`, `text-foreground/70`).
+       Hex notes are for reference; the HSL numbers are what's shipped. */
+    --background: 38 38% 92%;       /* aged xuan paper #F2EAD6 */
+    --foreground: 20 14% 9%;        /* sumi dense #1A1410 */
+    --card: 42 50% 95%;             /* fresh xuan leaf #F8F2E0 — the folded inner */
+    --card-foreground: 20 14% 9%;
+    --popover: 42 50% 95%;
+    --popover-foreground: 20 14% 9%;
+    --primary: 7 70% 41%;           /* 朱砂 cinnabar vermilion #B5341E — the seal */
+    --primary-foreground: 42 50% 97%; /* cream text on vermilion seal */
+    --secondary: 38 28% 88%;        /* tab inactive ground #ECE2CB */
+    --secondary-foreground: 20 14% 9%;
+    --muted: 38 26% 86%;            /* hairline wash #E5DBC2 */
+    --muted-foreground: 26 14% 32%; /* ink-soft #564A38 */
+    --accent: 7 70% 41%;            /* vermilion — same as primary; the world has one accent */
+    --accent-foreground: 42 50% 97%;
+    --destructive: 7 70% 32%;       /* deeper vermilion #8A2614 — honest stops */
+    --destructive-foreground: 42 50% 97%;
+    --border: 32 18% 70%;           /* faded ink hairline #C7B89A */
+    --input: 32 18% 70%;
+    --ring: 20 14% 9%;              /* sumi-dense focus ring (warm black, not chrome-yellow) */
+    --radius: 0.25rem;              /* tight — paper edges are crisp, not pillowy */
+    /* Modal backdrop dim. */
     --modal-overlay: 0 0% 0%;
 
-    /* Reader paper / ink surfaces (UI Polish 2026-07-06, then re-homed
-       here 2026-07-08). Originally lived in src/app/theme.css, but that
-       file is not imported by the app shell — so every `bg-[hsl(var(--reader-paper))]`
-       call in EbookReader/panels resolved to no fill (transparent modal!).
-       Mirrors the read-aloud rendering surface so light/dark/sepia themes
-       get a non-transparent panel background instead of a clear window onto
-       the reader behind them. */
-    --reader-paper:        36 33% 97%;       /* warm off-white #F8F5F0 */
-    --reader-ink:          24 12% 14%;       /* deep warm gray #2C2620 */
-    --reader-ink-soft:     24 8% 38%;        /* muted ink for secondary text */
-    --reader-divider:      36 16% 86%;       /* soft divider */
+    /* Reader paper / ink — keep the reader's own warm palette; the app
+       shell surrounds it but does not override its interior. */
+    --reader-paper:        38 38% 92%;       /* matches --background for continuity */
+    --reader-ink:          20 12% 14%;
+    --reader-ink-soft:     24 8% 38%;
+    --reader-divider:      32 18% 70%;
+
+    /* East-Asian paper structural tokens (not used as Tailwind colors but
+       referenced by component utilities below). */
+    --paper-deep: 36 25% 86%;        /* canvas around the content column */
+    --rim-line: 26 14% 32% / 0.22;   /* 乌丝栏 ruling under prose */
+    --fiber: 32 18% 70% / 0.06;      /* kozo fibre grain overlay */
   }
 
   .dark {
-    --background: 222.2 47% 5%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 47% 7%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222.2 47% 7%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 217.2 91.2% 59.8%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217 16% 14%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217 16% 14%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217 16% 14%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    /* Container/outline tokens — kept low-saturation (16% vs. the previous
-       32.6%) and on a tight lightness scale so cards/dividers don't read as
-       bright blue outlines against the deep navy background. The previous
-       palette's 32.6% saturation produced a sharp colored edge that
-       visually outweighed the card content. Bumped from 18% → 22% so card
-       outlines read more clearly against the 7% card background. */
-    --border: 217 16% 22%;
-    --input: 217 16% 22%;
-    --ring: 224.3 76.3% 48%;
+    /* ── Aged xuan paper palette — dark variant ─────────────────────────
+       Paper is a deep warm umber (not pure black, not slate). The aged-
+       paper ground keeps the warm cast of the world; ink is a near-white
+       sumi-dilute. Vermilion brightens slightly so the seal stamps still
+       read on the dark ground. */
+    --background: 26 18% 11%;       /* #1F1810 aged paper dark */
+    --foreground: 38 28% 88%;       /* sumi dilute on dark #E1D8C2 */
+    --card: 28 20% 15%;             /* fresh xuan leaf dark #29200F */
+    --card-foreground: 38 28% 88%;
+    --popover: 28 20% 15%;
+    --popover-foreground: 38 28% 88%;
+    --primary: 7 70% 55%;           /* vermilion lit on dark #D8583C */
+    --primary-foreground: 26 18% 11%;
+    --secondary: 28 18% 18%;        /* tab inactive dark #322818 */
+    --secondary-foreground: 38 28% 88%;
+    --muted: 28 18% 18%;
+    --muted-foreground: 36 18% 65%; /* ink-soft dark #A89C82 */
+    --accent: 7 70% 55%;
+    --accent-foreground: 26 18% 11%;
+    --destructive: 7 70% 45%;       /* vermilion seam dark #C44530 */
+    --destructive-foreground: 38 28% 88%;
+    --border: 32 14% 30%;           /* faded ink dark hairline */
+    --input: 32 14% 30%;
+    --ring: 38 28% 88%;             /* sumi-dilute focus ring on dark paper */
     --modal-overlay: 0 0% 0%;
 
-    /* Reader paper / ink — dark variant. Paper is a deep slate (not pure
-       black) to avoid OLED smearing; ink is near-white but slightly
-       warm for AA contrast on paper. */
-    --reader-paper:        222 32% 9%;       /* #12122a-ish deep navy */
-    --reader-ink:          210 25% 92%;      /* near-white for body */
-    --reader-ink-soft:     215 16% 70%;      /* muted ink for secondary */
-    --reader-divider:      217 16% 22%;      /* slate divider */
+    --reader-paper:        26 18% 11%;
+    --reader-ink:          210 25% 92%;
+    --reader-ink-soft:     215 16% 70%;
+    --reader-divider:      32 14% 30%;
+
+    --paper-deep: 26 18% 8%;
+    --rim-line: 38 28% 88% / 0.22;
+    --fiber: 38 28% 88% / 0.04;
   }
 }
 
 @layer base {
   body { @apply bg-background text-foreground; }
+  /* Page chrome uses Be Vietnam Pro (designed for Vietnamese typography)
+     as the primary Latin/Vietnamese face, with Noto Serif SC behind it
+     to carry any CJK glyph that sneaks into a Vietnamese title. Be
+     Vietnam Pro was selected because Noto Serif SC maps Latin glyphs
+     through the CJK-shaping pipeline, which produces visible diacritic-
+     positioning quirks on ộ, ề, ứ (the most common Vietnamese tones).
+     Literata TTF is reserved for the EPUB reader iframe.
+     Load Be Vietnam Pro + Noto Serif SC + Noto Sans SC from Google
+     Fonts so Latin, Vietnamese, and CJK all share the same metric. */
+  body {
+    font-family: 'Be Vietnam Pro', 'Noto Serif SC', 'Songti SC', 'Cambria', 'Georgia', serif;
+    font-feature-settings: 'kern' 1, 'liga' 1;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* System sans stack kept available as `.font-sans` for inline tags and
+     metadata where the brushed serif would be too loud. */
+  .font-sans { font-family: 'Be Vietnam Pro', 'Noto Sans SC', 'Inter', system-ui, sans-serif; }
+  .font-mono { font-family: 'JetBrains Mono', 'SF Mono', 'Menlo', monospace; }
+
+  /* The whole document is a sheet of paper. Use SVG fractal noise
+     (`feTurbulence`) as a fixed background so the grain is organic, not
+     a tiled polka-dot grid. The canvas appears as one piece, not
+     assembled stripes, and the noise itself is not a grid signature —
+     `background-repeat` tiles the bitmap but the texture inside is
+     irregular. */
+  html {
+    background-color: hsl(var(--background));
+    background-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.07 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-repeat: repeat;
+    background-attachment: fixed;
+  }
+  .dark html, html { background-color: hsl(var(--paper-deep)); }
+}
+
+/* ── East-Asian paper component utilities ────────────────────────────── */
+
+@layer utilities {
+  /* Vertical reading column (left rail). Mixed orientation keeps
+     Latin characters upright while CJK glyphs rotate. */
+  .writing-vertical {
+    writing-mode: vertical-rl;
+    text-orientation: mixed;
+  }
+
+  /* Paper-leaf shadow — a single short hairline below a content card,
+     reading as a folded leaf hinged above the divider. Replaces the
+     old acetate shadow; the name stayed the same to keep import sites
+     untouched. */
+  .shadow-acetate {
+    box-shadow:
+      0 1px 0 hsl(var(--border)),
+      0 2px 0 hsl(var(--foreground) / 0.05);
+  }
+
+  /* Ruled paper — a 1-px ink rule under the prose column. Use on the
+     left edge of the content card or as a horizontal hairline between
+     verses. */
+  .ruled-paper {
+    border-left: 1px solid hsl(var(--rim-line));
+  }
+
+  /* Seal stamp — vermilion ground with a single hairline inset shadow
+     at the bottom edge (the carved character relief). */
+  .seal-stamp {
+    background-color: hsl(var(--primary));
+    color: hsl(var(--primary-foreground));
+    box-shadow: inset 0 -1px 0 0 hsl(7 70% 18% / 0.5);
+  }
+
+  /* Tabular numerals for voice plans, progress, and stats columns. */
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  /* Single-direction seal fade-in — used by <SealStamp> on mount.
+     Simulates ink pressing into paper. Reduced-motion honour is in the
+     global @media block at the bottom of this file. */
+  @keyframes seal-press {
+    0%   { opacity: 0; transform: scale(0.96); filter: blur(2px); }
+    100% { opacity: 1; transform: scale(1);    filter: blur(0); }
+  }
+  .seal-press {
+    animation: seal-press 220ms ease-out both;
+  }
 }
 
 /* Reliable keyboard focus for bespoke feature controls that do not use the
@@ -105,10 +201,22 @@
   border-color: hsl(var(--border));
 }
 
-/* Smooth scrollbar */
+/* Smooth scrollbar — paper-toned */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { @apply bg-muted; }
-::-webkit-scrollbar-thumb { @apply bg-muted-foreground/40 rounded-full; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.35);
+  border-radius: 0;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.55);
+}
+
+/* Selection — sumi ink rather than the browser default. */
+::selection {
+  background: hsl(var(--primary) / 0.18);
+  color: hsl(var(--foreground));
+}
 
 /* Reduced-motion honour (UI Polish §5.7).
    ThemeProvider sets `data-motion="reduced"` on <html> when the user
@@ -130,7 +238,8 @@
    is enough; do not let them keep ticking under reduced motion. */
 [data-motion="reduced"] .animate-spin,
 [data-motion="reduced"] .animate-pulse,
-[data-motion="reduced"] .animate-ping {
+[data-motion="reduced"] .animate-ping,
+[data-motion="reduced"] .seal-press {
   animation: none !important;
 }
 

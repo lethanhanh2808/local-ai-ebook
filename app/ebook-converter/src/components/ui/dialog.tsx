@@ -96,6 +96,10 @@ export interface DialogProps {
   closeOnBackdrop?: boolean;
   /** Width class for the panel. Default `max-w-lg`. */
   widthClass?: string;
+  /** Corner radius override for the panel. Default `rounded-md`. */
+  rounded?: string;
+  /** Shadow override for the panel. Default `shadow-acetate`. */
+  shadow?: string;
   className?: string;
   children?: ReactNode;
 }
@@ -107,6 +111,8 @@ export function Dialog({
   description,
   closeOnBackdrop = true,
   widthClass = 'max-w-lg',
+  rounded = 'rounded-md',
+  shadow = 'shadow-acetate',
   className,
   children,
 }: DialogProps) {
@@ -221,10 +227,12 @@ export function Dialog({
           aria-describedby={description ? descriptionId : undefined}
           tabIndex={-1}
           className={cn(
-            'relative z-10 w-full rounded-xl border border-border bg-card text-card-foreground shadow-2xl',
+            'relative z-10 w-full border border-border bg-card text-card-foreground',
             'outline-none',
             'animate-in fade-in-0 zoom-in-95',
             'max-h-[90vh] flex flex-col',
+            rounded,
+            shadow,
             widthClass,
             className,
           )}

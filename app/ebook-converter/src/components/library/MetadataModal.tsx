@@ -85,7 +85,7 @@ export function MetadataModal({ book, onClose, onSaved }: MetadataModalProps) {
     }
   };
 
-  const inputCls = 'w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring transition-shadow';
+  const inputCls = 'w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background';
   const labelCls = 'block text-xs font-medium text-muted-foreground mb-1';
 
   return (
@@ -234,7 +234,7 @@ export function MetadataModal({ book, onClose, onSaved }: MetadataModalProps) {
           </div>
 
           {error && (
-            <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>
+            <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>
           )}
         </DialogBody>
 
