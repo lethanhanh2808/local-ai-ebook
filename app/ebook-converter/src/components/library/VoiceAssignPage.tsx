@@ -1092,7 +1092,7 @@ export function VoiceAssignPage({ bookId, bookTitle }: { bookId: string; bookTit
 
       {/* (c) Batch-assign bottom bar — visible in selection mode */}
       {selectionMode && (
-        <div className="sticky bottom-0 z-10 flex items-center gap-3 border-t bg-background px-4 py-3 shadow-[0_-2px_8px_rgba(0,0,0,0.06)]">
+        <div className="sticky bottom-0 z-10 flex items-center gap-3 border-t bg-background px-4 py-3 shadow-acetate">
           <span className="text-sm font-medium">Đã chọn <b>{selected.size}</b> câu</span>
           <div className="ml-auto flex items-center gap-2">
             <Button
