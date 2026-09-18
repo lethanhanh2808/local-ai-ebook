@@ -30,7 +30,7 @@ export default async function BookDetailPage(props: { params: Promise<{ id: stri
   if (!book) notFound();
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 px-4 py-8">
+    <div className="mx-auto w-full max-w-canvas px-4 sm:px-6 lg:px-8 py-8 sm:py-10 space-y-6">
       <PageHeader
         breadcrumbs={[
           { label: 'Library', href: '/library' },

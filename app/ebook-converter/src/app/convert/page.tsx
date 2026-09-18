@@ -157,7 +157,7 @@ export default function ConvertPage() {
   };
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 space-y-6">
+    <div className="mx-auto w-full max-w-canvas px-4 sm:px-6 lg:px-8 py-8 sm:py-10 space-y-6">
       {/* ── Page header ─────────────────────────────────────────────────── */}
       <PageHeader
         eyebrow="Convert · Repair · Optimize"

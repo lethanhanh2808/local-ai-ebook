@@ -481,16 +481,16 @@ export default function SettingsPage() {
 
   if (loading && !settings) {
     return (
-      <div className="mx-auto max-w-7xl px-4 py-8">
+      <div className="mx-auto w-full max-w-canvas px-4 sm:px-6 lg:px-8 py-8 sm:py-10">
         <PageHeader eyebrow="Cài đặt" title="Đang tải…" icon={<SettingsIcon className="h-4 w-4" />} />
-        <div className="space-y-2">{Array.from({length: 4}).map((_, i) => <div key={i} className="h-20 animate-pulse rounded-xl bg-muted" />)}</div>
+        <div className="space-y-2">{Array.from({length: 4}).map((_, i) => <div key={i} className="h-20 bg-secondary/60" />)}</div>
       </div>
     );
   }
 
   if (loadError && !settings) {
     return (
-      <div className="mx-auto max-w-7xl px-4 py-8">
+      <div className="mx-auto w-full max-w-canvas px-4 sm:px-6 lg:px-8 py-8 sm:py-10">
         <PageHeader eyebrow="Cài đặt" title="Cài đặt" icon={<SettingsIcon className="h-4 w-4" />} />
         <ErrorState title="Không thể tải cài đặt" message={loadError} details={loadError} onRetry={() => void fetchSettings()} retrying={loading} />
       </div>
@@ -503,7 +503,7 @@ export default function SettingsPage() {
   const ttsProvider = TTS_PROVIDERS.find((p) => p.id === settings.ttsProvider) ?? TTS_PROVIDERS[0];
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 space-y-6">
+    <div className="mx-auto w-full max-w-canvas px-4 sm:px-6 lg:px-8 py-8 sm:py-10 space-y-6">
       <PageHeader
         breadcrumbs={[{ label: 'Cài đặt' }]}
         title="Cài đặt"

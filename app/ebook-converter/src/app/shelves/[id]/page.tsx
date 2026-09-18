@@ -190,7 +190,7 @@ export default function ShelfDetailPage(props: { params: Promise<{ id: string }>
   );
 
   if (!shelf) return (
-    <div className="container mx-auto max-w-6xl px-4 py-16 text-center">
+    <div className="mx-auto w-full max-w-content px-4 py-16 text-center">
       <BookMarked className="mx-auto h-12 w-12 text-muted-foreground/40 mb-4" />
       <p className="text-muted-foreground">Shelf not found.</p>
       <Link href="/shelves" className="mt-4 inline-flex items-center gap-1 text-sm text-primary hover:underline">
@@ -200,7 +200,7 @@ export default function ShelfDetailPage(props: { params: Promise<{ id: string }>
   );
 
   return (
-    <div className="container mx-auto max-w-6xl px-4 py-8 space-y-6">
+    <div className="mx-auto w-full max-w-canvas px-4 sm:px-6 lg:px-8 py-8 sm:py-10 space-y-6">
       {/* Header */}
       <div>
         <PageHeader

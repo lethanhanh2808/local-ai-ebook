@@ -7,7 +7,7 @@ import { PageHeader } from '@/components/layout/PageHeader';
 
 export default function LibraryPage() {
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8">
+    <div className="mx-auto w-full max-w-canvas px-4 sm:px-6 lg:px-8 py-8 sm:py-10">
       <PageHeader
         eyebrow="Thư viện"
         title="Tất cả sách"

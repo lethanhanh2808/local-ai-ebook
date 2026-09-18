@@ -168,12 +168,10 @@ export default function Dashboard() {
 
   return (
     // Paper canvas extends full viewport width. The content column
-    // inside each section is bounded by `max-w-content` (960 px) so a
-    // single page reads like a folded leaf on the larger canvas. On
-    // 1920×1080 the outer paper-deep tone fills the gutters to either
-    // side of the centre column — that is the "folio on a desk" raise
-    // from DESIGN.md.
-    <div className="bg-paper-deep">
+    // inside each section is bounded by `max-w-canvas` (1800 px). On
+    // 1920×1080 the outer paper-deep tone (provided by the layout
+    // `<main>`) fills the gutters to either side of the centre column
+    // — that is the "folio on a desk" raise from DESIGN.md.
     <div className="mx-auto w-full max-w-canvas px-4 sm:px-6 lg:px-8 py-6 sm:py-10 space-y-8">
       {/* ── 1. Welcome bar (compact, single row) ─────────────────────────── */}
       <section className="bg-card border border-border shadow-acetate ruled-paper px-5 sm:px-7 py-6">
@@ -426,7 +424,6 @@ export default function Dashboard() {
           <span>Settings</span>
         </Link>
       </footer>
-    </div>
     </div>
   );
 }

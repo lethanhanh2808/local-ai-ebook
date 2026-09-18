@@ -43,7 +43,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
         <link rel="stylesheet" href={PAPER_FONTS_HREF} />
       </head>
-      <body className="min-h-screen bg-background antialiased">
+      <body className="min-h-screen bg-paper-deep antialiased">
         <ThemeProvider>
           <ToastProvider>
             <a
@@ -54,7 +54,22 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </a>
             <AppAuthGate>
               <AppNav />
-              <main id="main-content" tabIndex={-1}>{children}</main>
+              {/* Full-width, full-height canvas for every page. The
+                  `bg-paper-deep` extends to the bottom of the viewport
+                  even when content is short, so the folio-on-desk raise
+                  from DESIGN.md holds on every route. The
+                  `min-h-[calc(100vh-3.5rem)]` subtracts the sticky nav
+                  (h-14 = 3.5rem) so the canvas + content stack to the
+                  viewport edge without horizontal scroll. Individual
+                  pages still bound their own content column with
+                  `max-w-canvas` (1800 px) or narrower. */}
+              <main
+                id="main-content"
+                tabIndex={-1}
+                className="min-h-[calc(100vh-3.5rem)] bg-paper-deep"
+              >
+                {children}
+              </main>
             </AppAuthGate>
             <Toaster />
           </ToastProvider>

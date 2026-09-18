@@ -114,16 +114,17 @@
   .font-sans { font-family: 'Noto Sans SC', 'Inter', system-ui, sans-serif; }
   .font-mono { font-family: 'JetBrains Mono', 'SF Mono', 'Menlo', monospace; }
 
-  /* The whole document is a sheet of paper. Add the kozo fibre texture as
-     a fixed background image so it does not scroll with content; the
-     canvas appears as one piece, not assembled stripes. */
+  /* The whole document is a sheet of paper. Use SVG fractal noise
+     (`feTurbulence`) as a fixed background so the grain is organic, not
+     a tiled polka-dot grid. The canvas appears as one piece, not
+     assembled stripes, and the noise itself is not a grid signature —
+     `background-repeat` tiles the bitmap but the texture inside is
+     irregular. */
   html {
     background-color: hsl(var(--background));
-    background-image:
-      radial-gradient(hsl(var(--fiber)) 1px, transparent 1px),
-      radial-gradient(hsl(var(--fiber)) 1px, transparent 1px);
-    background-size: 3px 3px, 7px 7px;
-    background-position: 0 0, 1px 2px;
+    background-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.07 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-repeat: repeat;
+    background-attachment: fixed;
   }
   .dark html, html { background-color: hsl(var(--paper-deep)); }
 }
@@ -160,11 +161,14 @@
     border-left: 1px solid hsl(var(--rim-line));
   }
 
-  /* Sumiko grain — a soft kozo fibre wash applied to a content card. */
+  /* Sumiko grain — a soft kozo fibre wash applied to a content card.
+     Same fractal-noise SVG as the body so the grain stays organic; this
+     utility is for cards that need their own noise layer over a
+     different ground colour than the body. */
   .bg-paper-grain {
     background-color: hsl(var(--card));
-    background-image: radial-gradient(hsl(var(--fiber)) 1px, transparent 1px);
-    background-size: 4px 4px;
+    background-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.06 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-repeat: repeat;
   }
 
   /* Seal stamp — vermilion ground with a single hairline inset shadow
