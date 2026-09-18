@@ -119,20 +119,21 @@ export function AppNav() {
   if (pathname === '/login') return null;
 
   return (
-    <header className="sticky top-0 z-40 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+    <header className="sticky top-0 z-40 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
       <div className="mx-auto flex h-14 max-w-7xl items-center gap-2 px-4">
-        {/* Brand */}
-        <Link href="/" aria-label="Ebook Manager — trang chủ" className="flex shrink-0 items-center gap-2.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-primary/70 text-primary-foreground shadow-sm">
+        {/* Brand — chrome-yellow tab marker replaces the gradient pill tile. */}
+        <Link href="/" aria-label="Ebook Manager — trang chủ" className="flex shrink-0 items-center gap-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <div className="flex h-7 w-7 items-center justify-center border-l-[3px] border-l-primary pl-2 text-foreground">
             <BookOpen className="h-4 w-4" />
           </div>
           <div className="hidden sm:flex flex-col leading-tight">
-            <span className="text-sm font-semibold tracking-tight">Ebook Manager</span>
+            <span className="text-[13px] font-semibold tracking-[-0.01em]">Ebook Manager</span>
           </div>
         </Link>
 
-        {/* Desktop nav (≥ md) */}
-        <nav className="hidden md:flex items-center gap-1 ml-2" aria-label="Primary">
+        {/* Desktop nav (≥ md) — active item gets a chrome-yellow bottom rule
+            and ink label; inactive items are muted ink with hover fill. */}
+        <nav className="hidden md:flex items-stretch gap-0 ml-4" aria-label="Primary">
           {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
             const active = isActive(href);
             return (
@@ -141,14 +142,14 @@ export function AppNav() {
                 href={href}
                 aria-current={active ? 'page' : undefined}
                 className={cn(
-                  'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors',
+                  'flex items-center gap-1.5 px-3 h-14 text-[12px] font-medium uppercase tracking-[0.06em] transition-colors border-b-2',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                   active
-                    ? 'bg-primary/10 text-primary shadow-sm'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                    ? 'border-b-primary text-foreground'
+                    : 'border-b-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50',
                 )}
               >
-                <Icon className="h-4 w-4" />
+                <Icon className="h-3.5 w-3.5" />
                 <span>{label}</span>
               </Link>
             );
@@ -162,7 +163,7 @@ export function AppNav() {
             type="button"
             aria-label="AI Voice"
             title="AI Voice · OMLX"
-            className="hidden items-center gap-1.5 rounded-md border border-border/60 bg-background/60 px-2 py-1 text-[11px] font-medium text-foreground/90 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring lg:inline-flex"
+            className="hidden items-center gap-1.5 border border-border bg-card px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring lg:inline-flex"
           >
             <Mic className="h-3.5 w-3.5 text-primary" />
             <span>AI Voice</span>
@@ -175,7 +176,7 @@ export function AppNav() {
                   <button
                     type="button"
                     aria-label="Account menu"
-                    className="inline-flex items-center gap-1.5 rounded-md border border-border/60 bg-background/60 px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="inline-flex items-center gap-1.5 border border-border bg-card px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     <UserCircle2 className="h-3.5 w-3.5 text-primary" />
                     <span className="uppercase tracking-[0.14em]">{sessionUser.role || 'ADMIN'}</span>
@@ -194,7 +195,7 @@ export function AppNav() {
               </DropdownMenu>
             </div>
           ) : (
-            <Link href="/login" className="hidden sm:inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-muted">
+            <Link href="/login" className="hidden sm:inline-flex items-center gap-1.5 border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-muted">
               <ShieldCheck className="h-3.5 w-3.5" />
               Sign in
             </Link>
@@ -220,20 +221,20 @@ export function AppNav() {
             aria-expanded={mobileOpen}
             aria-controls="mobile-nav"
             onClick={() => setMobileOpen((o) => !o)}
-            className="md:hidden rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="md:hidden p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
           </button>
         </div>
       </div>
 
-      {/* Mobile menu (< md) — slide-down panel */}
+      {/* Mobile menu (< md) — slide-down panel, active = chrome-yellow left rule. */}
       {mobileOpen && (
         <div
           id="mobile-nav"
           className="md:hidden border-t border-border bg-background animate-in slide-in-from-top-2 fade-in-0"
         >
-          <nav className="mx-auto max-w-7xl px-4 py-3 flex flex-col gap-1" aria-label="Mobile">
+          <nav className="mx-auto max-w-7xl px-4 py-3 flex flex-col gap-0.5" aria-label="Mobile">
             {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
               const active = isActive(href);
               return (
@@ -242,11 +243,11 @@ export function AppNav() {
                   href={href}
                   aria-current={active ? 'page' : undefined}
                   className={cn(
-                    'flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium transition-colors',
+                    'flex items-center gap-3 px-3 py-2.5 text-sm font-medium transition-colors border-l-2',
                     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                     active
-                      ? 'bg-primary/10 text-primary'
-                      : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                      ? 'border-l-primary bg-card text-foreground'
+                      : 'border-l-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground',
                   )}
                 >
                   <Icon className="h-4 w-4" />
@@ -256,7 +257,7 @@ export function AppNav() {
             })}
             {sessionUser ? (
               <>
-                <div className="mt-2 flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-foreground">
+                <div className="mt-2 flex items-center gap-2 border border-border bg-card px-3 py-2 text-sm text-foreground">
                   <UserCircle2 className="h-4 w-4 text-primary" />
                   <span>{sessionUser.name || sessionUser.username || 'Administrator'}</span>
                   <span className="ml-auto uppercase text-[10px] tracking-[0.14em] text-primary">{sessionUser.role || 'ADMIN'}</span>
@@ -264,7 +265,7 @@ export function AppNav() {
                 <button
                   type="button"
                   onClick={handleLogout}
-                  className="mt-1 flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+                  className="mt-1 flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground border-l-2 border-l-transparent"
                 >
                   <LogOut className="h-4 w-4" />
                   <span>Sign out</span>
@@ -273,7 +274,7 @@ export function AppNav() {
             ) : (
               <Link
                 href="/login"
-                className="mt-2 flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+                className="mt-2 flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground border-l-2 border-l-transparent"
               >
                 <ShieldCheck className="h-4 w-4" />
                 <span>Sign in</span>

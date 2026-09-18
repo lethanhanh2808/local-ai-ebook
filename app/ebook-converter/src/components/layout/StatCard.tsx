@@ -1,6 +1,14 @@
 // src/components/layout/StatCard.tsx
-// Compact stat card for dashboards.
-//   <StatCard icon={<BookOpen/>} label="Books" value={42} sub="12 reading" tone="primary" />
+//
+// Compact stat cell used in dashboards. Re-skinned for the reference-manual
+// visual world (DESIGN.md):
+//
+//   - No rounded-xl SaaS card. A stat cell is a paper rectangle with a
+//     single 3-px top bar whose colour conveys tone (chrome-yellow = the
+//     primary manual accent; destructive = the seam colour; muted = a
+//     hairline).
+//   - Icon sits beside the label, not in a tinted pill.
+//   - Numerals are tabular so columns align in a row of stats.
 'use client';
 
 import { cn } from '@/lib/utils';
@@ -19,30 +27,32 @@ interface StatCardProps {
   className?: string;
 }
 
-const TONE_CLASSES: Record<StatTone, string> = {
-  primary: 'bg-primary/10 text-primary',
-  success: 'bg-green-500/10 text-green-600 dark:text-green-400',
-  warning: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
-  danger:  'bg-red-500/10 text-red-600 dark:text-red-400',
-  muted:   'bg-muted text-muted-foreground',
+// Top-bar colour per tone. Hairline tone has no bar at all.
+const TONE_BAR: Record<StatTone, string> = {
+  primary: 'border-t-primary',
+  success: 'border-t-emerald-500',
+  warning: 'border-t-amber-500',
+  danger:  'border-t-destructive',
+  muted:   'border-t-transparent',
 };
 
 export function StatCard({ icon, label, value, sub, tone = 'primary', href, className }: StatCardProps) {
   const body = (
     <div className={cn(
-      'flex items-center gap-3 rounded-xl border bg-card p-4 transition-all',
-      href && 'hover:bg-muted/30 hover:border-primary/30 cursor-pointer',
+      'flex items-center gap-3 border border-border border-t-[3px] bg-card px-4 py-3 shadow-acetate transition-colors',
+      href && 'hover:border-foreground/40 cursor-pointer',
+      TONE_BAR[tone],
       className,
     )}>
-      <div className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-lg', TONE_CLASSES[tone])}>
+      <div className="flex h-7 w-7 shrink-0 items-center justify-center text-foreground">
         {icon}
       </div>
       <div className="min-w-0 flex-1">
-        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground leading-tight">
           {label}
         </p>
-        <p className="text-2xl font-bold leading-tight tabular-nums">{value}</p>
-        {sub && <p className="text-[10px] text-muted-foreground truncate">{sub}</p>}
+        <p className="text-[20px] font-semibold leading-tight tnum">{value}</p>
+        {sub && <p className="text-[10px] text-muted-foreground truncate mt-0.5">{sub}</p>}
       </div>
     </div>
   );

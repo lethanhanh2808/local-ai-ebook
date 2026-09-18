@@ -26,8 +26,10 @@ interface BadgeProps {
   variant?: BadgeVariant;
 }
 export function Badge({ className, children, variant }: BadgeProps) {
+  // Reference-manual: square corners (2 px), hairline border, uppercase
+  // tracking — reads like a chip label or section tag, not a SaaS pill.
   const base =
-    'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium';
+    'inline-flex items-center px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] border';
   // When callers pass semantic variants we apply utility classes; for free-form
   // tokens (e.g. "status-queued") we expect the caller to have added the
   // matching utility classes via className. We still emit the base classes so
@@ -35,21 +37,22 @@ export function Badge({ className, children, variant }: BadgeProps) {
   const variantClass = (() => {
     switch (variant) {
       case 'secondary':
-        return 'bg-secondary text-secondary-foreground';
+        return 'bg-secondary text-secondary-foreground border-border';
       case 'destructive':
-        return 'bg-destructive text-destructive-foreground';
+        return 'bg-destructive/10 text-destructive border-destructive/40';
       case 'outline':
-        return 'border border-input text-foreground';
+        return 'bg-transparent text-foreground border-border';
       case 'success':
-        return 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300';
+        return 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30';
       case 'warning':
-        return 'bg-amber-500/15 text-amber-700 dark:text-amber-300';
+        return 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30';
       case 'info':
-        return 'bg-sky-500/15 text-sky-700 dark:text-sky-300';
+        return 'bg-sky-500/10 text-sky-700 dark:text-sky-300 border-sky-500/30';
       case 'muted':
-        return 'bg-muted text-muted-foreground';
+        return 'bg-muted text-muted-foreground border-border';
       default:
-        return 'bg-primary text-primary-foreground';
+        // default = the chrome-yellow tab marker — the structural accent.
+        return 'bg-primary text-primary-foreground border-primary';
     }
   })();
   return <span className={cn(base, variantClass, className)}>{children}</span>;

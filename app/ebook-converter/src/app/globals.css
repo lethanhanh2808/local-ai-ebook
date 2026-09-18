@@ -3,28 +3,42 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ─────────────────────────────────────────────────────────────────────────
+   Reference-manual visual world (DESIGN.md, branch
+   design/system-reference-manual).
+
+   Chrome-yellow is structural, never ornament. Acetate overlays carry one
+   hairline shadow. The seam colour is reserved for honest stops. Hold ink
+   is reserved for REVEAL placeholders.
+   ───────────────────────────────────────────────────────────────────────── */
+
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 221.2 83.2% 53.3%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 221.2 83.2% 53.3%;
-    --radius: 0.5rem;
+    /* ── Reference-manual palette (DESIGN.md) ───────────────────────────
+       Bleached calico ground, ink foreground, chrome-yellow accent.
+       Hairline borders are thin; shadows are single short ones (acetate
+       leaf hinged above the divider). Roundness stays tight (2-4 px) —
+       acetate edges are crisp, not pillowy. */
+    --background: 36 33% 97%;       /* bleached calico #F8F5F0 */
+    --foreground: 24 16% 10%;       /* sumi-black ink #1A1614 */
+    --card: 36 28% 95%;             /* paper ground, slightly off ground #F2EDE2 */
+    --card-foreground: 24 16% 10%;
+    --popover: 36 28% 95%;
+    --popover-foreground: 24 16% 10%;
+    --primary: 43 92% 51%;          /* chrome-yellow #F2C12E — structural accent */
+    --primary-foreground: 24 16% 10%; /* ink on chrome-yellow */
+    --secondary: 36 22% 92%;        /* tab inactive ground #ECE5D6 */
+    --secondary-foreground: 24 16% 10%;
+    --muted: 36 22% 92%;
+    --muted-foreground: 24 12% 36%; /* ink-soft #5C544A */
+    --accent: 43 92% 56%;           /* chrome-yellow-dim #F8D470 — hover fill */
+    --accent-foreground: 24 16% 10%;
+    --destructive: 14 70% 41%;      /* seam #B5341E — honest stops only */
+    --destructive-foreground: 36 33% 97%;
+    --border: 24 18% 80%;           /* hairline #CFC7B6 */
+    --input: 24 18% 80%;
+    --ring: 43 92% 51%;             /* chrome-yellow focus ring */
+    --radius: 0.25rem;              /* tighter than the SaaS default 0.5rem */
     /* Modal backdrop dim (formerly in orphaned theme.css). Exposed as
        the `modal-overlay` Tailwind color in tailwind.config.js so
        `bg-modal-overlay` / `bg-modal-overlay/50` actually paints
@@ -47,31 +61,31 @@
   }
 
   .dark {
-    --background: 222.2 47% 5%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 47% 7%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222.2 47% 7%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 217.2 91.2% 59.8%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217 16% 14%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217 16% 14%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217 16% 14%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    /* Container/outline tokens — kept low-saturation (16% vs. the previous
-       32.6%) and on a tight lightness scale so cards/dividers don't read as
-       bright blue outlines against the deep navy background. The previous
-       palette's 32.6% saturation produced a sharp colored edge that
-       visually outweighed the card content. Bumped from 18% → 22% so card
-       outlines read more clearly against the 7% card background. */
-    --border: 217 16% 22%;
-    --input: 217 16% 22%;
-    --ring: 224.3 76.3% 48%;
+    /* ── Reference-manual dark palette ──────────────────────────────────
+       Deep calico (not pure black) ground, near-white ink, chrome-yellow
+       accent at the same hue but slightly muted for OLED comfort. */
+    --background: 222 18% 8%;       /* #11141A deep slate */
+    --foreground: 36 22% 90%;       /* near-white warm ink #E5E0D2 */
+    --card: 222 18% 11%;            /* paper ground dark #181C24 */
+    --card-foreground: 36 22% 90%;
+    --popover: 222 18% 11%;
+    --popover-foreground: 36 22% 90%;
+    --primary: 43 86% 53%;          /* chrome-yellow dimmed #E8B72A */
+    --primary-foreground: 24 16% 10%;
+    --secondary: 222 16% 16%;       /* tab inactive dark #22262F */
+    --secondary-foreground: 36 22% 90%;
+    --muted: 222 16% 16%;
+    --muted-foreground: 36 12% 65%; /* ink-soft dark #A39A8B-ish */
+    --accent: 43 70% 35%;           /* chrome-yellow-dim dark #8C6E1F */
+    --accent-foreground: 36 22% 90%;
+    --destructive: 14 70% 50%;      /* seam warm variant #E25C42 */
+    --destructive-foreground: 36 22% 90%;
+    /* Container/outline tokens — hairline weight against the dark paper.
+       Calibrated against the card ground (11% lightness) so a 1-px border
+       reads as a faint ink line, not a coloured edge. */
+    --border: 36 12% 28%;
+    --input: 36 12% 28%;
+    --ring: 43 86% 53%;
     --modal-overlay: 0 0% 0%;
 
     /* Reader paper / ink — dark variant. Paper is a deep slate (not pure
@@ -86,6 +100,33 @@
 
 @layer base {
   body { @apply bg-background text-foreground; }
+  /* Chrome stays in Inter; the Literata serif is reserved for reader
+     surfaces (EbookReader, prose blocks) so the manual frame stays
+     utilitarian and the pages stay bookish. */
+  body { font-family: var(--font-inter, system-ui), system-ui, sans-serif; }
+}
+
+/* ── Reference-manual component utilities ────────────────────────────── */
+
+/* Acetate shadow — a single short hard line under a content panel, reading
+   as a die-cut acetate leaf hinged a millimetre above the divider. */
+@layer utilities {
+  .shadow-acetate {
+    box-shadow: 0 1px 0 hsl(var(--border)), 0 2px 0 hsl(var(--foreground) / 0.06);
+  }
+  .shadow-acetate-lift {
+    box-shadow: 0 2px 0 hsl(var(--border)), 0 4px 0 hsl(var(--foreground) / 0.08);
+  }
+
+  /* Honest-stop seam: a 1-px vertical seam through a label that visually
+     splits the text into two clipped halves. Used by PipelineStep halted. */
+  .seam-split {
+    -webkit-mask-image: linear-gradient(to right, black 50%, transparent 50%);
+            mask-image: linear-gradient(to right, black 50%, transparent 50%);
+  }
+
+  /* Tabular numerals for voice plans, progress, and stats columns. */
+  .tnum { font-variant-numeric: tabular-nums; }
 }
 
 /* Reliable keyboard focus for bespoke feature controls that do not use the

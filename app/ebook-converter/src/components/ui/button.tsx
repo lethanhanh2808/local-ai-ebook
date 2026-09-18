@@ -3,18 +3,21 @@ import { cn } from '@/lib/utils';
 import { ButtonHTMLAttributes, forwardRef } from 'react';
 
 const variants = {
-  default: 'bg-primary text-primary-foreground hover:bg-primary/90 shadow',
-  outline: 'border border-input bg-background hover:bg-accent hover:text-accent-foreground',
-  ghost: 'hover:bg-accent hover:text-accent-foreground',
-  destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90',
-  secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
-  link: 'text-primary underline-offset-4 hover:underline',
+  // Primary is now chrome-yellow on ink — the reference-manual accent.
+  // No `shadow` — the manual has hairlines, not Material elevation.
+  default: 'bg-primary text-primary-foreground hover:bg-accent border border-primary',
+  outline: 'border border-border bg-card text-foreground hover:bg-muted',
+  ghost: 'text-foreground hover:bg-muted',
+  destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90 border border-destructive',
+  secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80 border border-border',
+  link: 'text-foreground underline-offset-4 hover:underline decoration-primary decoration-2 underline-offset-[3px]',
 };
 const sizes = {
-  default: 'h-9 px-4 py-2 text-sm',
-  sm: 'h-8 px-3 text-xs rounded-md',
-  lg: 'h-10 px-6 text-base',
-  icon: 'h-9 w-9',
+  // Manual chrome is tighter than the SaaS default; default height 32 px.
+  default: 'h-8 px-3 text-xs font-semibold uppercase tracking-[0.06em]',
+  sm: 'h-7 px-2 text-[11px] font-semibold uppercase tracking-[0.06em]',
+  lg: 'h-10 px-5 text-sm font-semibold uppercase tracking-[0.06em]',
+  icon: 'h-8 w-8',
 };
 
 export type ButtonVariant = keyof typeof variants;
@@ -38,7 +41,9 @@ export function buttonClasses(opts: {
 } = {}): string {
   const { variant = 'default', size = 'default', className } = opts;
   return cn(
-    'inline-flex items-center justify-center whitespace-nowrap rounded-md font-medium',
+    // Reference-manual: tighter radius (2 px), no font-medium weight override
+    // (variants carry weight), no `shadow` (hairlines only).
+    'inline-flex items-center justify-center whitespace-nowrap',
     'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
     'disabled:pointer-events-none disabled:opacity-50',
     variants[variant],

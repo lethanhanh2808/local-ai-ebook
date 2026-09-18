@@ -60,20 +60,20 @@ export function PageHeader({
           </nav>
         )}
         {eyebrow && (
-          <p className="text-[10px] font-bold uppercase tracking-widest text-primary mb-1.5">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-primary mb-1.5">
             {eyebrow}
           </p>
         )}
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-3">
           {icon && (
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary shrink-0">
+            <div className="flex h-8 w-8 items-center justify-center text-foreground shrink-0 border-l-[3px] border-l-primary pl-2">
               {icon}
             </div>
           )}
           <div className="min-w-0">
-            <h1 className="text-2xl font-bold tracking-tight truncate">{title}</h1>
+            <h1 className="text-[18px] font-semibold leading-tight tracking-[-0.01em] truncate">{title}</h1>
             {description && (
-              <p className="text-sm text-muted-foreground mt-0.5">{description}</p>
+              <p className="text-[12px] text-muted-foreground mt-0.5 leading-snug">{description}</p>
             )}
           </div>
         </div>
