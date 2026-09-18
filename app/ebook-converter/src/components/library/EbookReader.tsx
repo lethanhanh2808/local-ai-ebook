@@ -5387,16 +5387,19 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
       <footer className={cn('shrink-0 border-t backdrop-blur-sm', headerCls)}>
         <div className="flex items-center gap-2 px-3 py-2">
           {/* Prev / Next use raw <button> with inline style so the theme-aware
-              color + border apply without fighting the Button primitive's
+              color + border + bg apply without fighting the Button primitive's
               `text-foreground` class. Previous version rendered as empty
-              rectangles because the inline `style.color` was overridden by
-              the outline variant's class color in some browsers. */}
+              rectangles because the browser's default button bg (`buttonface`)
+              was visible (cream on cream) and the inline `style.color` was
+              overridden by the outline variant's class color. Setting
+              `backgroundColor: 'transparent'` inline guarantees no default
+              button bg shows through. */}
           <button
             onClick={handlePrev}
             disabled={chapters.length === 0 || currentIdx <= 0}
             aria-label="Previous chapter"
-            className="inline-flex shrink-0 items-center gap-1 border bg-transparent px-2.5 py-1 text-xs font-medium transition-colors hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40"
-            style={{ color: themeObj.text, borderColor: btnBorder }}>
+            className="inline-flex shrink-0 items-center gap-1 border px-2.5 py-1 text-xs font-medium transition-colors hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40"
+            style={{ color: themeObj.text, borderColor: btnBorder, backgroundColor: 'transparent' }}>
             <ChevronLeft className="h-3.5 w-3.5" /><span className="hidden sm:inline">Prev</span>
           </button>
 
@@ -5487,8 +5490,8 @@ export function EbookReader({ bookId, bookTitle, initialChapter, initialProgress
             onClick={handleNext}
             disabled={chapters.length === 0 || currentIdx >= chapters.length - 1}
             aria-label="Next chapter"
-            className="inline-flex shrink-0 items-center gap-1 border bg-transparent px-2.5 py-1 text-xs font-medium transition-colors hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40"
-            style={{ color: themeObj.text, borderColor: btnBorder }}>
+            className="inline-flex shrink-0 items-center gap-1 border px-2.5 py-1 text-xs font-medium transition-colors hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40"
+            style={{ color: themeObj.text, borderColor: btnBorder, backgroundColor: 'transparent' }}>
             <span className="hidden sm:inline">Next</span><ChevronRight className="h-3.5 w-3.5" />
           </button>
         </div>
