@@ -153,7 +153,7 @@ export function Tooltip({ content, side = 'top', children, className, maxHeight 
           id={id}
           style={{ position: 'fixed', top: coords.top, left: coords.left }}
           className={cn(
-            'pointer-events-none z-[100] w-fit max-w-[30rem] overflow-hidden whitespace-normal break-words rounded-md border border-border bg-popover px-3 py-2 text-xs leading-snug text-popover-foreground shadow-md',
+            'pointer-events-none z-[100] w-fit max-w-[30rem] overflow-hidden whitespace-normal break-words rounded-md border border-border bg-popover px-3 py-2 text-xs leading-snug text-popover-foreground shadow-acetate',
             `max-h-[${maxHeight}rem]`,
             'animate-in fade-in-0',
           )}

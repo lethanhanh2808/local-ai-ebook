@@ -42,7 +42,7 @@ export const Switch = forwardRef<HTMLButtonElement, SwitchProps>(
       <span
         aria-hidden
         className={cn(
-          'pointer-events-none block h-4 w-4 rounded-full bg-background shadow-lg ring-0 transition-transform',
+          'pointer-events-none block h-4 w-4 rounded-full bg-background shadow-acetate ring-0 transition-transform',
           checked ? 'translate-x-4' : 'translate-x-0',
         )}
       />
