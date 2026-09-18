@@ -156,7 +156,7 @@ export function JobList({ refreshTrigger }: JobListProps) {
       {jobs.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
           {/* Filter tabs */}
-          <div className="flex rounded-lg border overflow-hidden">
+          <div className="flex border border-border overflow-hidden">
             {FILTER_OPTS.map((opt) => {
               const count = opt.value === 'all' ? jobs.length
                 : opt.value === 'pending' ? pendingCount
@@ -176,7 +176,7 @@ export function JobList({ refreshTrigger }: JobListProps) {
                   {opt.icon}{opt.label}
                   {count > 0 && (
                     <span className={cn(
-                      'ml-0.5 rounded-full px-1.5 py-0 text-[10px] font-bold',
+                      'ml-0.5 px-1.5 text-[10px] font-bold tabular-nums',
                       filter === opt.value ? 'bg-primary-foreground/20 text-primary-foreground' : 'bg-muted text-foreground',
                     )}>{count}</span>
                   )}
@@ -204,7 +204,7 @@ export function JobList({ refreshTrigger }: JobListProps) {
           <button
             onClick={() => setAutoClean((v) => !v)}
             className={cn(
-              'flex items-center gap-1.5 rounded-lg border px-3 h-8 text-xs font-medium transition-colors',
+              'flex items-center gap-1.5 border border-border px-3 h-8 text-xs font-medium transition-colors',
               autoClean ? 'bg-amber-500/10 border-amber-500/30 text-amber-600 dark:text-amber-400' : 'bg-background hover:bg-muted text-muted-foreground',
             )}
             title="Auto-remove completed jobs older than 30 minutes"
@@ -241,7 +241,7 @@ export function JobList({ refreshTrigger }: JobListProps) {
 
       {/* Active summary banner */}
       {activeCount > 0 && (
-        <div className="flex items-center gap-2 rounded-lg bg-blue-500/10 border border-blue-500/20 px-4 py-2 text-sm text-blue-700 dark:text-blue-300">
+        <div className="flex items-center gap-2 border border-blue-500/40 border-l-2 border-l-blue-500 bg-blue-500/10 px-4 py-2 text-sm text-blue-700 dark:text-blue-300">
           <Loader2 className="h-4 w-4 animate-spin shrink-0" />
           <span>
             {activeCount === 1
@@ -253,7 +253,7 @@ export function JobList({ refreshTrigger }: JobListProps) {
 
       {/* Empty state */}
       {filtered.length === 0 ? (
-        <div className="rounded-xl border border-dashed py-16 text-center text-muted-foreground">
+        <div className="border border-border border-dashed py-16 text-center text-muted-foreground">
           {jobs.length === 0 ? (
             <>
               <BookOpen className="h-10 w-10 mx-auto mb-3 opacity-30" />

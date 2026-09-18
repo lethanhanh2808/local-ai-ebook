@@ -164,7 +164,7 @@ export const JobCard = forwardRef<HTMLDivElement, JobCardProps>(function JobCard
         // Base border (color set explicitly because this element sits inside a
         // Card without one). Conditional classes override `border-border` for
         // status highlights; later classes win in Tailwind's cascade.
-        'min-w-0 border border-border shadow-sm transition-shadow hover:shadow-md overflow-hidden',
+        'min-w-0 border border-border shadow-sm transition-colors overflow-hidden',
         job.status === 'failed' && 'border-destructive/40',
         job.status === 'completed' && 'border-success-fg/40',
         isActive && 'border-primary/40',
@@ -183,7 +183,7 @@ export const JobCard = forwardRef<HTMLDivElement, JobCardProps>(function JobCard
         {/* Header row */}
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-start gap-2.5 min-w-0 flex-1">
-            <div className={cn('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg', {
+            <div className={cn('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center', {
               'bg-bible-pending-bg text-bible-pending-fg': job.status === 'pending' || job.status === 'queued',
               'bg-primary/15 text-primary': job.status === 'processing',
               'bg-success-bg text-success-fg': job.status === 'completed',
@@ -373,7 +373,7 @@ export const JobCard = forwardRef<HTMLDivElement, JobCardProps>(function JobCard
 
         {/* Error */}
         {job.status === 'failed' && job.errorMsg && (
-          <div className="mt-3 flex items-start gap-1.5 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          <div className="mt-3 flex items-start gap-1.5 border border-destructive/40 border-l-2 border-l-destructive bg-destructive/10 px-3 py-2 text-xs text-destructive">
             <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
             <span>{job.errorMsg}</span>
           </div>
